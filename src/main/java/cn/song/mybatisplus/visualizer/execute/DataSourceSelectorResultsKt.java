@@ -2091,6 +2091,12 @@ public final class DataSourceSelectorResultsKt {
     /** Kotlin 默认参形态 {@code projectExecFile(project, sql)}（master 终态：无 nonBlocking 参数，
      * T-PreviewLockInversion 重写后派发等待一律在锁外、有界预算兜底）。 */
     public static File projectExecFile(Project project, String sql) throws java.io.IOException {
+        return projectExecFile(project, sql, false);
+    }
+
+    /** T-ExecPsiGate R6：{@code preferProjectRoot} 全参形态（true = 项目根备用落点 {@code <base>/.sql-visualizer/exec}）。 */
+    public static File projectExecFile(Project project, String sql, boolean preferProjectRoot)
+            throws java.io.IOException {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         // T-UiFixGate9：生命周期守卫——dispose（含 temporarily-disposed）后放弃整个写链。首建形态
         //（VFS 无条目）的裸写 FileUtil.writeToFile 不经 document、无任何 dispose 检查，死项目上照写
@@ -2105,7 +2111,9 @@ public final class DataSourceSelectorResultsKt {
             LOG.warn("[M36] projectExecFile FAILED: project.basePath null (project=" + project.getName() + ")");
             return null;
         }
-        File dir = new File(base, ".idea" + File.separator + SqlLogAutoSaver.DATA_DIR_NAME + File.separator + "exec");
+        File dir = preferProjectRoot
+                ? new File(new File(base, ".sql-visualizer"), "exec")
+                : new File(base, ".idea" + File.separator + SqlLogAutoSaver.DATA_DIR_NAME + File.separator + "exec");
         if (!dir.exists() && !dir.mkdirs()) {
             // T-ExecCopyFix F2a：mkdirs 返回值原来被忽略，目录建不起来后写盘抛异常再被吞
             LOG.warn("[M36] projectExecFile FAILED: mkdirs false (" + dir.getPath() + ")");
@@ -2952,6 +2960,507 @@ public final class DataSourceSelectorResultsKt {
         if (registeredEmpty) return EmptyRunnersReason.NO_DATASOURCE;
         if (platformFailure != null) return EmptyRunnersReason.PLATFORM_CALL_FAILED;
         return EmptyRunnersReason.DIALECT_MISMATCH;
+    }
+
+
+    // ===== T-SyncK2JMaster178 补译：master DataSourceSelectorResults.kt ExecPsiGate 族（f933 同版，master 183c98b3d→冻结 tip 未改本族） =====
+
+    public static PsiFile findExecPsi(@NotNull Project project, @NotNull VirtualFile vf) {
+        return ReadAction.compute(() -> PsiManager.getInstance(project).findFile(vf));
+    }
+
+    public static PsiFile healExecPsi(@NotNull Project project, @NotNull VirtualFile vf,
+                                      @NotNull Logger LOG) {
+        return healExecPsi(project, vf, LOG, null);
+    }
+
+    public static PsiFile healExecPsi(@NotNull Project project, @NotNull VirtualFile vf,
+                                      @NotNull Logger LOG, @Nullable File ioFile) {
+        // 支 1：vf 失效 → 重新定位
+        boolean vfValid;
+        try {
+            vfValid = vf.isValid();
+        } catch (Throwable ignored) {
+            vfValid = false; // getOrDefault(false) 语义
+        }
+        if (!vfValid) {
+            if (ioFile == null) {
+                LOG.warn("[M36][T-ExecPsiGate] exec vf invalid and no ioFile for re-locate: " + vf.getName());
+                return null;
+            }
+            VirtualFile refound = null;
+            try {
+                refound = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile);
+            } catch (Throwable ignored) {
+                // getOrNull 语义
+            }
+            if (refound != null) {
+                PsiFile psi = null;
+                try {
+                    psi = findExecPsi(project, refound);
+                } catch (Throwable ignored) {
+                    // getOrNull 语义
+                }
+                if (psi != null) {
+                    LOG.warn("[M36][T-ExecPsiGate] exec vf was INVALID — re-located by refresh and rebuilt PSI: "
+                            + refound.getPath());
+                    return psi;
+                }
+            }
+            LOG.warn("[M36][T-ExecPsiGate] exec vf invalid and re-locate FAILED (exists=" + ioFile.exists()
+                    + "): " + ioFile.getPath());
+            return null;
+        }
+        // 支 2：vf 有效但 PSI 建不出来 → 清映射重建
+        String before = null;
+        try {
+            before = ReadAction.compute(
+                    (com.intellij.openapi.util.ThrowableComputable<String, Throwable>) () ->
+                            DialectPreMapping.configuredLanguageId(project, vf));
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        boolean cleared = false;
+        try {
+            cleared = DialectPreMapping.clearMapping(project, vf);
+        } catch (Throwable ignored) {
+            // getOrDefault(false) 语义
+        }
+        PsiFile healed = null;
+        try {
+            healed = findExecPsi(project, vf);
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        if (healed != null) {
+            LOG.warn("[M36][T-ExecPsiGate] exec PSI rebuilt after clearing dialect mapping (was=" + before
+                    + ", cleared=" + cleared + "): " + vf.getName());
+        } else {
+            LOG.warn("[M36][T-ExecPsiGate] exec PSI still null after clearing dialect mapping (was=" + before
+                    + ", cleared=" + cleared + "): " + vf.getName());
+        }
+        if (healed != null) return healed;
+        // 支 3（R4，2026-11-11 双平台真机五元组驱动）：清映射没用 ⇒ 毒源不是**我们写的**映射，
+        // 而是**继承来的**方言——项目根目录映射 / 全局默认 SQL 方言（Settings → SQL Dialects）/
+        // `SqlDialectPusher` 按数据源推的方言。这三者都靠“没有显式映射”生效，所以清掉我们的映射
+        // 反而把它们请回来了：PSI 语言依旧没有可用 ParserDefinition，findFile 恒 null。
+        // 唯一能覆盖继承值的手段是**显式钉一个已知可建 SQL PSI 的方言**（`canCreateSqlPsiFor` 判过）。
+        for (String pinId : List.of(ExecDialectRouting.MYSQL_LANGUAGE_ID, ExecDialectRouting.GENERIC_LANGUAGE_ID)) {
+            Object pinLanguage = null;
+            try {
+                pinLanguage = DialectPreMapping.languageById(project, pinId);
+            } catch (Throwable ignored) {
+                // getOrNull 语义
+            }
+            if (pinLanguage == null) continue;
+            if (!cn.song.mybatisplus.visualizer.sql.SqlPsiCapabilityKt.canCreateSqlPsiFor(pinLanguage)) continue;
+            boolean mapped = false;
+            try {
+                mapped = DialectPreMapping.ensureMapped(project, vf, pinLanguage, false);
+            } catch (Throwable ignored) {
+                // getOrDefault(false) 语义
+            }
+            if (!mapped) continue;
+            PsiFile pinned = null;
+            try {
+                pinned = findExecPsi(project, vf);
+            } catch (Throwable ignored) {
+                // getOrNull 语义
+            }
+            if (pinned != null) {
+                LOG.warn("[M36][T-ExecPsiGate] exec PSI rebuilt by PINNING dialect '" + pinId
+                        + "' — the poison was an INHERITED dialect (project-root mapping / global default / pusher), "
+                        + "not our own: " + vf.getName());
+                return pinned;
+            }
+        }
+        String inherited = null;
+        try {
+            inherited = DialectPreMapping.inheritedLanguageId(project);
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        LOG.warn("[M36][T-ExecPsiGate] exec PSI still unavailable after pinning MySQL/GenericSQL — inherited="
+                + inherited + ": " + vf.getName());
+        // 注意（2026-11-11 用户定案）：这里**不再自动换落点**。`.sql-visualizer` 是兜底而不是默认——
+        // 由用户在失败行上点「改用项目根落点重试」触发（那一支会先把项目记进
+        // DataSourceSelector.execRootFallbackProjects，之后执行直接走备用落点）。自动换落点会把
+        // 用户项目配置的问题藏起来，正是要避免的。
+        return null;
+    }
+
+    public static ExecPsiFailureHintKt.ExecPsiFailureCause execDirFailureCause(@NotNull Project project,
+                                                                             @NotNull File dir) {
+        if (execDirCanHostPsi(project, dir)) return null;
+        VirtualFile dirVf = null;
+        try {
+            dirVf = LocalFileSystem.getInstance().findFileByIoFile(dir);
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        if (dirVf == null) return null;
+        com.intellij.openapi.roots.ProjectFileIndex fileIndex =
+                com.intellij.openapi.roots.ProjectFileIndex.getInstance(project);
+        boolean excluded = false;
+        try {
+            excluded = fileIndex.isExcluded(dirVf);
+        } catch (Throwable ignored) {
+            // getOrDefault(false) 语义
+        }
+        boolean regHideExcluded = false;
+        try {
+            regHideExcluded = com.intellij.openapi.util.registry.Registry.is("ide.hide.excluded.files");
+        } catch (Throwable ignored) {
+            // getOrDefault(false) 语义
+        }
+        boolean fileTypesIgnored = false;
+        try {
+            fileTypesIgnored = com.intellij.openapi.fileTypes.FileTypeManager.getInstance().isFileIgnored(dirVf);
+        } catch (Throwable ignored) {
+            // getOrDefault(false) 语义
+        }
+        boolean underIgnored = false;
+        try {
+            underIgnored = fileIndex.isUnderIgnored(dirVf);
+        } catch (Throwable ignored) {
+            // getOrDefault(false) 语义
+        }
+        return ExecPsiFailureHintKt.classifyExecPsiFailure(
+                excluded,
+                regHideExcluded,
+                fileTypesIgnored,
+                underIgnored,
+                "GenericSQL",
+                true,
+                Boolean.FALSE);
+    }
+
+    public static File execPrimaryDir(@NotNull Project project) {
+        String base = project.getBasePath();
+        if (base == null) return null;
+        String sep = File.separator;
+        return new File(base, ".idea" + sep + SqlLogAutoSaver.DATA_DIR_NAME + sep + "exec");
+    }
+
+    public static File projectRootExecFile(@NotNull Project project, @NotNull String sql) throws java.io.IOException {
+        return projectExecFile(project, sql, true);
+    }
+
+    public static ExecPsiFailureHintKt.ExecPsiFailureCause execPsiFailureCauseNow(
+            @NotNull Project project, @NotNull VirtualFile vf) {
+        com.intellij.openapi.roots.ProjectFileIndex fileIndex =
+                com.intellij.openapi.roots.ProjectFileIndex.getInstance(project);
+        boolean excluded = false;
+        try {
+            excluded = fileIndex.isExcluded(vf);
+        } catch (Throwable ignored) {
+            // getOrDefault(false) 语义
+        }
+        boolean regHideExcluded = false;
+        try {
+            regHideExcluded = com.intellij.openapi.util.registry.Registry.is("ide.hide.excluded.files");
+        } catch (Throwable ignored) {
+            // getOrDefault(false) 语义
+        }
+        boolean underIgnored = false;
+        try {
+            underIgnored = fileIndex.isUnderIgnored(vf);
+        } catch (Throwable ignored) {
+            // getOrDefault(false) 语义
+        }
+        boolean fileTypesIgnored = false;
+        try {
+            fileTypesIgnored = com.intellij.openapi.fileTypes.FileTypeManager.getInstance().isFileIgnored(vf);
+        } catch (Throwable ignored) {
+            // getOrDefault(false) 语义
+        }
+        com.intellij.lang.Language psiLanguage = null;
+        try {
+            psiLanguage = ReadAction.compute(
+                    (com.intellij.openapi.util.ThrowableComputable<com.intellij.lang.Language, Throwable>) () ->
+                            com.intellij.lang.LanguageUtil.getLanguageForPsi(project, vf, vf.getFileType()));
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        // F5（2026-11-11 真机）：**平台闸门问的是父目录**，四项文件谓词看不见父目录的待遇。
+        // 真机上出现过「文件级全绿、findFile 恒 null」，只靠文件谓词只能判成 UNKNOWN（= 只丢红字，
+        // 没有可点入口，正是这一轮的验收问题）。所以目录级的「排除 / 忽略 / 忽略模式 / 能否建 PSI」
+        // 一律与文件级取**并集**：闸门只要被父目录挡住就返回 null，取并集才与闸门口径一致。
+        VirtualFile parentVf = null;
+        try {
+            parentVf = vf.getParent();
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        boolean parentExcluded = false;
+        try {
+            parentExcluded = parentVf != null && fileIndex.isExcluded(parentVf);
+        } catch (Throwable ignored) {
+            // getOrDefault(false) 语义
+        }
+        boolean parentUnderIgnored = false;
+        try {
+            parentUnderIgnored = parentVf != null && fileIndex.isUnderIgnored(parentVf);
+        } catch (Throwable ignored) {
+            // getOrDefault(false) 语义
+        }
+        boolean parentTypeIgnored = false;
+        try {
+            parentTypeIgnored = parentVf != null
+                    && com.intellij.openapi.fileTypes.FileTypeManager.getInstance().isFileIgnored(parentVf);
+        } catch (Throwable ignored) {
+            // getOrDefault(false) 语义
+        }
+        Boolean dirCanHostPsi = null;
+        final VirtualFile parentVfFinal = parentVf;
+        try {
+            dirCanHostPsi = parentVfFinal != null && Boolean.TRUE.equals(ReadAction.compute(
+                    () -> PsiManager.getInstance(project).findDirectory(parentVfFinal) != null));
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        boolean canPsiActual = false;
+        try {
+            canPsiActual = cn.song.mybatisplus.visualizer.sql.SqlPsiCapabilityKt.canCreateSqlPsiFor(psiLanguage);
+        } catch (Throwable ignored) {
+            // getOrDefault(false) 语义
+        }
+        return ExecPsiFailureHintKt.classifyExecPsiFailure(
+                excluded || parentExcluded,
+                regHideExcluded,
+                fileTypesIgnored || parentTypeIgnored,
+                underIgnored || parentUnderIgnored,
+                psiLanguage != null ? psiLanguage.getID() : null,
+                canPsiActual,
+                dirCanHostPsi);
+    }
+
+    public static String execPsiDiagnostics(@NotNull Project project, @NotNull VirtualFile vf) {
+        String mappedId = null;
+        try {
+            mappedId = ReadAction.compute(
+                    (com.intellij.openapi.util.ThrowableComputable<String, Throwable>) () ->
+                            DialectPreMapping.configuredLanguageId(project, vf));
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        boolean canPsi = false;
+        try {
+            canPsi = cn.song.mybatisplus.visualizer.sql.SqlPsiCapabilityKt.canCreateSqlPsiFor(
+                    mappedId != null ? DialectPreMapping.languageById(project, mappedId) : null);
+        } catch (Throwable ignored) {
+            // getOrDefault(false) 语义
+        }
+        // 继承链（项目根映射 → 全局默认）：这才是「没有显式映射」时真正生效的方言
+        String inheritedId = null;
+        try {
+            inheritedId = DialectPreMapping.inheritedLanguageId(project);
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        boolean canPsiInherited = false;
+        try {
+            canPsiInherited = cn.song.mybatisplus.visualizer.sql.SqlPsiCapabilityKt.canCreateSqlPsiFor(
+                    inheritedId != null ? DialectPreMapping.languageById(project, inheritedId) : null);
+        } catch (Throwable ignored) {
+            // getOrDefault(false) 语义
+        }
+        boolean vfValid = false;
+        try {
+            vfValid = vf.isValid();
+        } catch (Throwable ignored) {
+            // getOrDefault(false) 语义
+        }
+        boolean isDir = false;
+        try {
+            isDir = vf.isDirectory();
+        } catch (Throwable ignored) {
+            // getOrDefault(false) 语义
+        }
+        String fileTypeName = "?";
+        try {
+            fileTypeName = vf.getFileType().getName();
+        } catch (Throwable ignored) {
+            // getOrDefault("?") 语义
+        }
+        String path = "?";
+        try {
+            path = vf.getPath();
+        } catch (Throwable ignored) {
+            // getOrDefault("?") 语义
+        }
+        // R5（2026-11-11）：真机两台的设置里 exec 文件显式映射为 MySQL、全局/项目方言都是 <None>，
+        // 却仍拿不到 PSI——说明「映射到什么」和「平台实际给这个文件什么语言」已经对不上了。
+        // 直接把平台**实际选中的 PSI 语言**与 IDE Build 打进失败文案：前者是决定性证据（若它抛异常，
+        // 就是方言替换器在用户那台机器上直接崩），后者是唯一还没拿到的环境变量。
+        com.intellij.lang.Language psiLangProbe = null;
+        String psiLangEx = null;
+        try {
+            psiLangProbe = ReadAction.compute(
+                    (com.intellij.openapi.util.ThrowableComputable<com.intellij.lang.Language, Throwable>) () ->
+                            com.intellij.lang.LanguageUtil.getLanguageForPsi(project, vf, vf.getFileType()));
+        } catch (Throwable e) {
+            // probe 抛异常形态：psiLang 记 EX:SimpleName（方言替换器在用户机器上直接崩的决定性证据）
+            psiLangEx = e.getClass().getSimpleName();
+        }
+        String psiLang = psiLangProbe != null ? psiLangProbe.getID()
+                : (psiLangEx != null ? "EX:" + psiLangEx : null);
+        // 决定性组合：psiLang=MySQL 而 canPsiActual=false ⇒ 那台机器上 MySQL 方言没有可用的
+        // ParserDefinition（SQL 方言模块缺失/版本不匹配），与本插件无关，但我们可以绕开（钉别的方言）。
+        boolean canPsiActual = false;
+        try {
+            canPsiActual = cn.song.mybatisplus.visualizer.sql.SqlPsiCapabilityKt.canCreateSqlPsiFor(psiLangProbe);
+        } catch (Throwable ignored) {
+            // getOrDefault(false) 语义
+        }
+        String ideBuild = null;
+        try {
+            ideBuild = com.intellij.openapi.application.ApplicationInfo.getInstance().getBuild().asString();
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        // 2026.3 的 shouldCreatePsi 只看「忽略集」或（Registry 勾选时）「排除」；Project 视图里看不到
+        // 不等于被排除——这两个是两个独立谓词。三项一次打全，用户截一张图就能判型。
+        Boolean excluded = null;
+        try {
+            excluded = com.intellij.openapi.roots.ProjectFileIndex.getInstance(project).isExcluded(vf);
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        Boolean underIgnored = null;
+        try {
+            underIgnored = com.intellij.openapi.roots.ProjectFileIndex.getInstance(project).isUnderIgnored(vf);
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        Boolean regHideExcluded = null;
+        try {
+            regHideExcluded = com.intellij.openapi.util.registry.Registry.is("ide.hide.excluded.files");
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        // F5：**文件级谓词看不见父目录**——平台闸门问的是 `findDirectory(父目录)`。真机上出现过
+        // 文件级四项全绿而 findFile 恒 null 的形态，只打文件级等于把唯一能判型的信息落下了。
+        VirtualFile parentVf = null;
+        try {
+            parentVf = vf.getParent();
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        Boolean dirCanHostPsi = null;
+        final VirtualFile parentVfFinal = parentVf;
+        try {
+            dirCanHostPsi = parentVfFinal != null && ReadAction.compute(
+                    () -> PsiManager.getInstance(project).findDirectory(parentVfFinal)) != null;
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        Boolean dirExcluded = null;
+        try {
+            dirExcluded = parentVf != null
+                    && com.intellij.openapi.roots.ProjectFileIndex.getInstance(project).isExcluded(parentVf);
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        Boolean dirUnderIgnored = null;
+        try {
+            dirUnderIgnored = parentVf != null
+                    && com.intellij.openapi.roots.ProjectFileIndex.getInstance(project).isUnderIgnored(parentVf);
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        return "name=" + vf.getName() + ", vfValid=" + vfValid + ", dir=" + isDir + ", fileType=" + fileTypeName + ", "
+                + "mappedLang=" + mappedId + ", canPsi=" + canPsi + ", inheritedLang=" + inheritedId + ", "
+                + "canPsiInherited=" + canPsiInherited + ", psiLang=" + psiLang + ", canPsiActual=" + canPsiActual + ", "
+                + "excluded=" + excluded + ", underIgnored=" + underIgnored + ", regHideExcluded=" + regHideExcluded + ", "
+                + "dirPsi=" + dirCanHostPsi + ", dirExcluded=" + dirExcluded + ", dirUnderIgnored=" + dirUnderIgnored + ", "
+                + "ideBuild=" + ideBuild + ", path=" + path;
+    }
+
+    public static String execDirDiagnostics(@NotNull Project project, @NotNull File dir) {
+        VirtualFile dirVf = null;
+        try {
+            dirVf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(dir);
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        boolean dirPsi = false;
+        final VirtualFile dirVfFinal = dirVf;
+        try {
+            if (dirVfFinal != null) {
+                dirPsi = ReadAction.compute(
+                        () -> PsiManager.getInstance(project).findDirectory(dirVfFinal)) != null;
+            }
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        com.intellij.openapi.roots.ProjectFileIndex fileIndex =
+                com.intellij.openapi.roots.ProjectFileIndex.getInstance(project);
+        boolean dirExcluded = false;
+        try {
+            dirExcluded = dirVf != null && fileIndex.isExcluded(dirVf);
+        } catch (Throwable ignored) {
+            // getOrDefault(false) 语义
+        }
+        boolean dirUnderIgnored = false;
+        try {
+            dirUnderIgnored = dirVf != null && fileIndex.isUnderIgnored(dirVf);
+        } catch (Throwable ignored) {
+            // getOrDefault(false) 语义
+        }
+        boolean dirTypeIgnored = false;
+        try {
+            dirTypeIgnored = dirVf != null
+                    && com.intellij.openapi.fileTypes.FileTypeManager.getInstance().isFileIgnored(dirVf);
+        } catch (Throwable ignored) {
+            // getOrDefault(false) 语义
+        }
+        boolean regHideExcluded = false;
+        try {
+            regHideExcluded = com.intellij.openapi.util.registry.Registry.is("ide.hide.excluded.files");
+        } catch (Throwable ignored) {
+            // getOrDefault(false) 语义
+        }
+        boolean inContent = false;
+        try {
+            inContent = dirVf != null && fileIndex.isInContent(dirVf);
+        } catch (Throwable ignored) {
+            // getOrDefault(false) 语义
+        }
+        String ideBuild = null;
+        try {
+            ideBuild = com.intellij.openapi.application.ApplicationInfo.getInstance().getBuild().asString();
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        return "dir=" + dir.getPath() + ", dirVfValid=" + (dirVf != null) + ", dirPsi=" + dirPsi + ", inContent=" + inContent + ", "
+                + "dirExcluded=" + dirExcluded + ", dirUnderIgnored=" + dirUnderIgnored + ", dirTypeIgnored=" + dirTypeIgnored + ", "
+                + "regHideExcluded=" + regHideExcluded + ", ideBuild=" + ideBuild;
+    }
+
+    public static boolean execDirCanHostPsi(@NotNull Project project, @NotNull File dir) {
+        if (project.isDisposed()) return true;
+        // T-ExecPsiGate F4（2026-11-11 验收失败）：**不缓存结论**。原实现按目录路径记忆到会话结束，
+        // 而「目录能不能建 PSI」取决于内容模型与 Registry（用户随时会改：排除/取消排除、勾/取消
+        // ide.hide.excluded.files）——旧结论会让落点判定恒留在错的一侧（预览实测：改了状态仍写 .idea
+        // → 降级横幅不消失）。探针成本只是一次 VFS 查找 + 一次 PsiDirectory 查找，调用点也不在键盘热路径。
+        if (!dir.exists() && !dir.mkdirs()) return true;
+        VirtualFile dirVf = null;
+        try {
+            dirVf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(dir);
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        if (dirVf == null) return true;
+        boolean capable = false;
+        final VirtualFile dirVfFinal = dirVf;
+        try {
+            capable = ReadAction.compute(
+                    () -> PsiManager.getInstance(project).findDirectory(dirVfFinal)) != null;
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        return capable;
     }
 
 }

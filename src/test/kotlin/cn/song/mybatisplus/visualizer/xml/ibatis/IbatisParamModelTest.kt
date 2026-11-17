@@ -39,11 +39,11 @@ class IbatisParamModelTest {
         </sqlMap>
     """.trimIndent()
 
-    private fun parse(): IbatisModel.IbatisSqlMap = SqlMapParser().parse(sqlMap)
+    private fun parse(): IbatisSqlMap = SqlMapParser().parse(sqlMap)
 
-    private fun statement(id: String): IbatisModel.IbatisStatement = parse().statementById(id)!!
+    private fun statement(id: String): IbatisStatement = parse().statementById(id)!!
 
-    private fun model(id: String): IbatisParamModel = IbatisParamModel.IbatisParamModelBuilder.build(statement(id))
+    private fun model(id: String): IbatisParamModel = IbatisParamModelBuilder.build(statement(id))
 
     // ------------------------------------------------------------------
     // 行清单
@@ -66,7 +66,7 @@ class IbatisParamModelTest {
         assertEquals("isEqual 的比较值进条件行（面板预填值输入）", "1", m.conditionRows[2].compareValue)
         assertTrue("iterate 行清单为空", m.iterateRows.isEmpty())
         assertEquals("\$ 直替站点行（\$\$ 转义不算站点）", listOf("username"), m.dollarRows.map { it.name })
-        assertTrue(m.hasControls())
+        assertTrue(m.hasControls)
     }
 
     @Test
@@ -92,19 +92,16 @@ class IbatisParamModelTest {
     @Test
     fun `装配_全不勾_全不填_回退null等于无参基线`() {
         val m = model("selectByCondition")
-        assertNull(
-            "空装配 = 无参基线（与现状逐字节一致）",
-            IbatisParamModel.IbatisParamModelBuilder.assembleParams(m, PreviewRerenderInput()),
-        )
+        assertNull("空装配 = 无参基线（与现状逐字节一致）", IbatisParamModelBuilder.assembleParams(m, PreviewRerenderInput()))
     }
 
     @Test
     fun `装配_勾选即放key_值缺省回落compareValue`() {
         val m = model("selectByCondition")
         val isEqual = m.conditionRows.first { it.kindTagName == "isEqual" }
-        val params = IbatisParamModel.IbatisParamModelBuilder.assembleParams(
+        val params = IbatisParamModelBuilder.assembleParams(
             m,
-            PreviewRerenderInput(mapOf(), setOf(isEqual.id), mapOf()),
+            PreviewRerenderInput(emptyMap(), setOf(isEqual.id), emptyMap()),
         ) as Map<*, *>
         assertEquals("勾上 isEqual ⇒ status 进 Map（值缺省 = compareValue）", "1", params["status"])
         assertEquals("只放勾选条件的 key", setOf("status"), params.keys)
@@ -114,9 +111,9 @@ class IbatisParamModelTest {
     fun `装配_用户输入优先于compareValue_空串占位行不污染`() {
         val m = model("selectByCondition")
         val isGreaterThan = m.conditionRows.first { it.kindTagName == "isGreaterThan" }
-        val params = IbatisParamModel.IbatisParamModelBuilder.assembleParams(
+        val params = IbatisParamModelBuilder.assembleParams(
             m,
-            PreviewRerenderInput(mapOf("age" to "20"), setOf(isGreaterThan.id), mapOf()),
+            PreviewRerenderInput(mapOf("age" to "20"), setOf(isGreaterThan.id), emptyMap()),
         ) as Map<*, *>
         assertEquals("用户输入的值优先", "20", params["age"])
     }
@@ -125,9 +122,9 @@ class IbatisParamModelTest {
     fun `装配_条件未勾_同名占位符值不放key`() {
         val m = model("selectByCondition")
         // isNotNull(id) 未勾 ⇒ 即使 #id# 填了值也不放 id key（条件开关主导，整段跳过）
-        val params = IbatisParamModel.IbatisParamModelBuilder.assembleParams(
+        val params = IbatisParamModelBuilder.assembleParams(
             m,
-            PreviewRerenderInput(mapOf("id" to "5"), setOf(), mapOf()),
+            PreviewRerenderInput(mapOf("id" to "5"), emptySet(), emptyMap()),
         )
         assertNull(params)
     }
@@ -136,9 +133,9 @@ class IbatisParamModelTest {
     fun `装配_勾选且同名占位符填值_共用一个输入值`() {
         val m = model("selectByCondition")
         val isNotNull = m.conditionRows.first { it.kindTagName == "isNotNull" }
-        val params = IbatisParamModel.IbatisParamModelBuilder.assembleParams(
+        val params = IbatisParamModelBuilder.assembleParams(
             m,
-            PreviewRerenderInput(mapOf("id" to "5"), setOf(isNotNull.id), mapOf()),
+            PreviewRerenderInput(mapOf("id" to "5"), setOf(isNotNull.id), emptyMap()),
         ) as Map<*, *>
         assertEquals("isNotNull(id) 勾选 + #id# 填 5 ⇒ 共用同一值", "5", params["id"])
     }
@@ -146,24 +143,24 @@ class IbatisParamModelTest {
     @Test
     fun `装配_iterate_值列表非空放List_留空不放`() {
         val m = model("selectByIterate")
-        val filled = IbatisParamModel.IbatisParamModelBuilder.assembleParams(
+        val filled = IbatisParamModelBuilder.assembleParams(
             m,
-            PreviewRerenderInput(mapOf<String, String>(), setOf<String>(), mapOf("ids" to listOf("X1", "X2", "X3"))),
+            PreviewRerenderInput(emptyMap(), emptySet(), mapOf("ids" to listOf("X1", "X2", "X3"))),
         ) as Map<*, *>
         assertEquals(listOf("X1", "X2", "X3"), filled["ids"])
-        val empty = IbatisParamModel.IbatisParamModelBuilder.assembleParams(m, PreviewRerenderInput())
+        val empty = IbatisParamModelBuilder.assembleParams(m, PreviewRerenderInput())
         assertNull("留空 = 引擎降级路径（与无参基线现状一致）", empty)
     }
 
     @Test
     fun `装配_美元行_填了值才放`() {
         val m = model("dollarOnly")
-        val filled = IbatisParamModel.IbatisParamModelBuilder.assembleParams(
+        val filled = IbatisParamModelBuilder.assembleParams(
             m,
-            PreviewRerenderInput(mapOf("tableName" to "T_USER"), setOf(), mapOf()),
+            PreviewRerenderInput(mapOf("tableName" to "T_USER"), emptySet(), emptyMap()),
         ) as Map<*, *>
         assertEquals("T_USER", filled["tableName"])
-        val notFilled = IbatisParamModel.IbatisParamModelBuilder.assembleParams(m, PreviewRerenderInput())
+        val notFilled = IbatisParamModelBuilder.assembleParams(m, PreviewRerenderInput())
         assertNull(notFilled)
     }
 
@@ -171,10 +168,10 @@ class IbatisParamModelTest {
     fun `装配_isParameterPresent勾选_空map也成立`() {
         val sql = "<sqlMap><select id=\"pp\">SELECT 1 FROM T<dynamic prepend=\"WHERE\"><isParameterPresent prepend=\"AND\">1 = 1</isParameterPresent></dynamic></select></sqlMap>"
         val st = SqlMapParser().parse(sql).statementById("pp")!!
-        val m = IbatisParamModel.IbatisParamModelBuilder.build(st)
-        val params = IbatisParamModel.IbatisParamModelBuilder.assembleParams(
+        val m = IbatisParamModelBuilder.build(st)
+        val params = IbatisParamModelBuilder.assembleParams(
             m,
-            PreviewRerenderInput(mapOf(), setOf(m.conditionRows.single().id), mapOf()),
+            PreviewRerenderInput(emptyMap(), setOf(m.conditionRows.single().id), emptyMap()),
         )
         assertEquals("isParameterPresent 判 params != null ⇒ 空 map 也要传（不能退 null）", emptyMap<String, Any?>(), params)
     }
@@ -190,12 +187,9 @@ class IbatisParamModelTest {
             </sqlMap>
         """.trimIndent()
         val st = SqlMapParser().parse(sql).statementById("st")!!
-        val m = IbatisParamModel.IbatisParamModelBuilder.build(st)
+        val m = IbatisParamModelBuilder.build(st)
         assertEquals(listOf("orgId"), m.placeholderRows.map { it.name })
-        val params = IbatisParamModel.IbatisParamModelBuilder.assembleParams(
-            m,
-            PreviewRerenderInput(mapOf("orgId" to "A001"), setOf(), mapOf()),
-        ) as Map<*, *>
+        val params = IbatisParamModelBuilder.assembleParams(m, PreviewRerenderInput(mapOf("orgId" to "A001"), emptySet(), emptyMap())) as Map<*, *>
         assertEquals("A001", params["orgId"])
         // 静态路径不吃参数：SQL 逐字不变（引擎守卫 `#` 原样保留），值只供面板回填
         val rendered = SqlMapSqlRenderer().render(st, params)
@@ -207,9 +201,9 @@ class IbatisParamModelTest {
         val m = model("selectByCondition")
         val isNotNull = m.conditionRows.first { it.kindTagName == "isNotNull" }
         val isEqual = m.conditionRows.first { it.kindTagName == "isEqual" }
-        val params = IbatisParamModel.IbatisParamModelBuilder.assembleParams(
+        val params = IbatisParamModelBuilder.assembleParams(
             m,
-            PreviewRerenderInput(mapOf("id" to "5"), setOf(isNotNull.id), mapOf()),
+            PreviewRerenderInput(mapOf("id" to "5"), setOf(isNotNull.id), emptyMap()),
         )!!
         val rendered = SqlMapSqlRenderer().render(statement("selectByCondition"), params)
         assertTrue("isNotNull(id) 勾选 ⇒ ID 段在", rendered.sql.contains("ID = ?"))
@@ -221,9 +215,9 @@ class IbatisParamModelTest {
     fun `空串值_isNotEmpty不成立_引擎语义不做伪装`() {
         val m = model("selectByCondition")
         val isNotEmpty = m.conditionRows.first { it.kindTagName == "isNotEmpty" }
-        val params = IbatisParamModel.IbatisParamModelBuilder.assembleParams(
+        val params = IbatisParamModelBuilder.assembleParams(
             m,
-            PreviewRerenderInput(mapOf("username" to ""), setOf(isNotEmpty.id), mapOf()),
+            PreviewRerenderInput(mapOf("username" to ""), setOf(isNotEmpty.id), emptyMap()),
         )!!
         val rendered = SqlMapSqlRenderer().render(statement("selectByCondition"), params)
         assertFalse("空串对 isNotEmpty 天然为 false（引擎语义），不得「帮」用户转 null 伪装成立", rendered.sql.contains("USER_NAME LIKE"))

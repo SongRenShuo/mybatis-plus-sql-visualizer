@@ -26,8 +26,8 @@ class LocalUpdateDirTest {
 
     @Test
     fun parse_blankAndWhitespace_disabled() {
-        assertEquals(LocalUpdateDir.DirCheck.Disabled.INSTANCE, LocalUpdateDir.parse("", null))
-        assertEquals(LocalUpdateDir.DirCheck.Disabled.INSTANCE, LocalUpdateDir.parse("   ", null))
+        assertEquals(LocalUpdateDirKt.DirCheck.DISABLED, LocalUpdateDirKt.parse(""))
+        assertEquals(LocalUpdateDirKt.DirCheck.DISABLED, LocalUpdateDirKt.parse("   "))
     }
 
     // ---------- ~ 展开 ----------
@@ -35,9 +35,9 @@ class LocalUpdateDirTest {
     @Test
     fun parse_tildeOnly_expandsToUserHome() {
         val home = System.getProperty("user.home")
-        val result = LocalUpdateDir.parse("~", null)
+        val result = LocalUpdateDirKt.parse("~")
         if (Files.isDirectory(Path.of(home))) {
-            assertTrue("整串 ~ 应展开为 user.home 目录", result is LocalUpdateDir.DirCheck.Ok)
+            assertTrue("整串 ~ 应展开为 user.home 目录", result.isOk)
         }
     }
 
@@ -47,52 +47,52 @@ class LocalUpdateDirTest {
         // 展开语义：`~/x` 必须拼到 user.home 下（而不是把 `~` 原样丢给文件系统）
         assertEquals(
             "$home/mpvs-not-exist-probe-2026",
-            LocalUpdateDir.expandUserHome("~/mpvs-not-exist-probe-2026"),
+            LocalUpdateDirKt.expandUserHome("~/mpvs-not-exist-probe-2026"),
         )
         // 不存在的家目录子路径 → NotFound（确定不存在）
-        val result = LocalUpdateDir.parse("~/mpvs-not-exist-probe-2026", null)
-        assertEquals(LocalUpdateDir.DirCheck.NotFound.INSTANCE, result)
+        val result = LocalUpdateDirKt.parse("~/mpvs-not-exist-probe-2026")
+        assertEquals(LocalUpdateDirKt.DirCheck.NOT_FOUND, result)
     }
 
     @Test
     fun expandUserHome_midPathTilde_keptVerbatim() {
         // `~user` / 路径中段 `~` 不是家目录语义，原样保留
-        assertEquals("C:\\tools~1\\x", LocalUpdateDir.expandUserHome("C:\\tools~1\\x"))
-        assertEquals("~someone/docs", LocalUpdateDir.expandUserHome("~someone/docs"))
-        assertEquals("/a/~/b", LocalUpdateDir.expandUserHome("/a/~/b"))
+        assertEquals("C:\\tools~1\\x", LocalUpdateDirKt.expandUserHome("C:\\tools~1\\x"))
+        assertEquals("~someone/docs", LocalUpdateDirKt.expandUserHome("~someone/docs"))
+        assertEquals("/a/~/b", LocalUpdateDirKt.expandUserHome("/a/~/b"))
     }
 
     @Test
     fun expandUserHome_backslashAfterTilde_expandsToo() {
         val home = System.getProperty("user.home")
-        assertEquals("$home/sub", LocalUpdateDir.expandUserHome("~\\sub"))
+        assertEquals("$home/sub", LocalUpdateDirKt.expandUserHome("~\\sub"))
     }
 
     // ---------- 环境变量引用（明确不支持） ----------
 
     @Test
     fun parse_windowsEnvRef_rejected() {
-        val result = LocalUpdateDir.parse("%TEMP%\\plugins", null)
-        assertEquals(LocalUpdateDir.DirCheck.EnvVarUnsupported.INSTANCE, result)
+        val result = LocalUpdateDirKt.parse("%TEMP%\\plugins")
+        assertEquals(LocalUpdateDirKt.DirCheck.ENV_VAR_UNSUPPORTED, result)
     }
 
     @Test
     fun parse_unixEnvRef_rejected() {
-        assertEquals(LocalUpdateDir.DirCheck.EnvVarUnsupported.INSTANCE, LocalUpdateDir.parse("\$HOME/plugins", null))
-        assertEquals(LocalUpdateDir.DirCheck.EnvVarUnsupported.INSTANCE, LocalUpdateDir.parse("\${HOME}/plugins", null))
+        assertEquals(LocalUpdateDirKt.DirCheck.ENV_VAR_UNSUPPORTED, LocalUpdateDirKt.parse("\$HOME/plugins"))
+        assertEquals(LocalUpdateDirKt.DirCheck.ENV_VAR_UNSUPPORTED, LocalUpdateDirKt.parse("\${HOME}/plugins"))
     }
 
     @Test
     fun parse_midPathDollar_notMistakenForEnvRef() {
         // 设计取舍：只在行首 `$VAR` 或 `${VAR}` 判 env 引用，路径中段的 `$` 按字面处理（防误伤）
-        assertNotEquals(LocalUpdateDir.DirCheck.EnvVarUnsupported.INSTANCE, LocalUpdateDir.parse("/opt/\$PATH/x", null))
+        assertNotEquals(LocalUpdateDirKt.DirCheck.ENV_VAR_UNSUPPORTED, LocalUpdateDirKt.parse("/opt/\$PATH/x"))
     }
 
     @Test
     fun parse_literalDollarInPath_notMistakenForEnvRef() {
         // `C:\$Recycle.Bin` 这类字面 `$` 目录名不该被误伤（不报 EnvVarUnsupported 即可，后续按存在性判）
-        val result = LocalUpdateDir.parse("C:\\\$Recycle.Bin\\x", null)
-        assertNotEquals(LocalUpdateDir.DirCheck.EnvVarUnsupported.INSTANCE, result)
+        val result = LocalUpdateDirKt.parse("C:\\\$Recycle.Bin\\x")
+        assertNotEquals(LocalUpdateDirKt.DirCheck.ENV_VAR_UNSUPPORTED, result)
     }
 
     // ---------- 非法字符 ----------
@@ -100,24 +100,24 @@ class LocalUpdateDirTest {
     @Test
     fun parse_nulCharacter_invalidPath() {
         // NUL 在 Windows 与 Unix 的 Paths.get 都抛 InvalidPathException——三平台通用的非法样本
-        val result = LocalUpdateDir.parse("some\u0000dir", null)
-        assertTrue("NUL 应判非法，实际 $result", result is LocalUpdateDir.DirCheck.InvalidPath)
+        val result = LocalUpdateDirKt.parse("some\u0000dir")
+        assertTrue("NUL 应判非法，实际 $result", result.kind == "InvalidPath")
     }
 
     @Test
     fun parse_windowsColon_invalidPath() {
         if (!isWindows) return // `C:\a:b\c` 在 Unix 是合法文件名，只在 Windows 上判非法
-        val result = LocalUpdateDir.parse("C:\\a:b\\c", null)
-        assertTrue("Windows 错位冒号应判非法，实际 $result", result is LocalUpdateDir.DirCheck.InvalidPath)
+        val result = LocalUpdateDirKt.parse("C:\\a:b\\c")
+        assertTrue("Windows 错位冒号应判非法，实际 $result", result.kind == "InvalidPath")
     }
 
     // ---------- 相对路径 ----------
 
     @Test
     fun parse_relativePath_rejected() {
-        assertEquals(LocalUpdateDir.DirCheck.Relative.INSTANCE, LocalUpdateDir.parse("plugins", null))
-        assertEquals(LocalUpdateDir.DirCheck.Relative.INSTANCE, LocalUpdateDir.parse(".\\plugins", null))
-        assertEquals(LocalUpdateDir.DirCheck.Relative.INSTANCE, LocalUpdateDir.parse("../plugins", null))
+        assertEquals(LocalUpdateDirKt.DirCheck.RELATIVE, LocalUpdateDirKt.parse("plugins"))
+        assertEquals(LocalUpdateDirKt.DirCheck.RELATIVE, LocalUpdateDirKt.parse(".\\plugins"))
+        assertEquals(LocalUpdateDirKt.DirCheck.RELATIVE, LocalUpdateDirKt.parse("../plugins"))
     }
 
     // ---------- 存在性三态 ----------
@@ -125,16 +125,16 @@ class LocalUpdateDirTest {
     @Test
     fun parse_missingDir_notFound() {
         val missing = newTempDir().resolve("definitely-missing-child")
-        val result = LocalUpdateDir.parse(missing.toString(), null)
-        assertEquals(LocalUpdateDir.DirCheck.NotFound.INSTANCE, result)
+        val result = LocalUpdateDirKt.parse(missing.toString())
+        assertEquals(LocalUpdateDirKt.DirCheck.NOT_FOUND, result)
     }
 
     @Test
     fun parse_existingFile_notDirectory() {
         val file = Files.createTempFile("mpvs-local-file-", ".txt")
         try {
-            val result = LocalUpdateDir.parse(file.toString(), null)
-            assertEquals(LocalUpdateDir.DirCheck.NotDirectory.INSTANCE, result)
+            val result = LocalUpdateDirKt.parse(file.toString())
+            assertEquals(LocalUpdateDirKt.DirCheck.NOT_DIRECTORY, result)
         } finally {
             Files.deleteIfExists(file)
         }
@@ -145,9 +145,9 @@ class LocalUpdateDirTest {
         val dir = newTempDir()
         try {
             val raw = dir.toString() + (if (isWindows) "\\" else "/")
-            val result = LocalUpdateDir.parse(raw, null)
-            assertTrue("存在目录应 Ok，实际 $result", result is LocalUpdateDir.DirCheck.Ok)
-            val normalized = (result as LocalUpdateDir.DirCheck.Ok).dir()
+            val result = LocalUpdateDirKt.parse(raw)
+            assertTrue("存在目录应 Ok，实际 $result", result.isOk)
+            val normalized = result.dir
             assertEquals("尾分隔符应被归一去掉", dir.toAbsolutePath().normalize().toString(), normalized.toString())
         } finally {
             Files.deleteIfExists(dir)
@@ -162,9 +162,9 @@ class LocalUpdateDirTest {
         try {
             // dir/a/b/../b 归一 = dir/a/b（真实存在的目录；探针实证 dir/a/b/../a/b 归一为 dir/a/a/b 不存在）
             val raw = inner.resolve("..").resolve("b").toString()
-            val result = LocalUpdateDir.parse(raw, null)
-            assertTrue("含 . / .. 的真实路径应归一为 Ok，实际 $result (raw=$raw)", result is LocalUpdateDir.DirCheck.Ok)
-            assertEquals(inner.toAbsolutePath().normalize().toString(), (result as LocalUpdateDir.DirCheck.Ok).dir().toString())
+            val result = LocalUpdateDirKt.parse(raw)
+            assertTrue("含 . / .. 的真实路径应归一为 Ok，实际 $result (raw=$raw)", result.isOk)
+            assertEquals(inner.toAbsolutePath().normalize().toString(), result.dir.toString())
         } finally {
             deleteRecursively(dir)
         }
@@ -184,9 +184,9 @@ class LocalUpdateDirTest {
         val dir = base.resolve("插件包 目录")
         Files.createDirectories(dir)
         try {
-            val result = LocalUpdateDir.parse(dir.toString(), null)
-            assertTrue("中文与空格路径应可用，实际 $result", result is LocalUpdateDir.DirCheck.Ok)
-            assertEquals(dir.toAbsolutePath().normalize().toString(), (result as LocalUpdateDir.DirCheck.Ok).dir().toString())
+            val result = LocalUpdateDirKt.parse(dir.toString())
+            assertTrue("中文与空格路径应可用，实际 $result", result.isOk)
+            assertEquals(dir.toAbsolutePath().normalize().toString(), result.dir.toString())
         } finally {
             Files.deleteIfExists(dir)
             Files.deleteIfExists(base)
@@ -202,7 +202,7 @@ class LocalUpdateDirTest {
         try {
             Files.setPosixFilePermissions(dir, java.util.EnumSet.noneOf(java.nio.file.attribute.PosixFilePermission::class.java))
             try {
-                assertEquals(LocalUpdateDir.DirCheck.NotReadable.INSTANCE, LocalUpdateDir.parse(dir.toString(), null))
+                assertEquals(LocalUpdateDirKt.DirCheck.NOT_READABLE, LocalUpdateDirKt.parse(dir.toString()))
             } finally {
                 // 恢复可读以便清理（root 下 chmod 000 仍可读的环境里上面那行断言可能不成立——跳过即视为环境受限）
                 Files.setPosixFilePermissions(
@@ -227,10 +227,10 @@ class LocalUpdateDirTest {
         val inner = pluginsDir.resolve("some-plugin")
         Files.createDirectories(inner)
         try {
-            val result = LocalUpdateDir.parse(inner.toString(), pluginsDir)
-            assertEquals(LocalUpdateDir.DirCheck.InsidePluginsDir.INSTANCE, result)
+            val result = LocalUpdateDirKt.parse(inner.toString(), pluginsDir)
+            assertEquals(LocalUpdateDirKt.DirCheck.INSIDE_PLUGINS_DIR, result)
             // 目录本身也拒绝（不只是子目录）
-            assertEquals(LocalUpdateDir.DirCheck.InsidePluginsDir.INSTANCE, LocalUpdateDir.parse(pluginsDir.toString(), pluginsDir))
+            assertEquals(LocalUpdateDirKt.DirCheck.INSIDE_PLUGINS_DIR, LocalUpdateDirKt.parse(pluginsDir.toString(), pluginsDir))
         } finally {
             Files.deleteIfExists(inner)
             Files.deleteIfExists(pluginsDir)
@@ -242,8 +242,8 @@ class LocalUpdateDirTest {
         val pluginsDir = newTempDir()
         val dir = newTempDir()
         try {
-            val result = LocalUpdateDir.parse(dir.toString(), pluginsDir)
-            assertTrue("非插件目录应放行，实际 $result", result is LocalUpdateDir.DirCheck.Ok)
+            val result = LocalUpdateDirKt.parse(dir.toString(), pluginsDir)
+            assertTrue("非插件目录应放行，实际 $result", result.isOk)
         } finally {
             Files.deleteIfExists(dir)
             Files.deleteIfExists(pluginsDir)
@@ -255,7 +255,7 @@ class LocalUpdateDirTest {
         // null = 未配置守卫（纯单测/平台 API 读取失败的兜底），不因缺基准而误判
         val dir = newTempDir()
         try {
-            assertTrue(LocalUpdateDir.parse(dir.toString(), null) is LocalUpdateDir.DirCheck.Ok)
+            assertTrue(LocalUpdateDirKt.parse(dir.toString(), null).isOk)
         } finally {
             Files.deleteIfExists(dir)
         }
@@ -267,6 +267,6 @@ class LocalUpdateDirTest {
     fun isInside_caseInsensitiveOnWindows() {
         val base = Path.of(if (isWindows) "C:\\Base\\Dir" else "/base/dir")
         val probe = Path.of(if (isWindows) "C:\\base\\dir\\child" else "/base/dir/child")
-        assertEquals("WindowsPath.startsWith 大小写不敏感、Unix 区分", isWindows, LocalUpdateDir.isInside(probe, base))
+        assertEquals("WindowsPath.startsWith 大小写不敏感、Unix 区分", isWindows, LocalUpdateDirKt.isInside(probe, base))
     }
 }

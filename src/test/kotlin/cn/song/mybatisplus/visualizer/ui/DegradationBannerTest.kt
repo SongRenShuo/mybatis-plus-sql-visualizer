@@ -5,8 +5,6 @@ import cn.song.mybatisplus.visualizer.model.WrapperType
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 
 /**
@@ -130,9 +128,9 @@ class DegradationBannerTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         val banner = panel.degradationBannerForTest()
         try {
-            val result = IbatisXmlPreviewService.preview(ibatisIterateXml(), "selectByIterate", "select", 0, null, null, null)
+            val result = IbatisXmlPreviewService.preview(ibatisIterateXml(), "selectByIterate")
             assertNotNull("基线待填值告警在场", result.warning)
-            SqlPreviewPanelResultViewKt.showResult(panel, result)
+            panel.showResult(result)
             // 供值：iterate 列表输入 → renderSql 走 rerender → fresh 无告警 → 横幅必须清除
             // （UI-001 主缺陷：基线「渲染降级」告警残留、点「刷新」也不消失）
             panel.ibatisIterateValues["ids"] = "X1,X2,X3"
@@ -158,7 +156,7 @@ class DegradationBannerTest : BasePlatformTestCase() {
                 )
             }
         } finally {
-            SqlPreviewPanelSqlViewKt.clear(panel)
+            panel.clear()
         }
     }
 }

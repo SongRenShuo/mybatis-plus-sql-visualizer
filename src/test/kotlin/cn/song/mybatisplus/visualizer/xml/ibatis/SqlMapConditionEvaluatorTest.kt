@@ -52,76 +52,76 @@ class SqlMapConditionEvaluatorTest {
 
     @Test
     fun `isEmpty 覆盖集合 数组与字符串三态`() {
-        val ctx = SqlMapPrependMarker.IbatisTagContext()
-        assertTrue(condition(IbatisModel.IbatisTagKind.IS_EMPTY, ctx, tag(IbatisModel.IbatisTagKind.IS_EMPTY), null))
-        assertTrue(condition(IbatisModel.IbatisTagKind.IS_EMPTY, ctx, tag(IbatisModel.IbatisTagKind.IS_EMPTY, "p"), mapOf("p" to emptyList<String>())))
-        assertTrue(condition(IbatisModel.IbatisTagKind.IS_EMPTY, ctx, tag(IbatisModel.IbatisTagKind.IS_EMPTY, "p"), mapOf("p" to IntArray(0))))
-        assertTrue(condition(IbatisModel.IbatisTagKind.IS_EMPTY, ctx, tag(IbatisModel.IbatisTagKind.IS_EMPTY, "p"), mapOf("p" to "")))
-        assertFalse(condition(IbatisModel.IbatisTagKind.IS_EMPTY, ctx, tag(IbatisModel.IbatisTagKind.IS_EMPTY, "p"), mapOf("p" to "x")))
-        assertFalse(condition(IbatisModel.IbatisTagKind.IS_EMPTY, ctx, tag(IbatisModel.IbatisTagKind.IS_EMPTY, "p"), mapOf("p" to listOf(1))))
-        assertTrue(condition(IbatisModel.IbatisTagKind.IS_NOT_EMPTY, ctx, tag(IbatisModel.IbatisTagKind.IS_NOT_EMPTY, "p"), mapOf("p" to listOf(1))))
+        val ctx = IbatisTagContext()
+        assertTrue(condition(IbatisTagKind.IS_EMPTY, ctx, tag(IbatisTagKind.IS_EMPTY), null))
+        assertTrue(condition(IbatisTagKind.IS_EMPTY, ctx, tag(IbatisTagKind.IS_EMPTY, "p"), mapOf("p" to emptyList<String>())))
+        assertTrue(condition(IbatisTagKind.IS_EMPTY, ctx, tag(IbatisTagKind.IS_EMPTY, "p"), mapOf("p" to IntArray(0))))
+        assertTrue(condition(IbatisTagKind.IS_EMPTY, ctx, tag(IbatisTagKind.IS_EMPTY, "p"), mapOf("p" to "")))
+        assertFalse(condition(IbatisTagKind.IS_EMPTY, ctx, tag(IbatisTagKind.IS_EMPTY, "p"), mapOf("p" to "x")))
+        assertFalse(condition(IbatisTagKind.IS_EMPTY, ctx, tag(IbatisTagKind.IS_EMPTY, "p"), mapOf("p" to listOf(1))))
+        assertTrue(condition(IbatisTagKind.IS_NOT_EMPTY, ctx, tag(IbatisTagKind.IS_NOT_EMPTY, "p"), mapOf("p" to listOf(1))))
     }
 
     @Test
     fun `isPropertyAvailable 对 Map 走 containsKey 而不是 Probe`() {
-        val ctx = SqlMapPrependMarker.IbatisTagContext()
+        val ctx = IbatisTagContext()
         val params = mapOf("present" to 1)
-        assertTrue(condition(IbatisModel.IbatisTagKind.IS_PROPERTY_AVAILABLE, ctx, tag(IbatisModel.IbatisTagKind.IS_PROPERTY_AVAILABLE, "present"), params))
+        assertTrue(condition(IbatisTagKind.IS_PROPERTY_AVAILABLE, ctx, tag(IbatisTagKind.IS_PROPERTY_AVAILABLE, "present"), params))
         // Probe 对 Map 的任何属性名都返回 true——必须用 containsKey，否则这里会假真
-        assertFalse(condition(IbatisModel.IbatisTagKind.IS_PROPERTY_AVAILABLE, ctx, tag(IbatisModel.IbatisTagKind.IS_PROPERTY_AVAILABLE, "missing"), params))
-        assertTrue(condition(IbatisModel.IbatisTagKind.IS_NOT_PROPERTY_AVAILABLE, ctx, tag(IbatisModel.IbatisTagKind.IS_NOT_PROPERTY_AVAILABLE, "missing"), params))
-        assertFalse(condition(IbatisModel.IbatisTagKind.IS_PROPERTY_AVAILABLE, ctx, tag(IbatisModel.IbatisTagKind.IS_PROPERTY_AVAILABLE, "x"), null))
+        assertFalse(condition(IbatisTagKind.IS_PROPERTY_AVAILABLE, ctx, tag(IbatisTagKind.IS_PROPERTY_AVAILABLE, "missing"), params))
+        assertTrue(condition(IbatisTagKind.IS_NOT_PROPERTY_AVAILABLE, ctx, tag(IbatisTagKind.IS_NOT_PROPERTY_AVAILABLE, "missing"), params))
+        assertFalse(condition(IbatisTagKind.IS_PROPERTY_AVAILABLE, ctx, tag(IbatisTagKind.IS_PROPERTY_AVAILABLE, "x"), null))
     }
 
     @Test
     fun `复合属性取最后一段点号后再判可读性`() {
         // 引擎的复合属性分支只在**非 Map** 参数对象上生效（Map 走 containsKey 原始属性名，见上一个用例）
-        val ctx = SqlMapPrependMarker.IbatisTagContext()
+        val ctx = IbatisTagContext()
         val params = NestedHolder(mapOf("flag" to 1))
-        assertTrue(condition(IbatisModel.IbatisTagKind.IS_PROPERTY_AVAILABLE, ctx, tag(IbatisModel.IbatisTagKind.IS_PROPERTY_AVAILABLE, "nested.flag"), params))
-        assertFalse(condition(IbatisModel.IbatisTagKind.IS_PROPERTY_AVAILABLE, ctx, tag(IbatisModel.IbatisTagKind.IS_PROPERTY_AVAILABLE, "nested.other"), params))
-        assertFalse(condition(IbatisModel.IbatisTagKind.IS_PROPERTY_AVAILABLE, ctx, tag(IbatisModel.IbatisTagKind.IS_PROPERTY_AVAILABLE, "absent.flag"), params))
+        assertTrue(condition(IbatisTagKind.IS_PROPERTY_AVAILABLE, ctx, tag(IbatisTagKind.IS_PROPERTY_AVAILABLE, "nested.flag"), params))
+        assertFalse(condition(IbatisTagKind.IS_PROPERTY_AVAILABLE, ctx, tag(IbatisTagKind.IS_PROPERTY_AVAILABLE, "nested.other"), params))
+        assertFalse(condition(IbatisTagKind.IS_PROPERTY_AVAILABLE, ctx, tag(IbatisTagKind.IS_PROPERTY_AVAILABLE, "absent.flag"), params))
 
         // Map 参数对象下 `nested.flag` 走 containsKey("nested.flag") → 恒 false
         val mapParams = mapOf("nested" to mapOf("flag" to 1))
-        assertFalse(condition(IbatisModel.IbatisTagKind.IS_PROPERTY_AVAILABLE, ctx, tag(IbatisModel.IbatisTagKind.IS_PROPERTY_AVAILABLE, "nested.flag"), mapParams))
+        assertFalse(condition(IbatisTagKind.IS_PROPERTY_AVAILABLE, ctx, tag(IbatisTagKind.IS_PROPERTY_AVAILABLE, "nested.flag"), mapParams))
     }
 
     @Test
     fun `isParameterPresent 只看参数对象是否为 null`() {
-        val ctx = SqlMapPrependMarker.IbatisTagContext()
-        val present = tag(IbatisModel.IbatisTagKind.IS_PARAMETER_PRESENT)
-        val notPresent = tag(IbatisModel.IbatisTagKind.IS_NOT_PARAMETER_PRESENT)
-        assertFalse(condition(IbatisModel.IbatisTagKind.IS_PARAMETER_PRESENT, ctx, present, null))
-        assertTrue(condition(IbatisModel.IbatisTagKind.IS_NOT_PARAMETER_PRESENT, ctx, notPresent, null))
-        assertTrue(condition(IbatisModel.IbatisTagKind.IS_PARAMETER_PRESENT, ctx, present, emptyMap<String, Any>()))
-        assertFalse(condition(IbatisModel.IbatisTagKind.IS_NOT_PARAMETER_PRESENT, ctx, notPresent, emptyMap<String, Any>()))
+        val ctx = IbatisTagContext()
+        val present = tag(IbatisTagKind.IS_PARAMETER_PRESENT)
+        val notPresent = tag(IbatisTagKind.IS_NOT_PARAMETER_PRESENT)
+        assertFalse(condition(IbatisTagKind.IS_PARAMETER_PRESENT, ctx, present, null))
+        assertTrue(condition(IbatisTagKind.IS_NOT_PARAMETER_PRESENT, ctx, notPresent, null))
+        assertTrue(condition(IbatisTagKind.IS_PARAMETER_PRESENT, ctx, present, emptyMap<String, Any>()))
+        assertFalse(condition(IbatisTagKind.IS_NOT_PARAMETER_PRESENT, ctx, notPresent, emptyMap<String, Any>()))
     }
 
     @Test
     fun `比较族六种符号与 compareProperty 形态`() {
-        val ctx = SqlMapPrependMarker.IbatisTagContext()
+        val ctx = IbatisTagContext()
         val params = mapOf("n" to 3, "same" to 3, "other" to 9)
-        fun compare(kind: IbatisModel.IbatisTagKind, compareValue: String? = null, compareProperty: String? = null) =
+        fun compare(kind: IbatisTagKind, compareValue: String? = null, compareProperty: String? = null) =
             condition(kind, ctx, tag(kind, "n", compareProperty, compareValue), params)
 
-        assertFalse(compare(IbatisModel.IbatisTagKind.IS_EQUAL, compareValue = "4"))
-        assertTrue(compare(IbatisModel.IbatisTagKind.IS_EQUAL, compareValue = "3"))
-        assertTrue(compare(IbatisModel.IbatisTagKind.IS_NOT_EQUAL, compareValue = "4"))
-        assertTrue(compare(IbatisModel.IbatisTagKind.IS_GREATER_THAN, compareValue = "2"))
-        assertTrue(compare(IbatisModel.IbatisTagKind.IS_GREATER_EQUAL, compareValue = "3"))
-        assertTrue(compare(IbatisModel.IbatisTagKind.IS_LESS_THAN, compareValue = "4"))
-        assertTrue(compare(IbatisModel.IbatisTagKind.IS_LESS_EQUAL, compareValue = "3"))
-        assertTrue(compare(IbatisModel.IbatisTagKind.IS_EQUAL, compareProperty = "same"))
-        assertFalse(compare(IbatisModel.IbatisTagKind.IS_EQUAL, compareProperty = "other"))
+        assertFalse(compare(IbatisTagKind.IS_EQUAL, compareValue = "4"))
+        assertTrue(compare(IbatisTagKind.IS_EQUAL, compareValue = "3"))
+        assertTrue(compare(IbatisTagKind.IS_NOT_EQUAL, compareValue = "4"))
+        assertTrue(compare(IbatisTagKind.IS_GREATER_THAN, compareValue = "2"))
+        assertTrue(compare(IbatisTagKind.IS_GREATER_EQUAL, compareValue = "3"))
+        assertTrue(compare(IbatisTagKind.IS_LESS_THAN, compareValue = "4"))
+        assertTrue(compare(IbatisTagKind.IS_LESS_EQUAL, compareValue = "3"))
+        assertTrue(compare(IbatisTagKind.IS_EQUAL, compareProperty = "same"))
+        assertFalse(compare(IbatisTagKind.IS_EQUAL, compareProperty = "other"))
     }
 
     @Test
     fun `缺少比较对象时按不成立处理并告警`() {
         val warnings = ArrayList<String>()
-        val ctx = SqlMapPrependMarker.IbatisTagContext()
+        val ctx = IbatisTagContext()
         val evaluator = SqlMapConditionEvaluator { warnings.add(it) }
-        val result = evaluator.isCondition(IbatisModel.IbatisTagKind.IS_EQUAL, ctx, tag(IbatisModel.IbatisTagKind.IS_EQUAL, "n"), mapOf("n" to 1))
+        val result = evaluator.isCondition(IbatisTagKind.IS_EQUAL, ctx, tag(IbatisTagKind.IS_EQUAL, "n"), mapOf("n" to 1))
         assertFalse(result)
         assertTrue(warnings.any { it.contains("compareProperty") })
     }
@@ -162,40 +162,28 @@ class SqlMapConditionEvaluatorTest {
 
     @Test
     fun `数值比较增强_条件族端到端_isGreaterThan在Map参数下不再字典序误判`() {
-        val ctx = SqlMapPrependMarker.IbatisTagContext()
-        val tag = tag(IbatisModel.IbatisTagKind.IS_GREATER_THAN, "age", null, "18")
+        val ctx = IbatisTagContext()
+        val tag = tag(IbatisTagKind.IS_GREATER_THAN, "age", null, "18")
         // Map 参数（预览交互装配的形态：值一律 String）
-        assertFalse("age=9 不满足 >18（字典序会误判成立）", condition(IbatisModel.IbatisTagKind.IS_GREATER_THAN, ctx, tag, mapOf("age" to "9")))
-        assertTrue("age=20 满足 >18", condition(IbatisModel.IbatisTagKind.IS_GREATER_THAN, ctx, tag, mapOf("age" to "20")))
+        assertFalse("age=9 不满足 >18（字典序会误判成立）", condition(IbatisTagKind.IS_GREATER_THAN, ctx, tag, mapOf("age" to "9")))
+        assertTrue("age=20 满足 >18", condition(IbatisTagKind.IS_GREATER_THAN, ctx, tag, mapOf("age" to "20")))
         // 小数值在 isLessThan 下同样按数值判（既有字典序会误判 "20" < "18" 不成立）
-        val less = tag(IbatisModel.IbatisTagKind.IS_LESS_THAN, "age", null, "18")
-        assertTrue(condition(IbatisModel.IbatisTagKind.IS_LESS_THAN, ctx, less, mapOf("age" to "9")))
-        assertFalse(condition(IbatisModel.IbatisTagKind.IS_LESS_THAN, ctx, less, mapOf("age" to "20")))
+        val less = tag(IbatisTagKind.IS_LESS_THAN, "age", null, "18")
+        assertTrue(condition(IbatisTagKind.IS_LESS_THAN, ctx, less, mapOf("age" to "9")))
+        assertFalse(condition(IbatisTagKind.IS_LESS_THAN, ctx, less, mapOf("age" to "20")))
     }
 
-    private fun condition(kind: IbatisModel.IbatisTagKind, ctx: SqlMapPrependMarker.IbatisTagContext, tag: IbatisModel.IbatisTagNode, params: Any?): Boolean =
+    private fun condition(kind: IbatisTagKind, ctx: IbatisTagContext, tag: IbatisTagNode, params: Any?): Boolean =
         evaluator.isCondition(kind, ctx, tag, params)
 
     /** 复合属性判定的对照夹具（非 Map 的 JavaBean）。 */
     private data class NestedHolder(val nested: Map<String, Int>)
 
     private fun tag(
-        kind: IbatisModel.IbatisTagKind,
+        kind: IbatisTagKind,
         property: String? = null,
         compareProperty: String? = null,
         compareValue: String? = null,
-        parent: IbatisModel.IbatisTagNode? = null,
-    ): IbatisModel.IbatisTagNode = IbatisModel.IbatisTagNode(
-        kind,
-        null,
-        property,
-        null,
-        null,
-        null,
-        null,
-        compareProperty,
-        compareValue,
-        false,
-        emptyList(),
-    ).also { parent?.let { p -> it.attachParent(p) } }
+        parent: IbatisTagNode? = null,
+    ): IbatisTagNode = IbatisTagNode(kind, null, property, null, null, null, null, compareProperty, compareValue, false, emptyList()).also { parent?.let { p -> it.attachParent(p) } }
 }

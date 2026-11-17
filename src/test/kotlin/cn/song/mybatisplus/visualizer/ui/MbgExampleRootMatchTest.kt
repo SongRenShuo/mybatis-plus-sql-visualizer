@@ -15,8 +15,6 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
  *
  * 这里用 Light PSI 钉住判定：同名链收、别家链弃、`Criteria alias = example.createCriteria()` 的
  * 分步写法仍收（别名追溯初始化表达式）。
- *
- * K2J 适配：{@code rootedAtExample} 落 {@link MbgExampleCallResolver} 静态方法，调用形态不变。
  */
 class MbgExampleRootMatchTest : BasePlatformTestCase() {
 

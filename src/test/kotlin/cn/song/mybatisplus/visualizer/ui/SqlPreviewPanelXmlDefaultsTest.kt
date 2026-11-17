@@ -1,12 +1,11 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.model.PreviewResult
+import cn.song.mybatisplus.visualizer.xml.MbgCriterionKind
 import cn.song.mybatisplus.visualizer.xml.MbgCriterionMock
-import cn.song.mybatisplus.visualizer.xml.MbgCriterionMock.MbgCriterionKind
-import cn.song.mybatisplus.visualizer.xml.MockObject
 import cn.song.mybatisplus.visualizer.xml.XmlMapperParser
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
-import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel.XmlPreviewProfile
+import cn.song.mybatisplus.visualizer.xml.XmlPreviewProfile
 import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
@@ -23,11 +22,6 @@ import org.junit.Assert.assertTrue
  * 因此全绿而面板实际不生效。
  *
  * 本用例是面板侧的唯一防线：断言初始勾选集合与 `defaultState().enabledIds` 完全一致。
- *
- * K2J 适配：{@code XmlPreviewProfile}/{@code MbgCriterionKind} 落嵌套类型（import 嵌套形态）；
- * {@code XmlPreviewModel.from} 具名实参 → 9 参规范形态位置实参；{@code PreviewResult} 具名实参 →
- * 20 参历史重载位置实参（xmlModel 在第 15 位）；面板门面 {@code showResult}/{@code clear}
- * 走 ResultViewKt/SqlViewKt 静态扩展。
  */
 class SqlPreviewPanelXmlDefaultsTest : BasePlatformTestCase() {
 
@@ -35,7 +29,7 @@ class SqlPreviewPanelXmlDefaultsTest : BasePlatformTestCase() {
 
     override fun tearDown() {
         // 面板持有编辑器，不显式释放会让平台报 "Editor ... hasn't been released"（Disposer 泄漏）
-        runCatching { panel?.let { SqlPreviewPanelSqlViewKt.clear(it) } }
+        runCatching { panel?.clear() }
         panel = null
         super.tearDown()
     }
@@ -81,10 +75,8 @@ class SqlPreviewPanelXmlDefaultsTest : BasePlatformTestCase() {
         val parsed = XmlMapperParser().parse(mapper)
         val model = XmlPreviewModel.from(
             parsed.statements.single(), parsed.errors,
-            setOf<String>(), mapOf<String, Any>(), mapOf<String, Any>(), mapOf<String, Boolean>(),
-            mapOf<String, cn.song.mybatisplus.visualizer.xml.ParamTypeInfo>(),
-            XmlPreviewProfile.MBG_EXAMPLE,
-            mapOf(
+            profile = XmlPreviewProfile.MBG_EXAMPLE,
+            collectionElements = mapOf(
                 "oredCriteria" to listOf(MbgCriterionMock.criteriaOf(criteria)),
                 "criteria.criteria" to criteria.map { it.toMockObject() },
             ),
@@ -93,13 +85,15 @@ class SqlPreviewPanelXmlDefaultsTest : BasePlatformTestCase() {
         val p = SqlPreviewPanel(project)
         panel = p
         Disposer.register(testRootDisposable, p)
-        SqlPreviewPanelResultViewKt.showResult(
-            p,
+        p.showResult(
             PreviewResult(
-                "", "", emptyList(), null, null, null, null,
-                emptyList(), emptyMap(), null, null, emptyList(), emptyList(), null,
-                model,
-                emptyMap(), emptyList(), emptyList(), null, emptyList(),
+                sql = "",
+                compactSql = "",
+                unresolvedParams = emptyList(),
+                paramTable = null,
+                wrapperType = null,
+                tableName = null,
+                xmlModel = model,
             ),
         )
 

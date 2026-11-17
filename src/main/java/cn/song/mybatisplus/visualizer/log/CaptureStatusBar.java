@@ -223,5 +223,9 @@ public final class CaptureStatusBar {
 
     /** 两段文案载体（Kotlin Pair 的 Java 承载）。 */
     public record Pair(String first, String second) {
+        /** Kotlin 测试解构（`val (console, agent) = ...`）所需的 operator 别名——等价 record 访问器。 */
+        public String component1() { return first; }
+
+        public String component2() { return second; }
     }
 }

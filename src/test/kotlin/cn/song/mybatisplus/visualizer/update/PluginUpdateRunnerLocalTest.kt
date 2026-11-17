@@ -10,6 +10,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import cn.song.mybatisplus.visualizer.update.PluginPackageOwnershipKt.Ownership
 
 /**
  * 本地包安装编排单测（T-LocalUpdateDir M3，计划 T3）：installFromLocal 全分支——
@@ -67,12 +68,12 @@ class PluginUpdateRunnerLocalTest {
     private fun localPkg(zip: Path, version: String = "2026.11.12", sinceBuild: Int? = 243): LocalPackage {
         val attrs = Files.readAttributes(zip, java.nio.file.attribute.BasicFileAttributes::class.java)
         return LocalPackage(
-            version,
-            zip,
-            zip.fileName.toString(),
-            attrs.size(),
-            attrs.lastModifiedTime().toMillis(),
-            sinceBuild,
+            version = version,
+            path = zip,
+            fileName = zip.fileName.toString(),
+            sizeBytes = attrs.size(),
+            modifiedMs = attrs.lastModifiedTime().toMillis(),
+            sinceBuildBaseline = sinceBuild,
         )
     }
 
@@ -83,13 +84,7 @@ class PluginUpdateRunnerLocalTest {
         val zip = writeIpgpZip(tmp.root.toPath().resolve("new-2026.11.12.zip"), pluginXml("2026.11.12"))
         val sourceBytes = Files.readAllBytes(zip)
         val install = RecordingInstall()
-        val result = PluginUpdateRunner.installFromLocal(
-            localPkg(zip),
-            null,
-            PluginPackageOwnership::verify,
-            { currentBaseline },
-            install,
-        )
+        val result = PluginUpdateRunner.installFromLocal(localPkg(zip), null, PluginPackageOwnershipKt::verify, { currentBaseline }, install)
         assertTrue("应透传安装结果：$result", result is PluginUpdateRunner.InstallResult.InstalledDynamic)
         assertEquals("install seam 恰好一次", 1, install.calls.size)
         val tempPath = install.calls.single()
@@ -107,15 +102,9 @@ class PluginUpdateRunnerLocalTest {
         val zip = writeIpgpZip(tmp.root.toPath().resolve("foreign.zip"), pluginXml("9.9.9", id = "com.evil.other"))
         val sourceBytes = Files.readAllBytes(zip)
         val install = RecordingInstall()
-        val result = PluginUpdateRunner.installFromLocal(
-            localPkg(zip, version = "9.9.9"),
-            null,
-            PluginPackageOwnership::verify,
-            { currentBaseline },
-            install,
-        )
+        val result = PluginUpdateRunner.installFromLocal(localPkg(zip, "9.9.9", 243), null, PluginPackageOwnershipKt::verify, { currentBaseline }, install)
         assertTrue(result is PluginUpdateRunner.InstallResult.Failed)
-        assertTrue((result as PluginUpdateRunner.InstallResult.Failed).message().contains("不是本插件"))
+        assertTrue((result as PluginUpdateRunner.InstallResult.Failed).message.contains("不是本插件"))
         assertEquals("冒名包不得触达安装", 0, install.calls.size)
         assertTrue(sourceBytes.contentEquals(Files.readAllBytes(zip)))
     }
@@ -141,15 +130,9 @@ class PluginUpdateRunnerLocalTest {
             z.closeEntry()
         }
         val install = RecordingInstall()
-        val result = PluginUpdateRunner.installFromLocal(
-            localPkg(zip, version = "2026.11.20"),
-            null,
-            PluginPackageOwnership::verify,
-            { currentBaseline },
-            install,
-        )
+        val result = PluginUpdateRunner.installFromLocal(localPkg(zip, "2026.11.20", 243), null, PluginPackageOwnershipKt::verify, { currentBaseline }, install)
         assertTrue(result is PluginUpdateRunner.InstallResult.Failed)
-        assertTrue((result as PluginUpdateRunner.InstallResult.Failed).message().contains("已拒绝安装"))
+        assertTrue((result as PluginUpdateRunner.InstallResult.Failed).message.contains("已拒绝安装"))
         assertEquals("夹带包不得触达安装", 0, install.calls.size)
     }
 
@@ -159,17 +142,11 @@ class PluginUpdateRunnerLocalTest {
     fun installFromLocal_incompatibleSinceBuild_rejected() {
         val zip = writeIpgpZip(tmp.root.toPath().resolve("newer-ide.zip"), pluginXml("2026.11.12", sinceBuild = "263.*"))
         val install = RecordingInstall()
-        val result = PluginUpdateRunner.installFromLocal(
-            localPkg(zip, sinceBuild = 263),
-            null,
-            PluginPackageOwnership::verify,
-            { currentBaseline },
-            install,
-        )
+        val result = PluginUpdateRunner.installFromLocal(localPkg(zip, "2026.11.12", 263), null, PluginPackageOwnershipKt::verify, { currentBaseline }, install)
         assertTrue(result is PluginUpdateRunner.InstallResult.Failed)
         assertTrue(
             "文案应给出两侧版本：$result",
-            (result as PluginUpdateRunner.InstallResult.Failed).message().contains("263"),
+            (result as PluginUpdateRunner.InstallResult.Failed).message.contains("263"),
         )
         assertEquals(0, install.calls.size)
     }
@@ -178,13 +155,7 @@ class PluginUpdateRunnerLocalTest {
     fun installFromLocal_unknownSinceBuild_notBlocked() {
         val zip = writeIpgpZip(tmp.root.toPath().resolve("nosb.zip"), pluginXml("2026.11.12", sinceBuild = null))
         val install = RecordingInstall()
-        val result = PluginUpdateRunner.installFromLocal(
-            localPkg(zip, sinceBuild = null),
-            null,
-            PluginPackageOwnership::verify,
-            { currentBaseline },
-            install,
-        )
+        val result = PluginUpdateRunner.installFromLocal(localPkg(zip, "2026.11.12", null), null, PluginPackageOwnershipKt::verify, { currentBaseline }, install)
         assertTrue("包未声明 since-build 不拦（D-5 口径）：$result", result is PluginUpdateRunner.InstallResult.InstalledDynamic)
     }
 
@@ -195,23 +166,17 @@ class PluginUpdateRunnerLocalTest {
         // verify seam 放行，但文件在复制前消失（共享盘掉线形态）；包元数据手工构造（源不存在，无法 stat）
         val zip = tmp.root.toPath().resolve("ghost.zip")
         val pkg = LocalPackage(
-            "2026.11.12",
-            zip,
-            "ghost.zip",
-            1,
-            1,
-            243,
+            version = "2026.11.12",
+            path = zip,
+            fileName = "ghost.zip",
+            sizeBytes = 1,
+            modifiedMs = 1,
+            sinceBuildBaseline = 243,
         )
         val install = RecordingInstall()
-        val result = PluginUpdateRunner.installFromLocal(
-            pkg,
-            null,
-            { PluginPackageOwnership.Ownership.Ours("2026.11.12", 243, UpdateSource.INSTALL_DIR_NAME) },
-            { currentBaseline },
-            install,
-        )
+        val result = PluginUpdateRunner.installFromLocal(pkg, null, { Ownership.ours("2026.11.12", 243, UpdateSource.INSTALL_DIR_NAME) }, { currentBaseline }, install)
         assertTrue(result is PluginUpdateRunner.InstallResult.Failed)
-        assertTrue((result as PluginUpdateRunner.InstallResult.Failed).message().contains("无法读取本地安装包"))
+        assertTrue((result as PluginUpdateRunner.InstallResult.Failed).message.contains("无法读取本地安装包"))
         assertEquals(0, install.calls.size)
     }
 
@@ -220,15 +185,9 @@ class PluginUpdateRunnerLocalTest {
         val zip = tmp.root.toPath().resolve("junk.zip")
         Files.write(zip, "not a zip".toByteArray())
         val install = RecordingInstall()
-        val result = PluginUpdateRunner.installFromLocal(
-            localPkg(zip),
-            null,
-            { PluginPackageOwnership.Ownership.Ours("2026.11.12", 243, UpdateSource.INSTALL_DIR_NAME) },
-            { currentBaseline },
-            install,
-        )
+        val result = PluginUpdateRunner.installFromLocal(localPkg(zip), null, { Ownership.ours("2026.11.12", 243, UpdateSource.INSTALL_DIR_NAME) }, { currentBaseline }, install)
         assertTrue(result is PluginUpdateRunner.InstallResult.Failed)
-        assertTrue((result as PluginUpdateRunner.InstallResult.Failed).message().contains("不是有效的插件压缩包"))
+        assertTrue((result as PluginUpdateRunner.InstallResult.Failed).message.contains("不是有效的插件压缩包"))
         assertEquals(0, install.calls.size)
     }
 
@@ -237,15 +196,9 @@ class PluginUpdateRunnerLocalTest {
         // 65 个非目录条目 > UpdateZipGuard.MAX_ENTRIES(64)：G3 有界守卫拦在安装之前
         val zip = writeIpgpZip(tmp.root.toPath().resolve("bomb.zip"), pluginXml("2026.11.12"), extraEntries = 65)
         val install = RecordingInstall()
-        val result = PluginUpdateRunner.installFromLocal(
-            localPkg(zip),
-            null,
-            PluginPackageOwnership::verify,
-            { currentBaseline },
-            install,
-        )
+        val result = PluginUpdateRunner.installFromLocal(localPkg(zip), null, PluginPackageOwnershipKt::verify, { currentBaseline }, install)
         assertTrue("超限应被守卫拒绝：$result", result is PluginUpdateRunner.InstallResult.Failed)
-        assertTrue((result as PluginUpdateRunner.InstallResult.Failed).message().contains("未通过安全校验"))
+        assertTrue((result as PluginUpdateRunner.InstallResult.Failed).message.contains("未通过安全校验"))
         assertEquals(0, install.calls.size)
     }
 
@@ -254,27 +207,15 @@ class PluginUpdateRunnerLocalTest {
     @Test
     fun installFromLocal_restartRequired_transparent() {
         val zip = writeIpgpZip(tmp.root.toPath().resolve("new.zip"), pluginXml("2026.11.12"))
-        val result = PluginUpdateRunner.installFromLocal(
-            localPkg(zip),
-            null,
-            PluginPackageOwnership::verify,
-            { currentBaseline },
-            { PluginUpdateRunner.InstallResult.InstalledRestartRequired.INSTANCE },
-        )
-        assertEquals(PluginUpdateRunner.InstallResult.InstalledRestartRequired.INSTANCE, result)
+        val result = PluginUpdateRunner.installFromLocal(localPkg(zip), null, PluginPackageOwnershipKt::verify, { currentBaseline }, { PluginUpdateRunner.InstallResult.InstalledRestartRequired })
+        assertEquals(PluginUpdateRunner.InstallResult.InstalledRestartRequired, result)
     }
 
     @Test
     fun installFromLocal_installFailure_transparent() {
         val zip = writeIpgpZip(tmp.root.toPath().resolve("new.zip"), pluginXml("2026.11.12"))
-        val result = PluginUpdateRunner.installFromLocal(
-            localPkg(zip),
-            null,
-            PluginPackageOwnership::verify,
-            { currentBaseline },
-            { PluginUpdateRunner.InstallResult.Failed("platform refused") },
-        )
+        val result = PluginUpdateRunner.installFromLocal(localPkg(zip), null, PluginPackageOwnershipKt::verify, { currentBaseline }, { PluginUpdateRunner.InstallResult.Failed("platform refused") })
         assertTrue(result is PluginUpdateRunner.InstallResult.Failed)
-        assertEquals("platform refused", (result as PluginUpdateRunner.InstallResult.Failed).message())
+        assertEquals("platform refused", (result as PluginUpdateRunner.InstallResult.Failed).message)
     }
 }

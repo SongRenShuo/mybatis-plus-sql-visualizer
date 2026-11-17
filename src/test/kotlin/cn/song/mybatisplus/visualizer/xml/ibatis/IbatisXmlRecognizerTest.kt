@@ -67,7 +67,7 @@ class IbatisXmlRecognizerTest {
     fun `三条信号齐备_判是且信号集为三条`() {
         val v = verdict(root = "sqlMapConfig", publicId = ibatisApachePublicId, classpath = true)
         assertTrue(v.isIbatis)
-        assertEquals(3, v.signalCount())
+        assertEquals(3, v.signalCount)
     }
 
     // ---------- 2. 单条信号不认领（三选二的必要性） ----------
@@ -191,6 +191,6 @@ class IbatisXmlRecognizerTest {
         val v = verdict()
         assertFalse(v.isIbatis)
         assertTrue(v.signals.isEmpty())
-        assertEquals(0, v.signalCount())
+        assertEquals(0, v.signalCount)
     }
 }

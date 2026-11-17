@@ -19,6 +19,14 @@ import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import java.io.File
+import cn.song.mybatisplus.visualizer.execute.DataSourceSelectorResultsKt.findExecPsi
+import cn.song.mybatisplus.visualizer.execute.DataSourceSelectorResultsKt.healExecPsi
+import cn.song.mybatisplus.visualizer.execute.DataSourceSelectorResultsKt.execPsiDiagnostics
+import cn.song.mybatisplus.visualizer.execute.DataSourceSelectorResultsKt.projectRootExecFile
+import cn.song.mybatisplus.visualizer.execute.DataSourceSelectorResultsKt.execDirFailureCause
+import cn.song.mybatisplus.visualizer.execute.DataSourceSelectorResultsKt.execDirDiagnostics
+import cn.song.mybatisplus.visualizer.execute.DataSourceSelectorResultsKt.execDirCanHostPsi
+import cn.song.mybatisplus.visualizer.execute.DataSourceSelectorResultsKt.createTempPsiFile
 
 /**
  * T-ExecPsiGate：exec 链「可建 PSI 门」与「清映射自愈」的回归用例。
@@ -121,7 +129,7 @@ class ExecPsiGateTest : BasePlatformTestCase() {
         var last = "NULL"
         repeat(10) {
             UIUtil.dispatchAllInvocationEvents()
-            val r = runCatching { DataSourceSelectorResultsKt.findExecPsi(project, vf) }
+            val r = runCatching { findExecPsi(project, vf) }
             last = when {
                 r.isFailure -> "THROW:${r.exceptionOrNull()!!.javaClass.simpleName}"
                 r.getOrNull() == null -> "NULL"
@@ -161,10 +169,10 @@ class ExecPsiGateTest : BasePlatformTestCase() {
 
         val applied = DataSourceSelector.applyExecDialectMapping(
             project, vf, LOG,
-            NoParserForTest,
-            NoParserForTest.id,
-            NoParserForTest.id,
-            null,
+            targetLanguage = NoParserForTest,
+            targetId = NoParserForTest.id,
+            renderedDialectName = NoParserForTest.id,
+            targetDs = null,
         )
         assertEquals(
             "目标语言建不出 PSI 时，闸门必须拒绝映射（APPLIED = 没拦住）",
@@ -191,10 +199,10 @@ class ExecPsiGateTest : BasePlatformTestCase() {
 
         val applied = DataSourceSelector.applyExecDialectMapping(
             project, vf, LOG,
-            mysql,
-            "MySQL",
-            "MySQL",
-            null,
+            targetLanguage = mysql,
+            targetId = "MySQL",
+            renderedDialectName = "MySQL",
+            targetDs = null,
         )
         assertEquals(
             "能建 PSI 的语言必须照常映射（闸门误伤会让所有正常执行退化）",
@@ -230,10 +238,10 @@ class ExecPsiGateTest : BasePlatformTestCase() {
         // 真机上两种都出现过）。对调用方的观测一致：拿不到可用 PSI。
         assertNull(
             "前置：坏映射下必须拿不到 PSI（异常被吞或返回 null 都算）",
-            runCatching { DataSourceSelectorResultsKt.findExecPsi(project, vf) }.getOrNull(),
+            runCatching { findExecPsi(project, vf) }.getOrNull(),
         )
 
-        val healed = DataSourceSelectorResultsKt.healExecPsi(project, vf, LOG)
+        val healed = DataSourceSelector.healExecPsi(project, vf, LOG)
         assertNotNull("清映射后必须能拿回 PSI（自愈失败等于用户仍然点不动执行）", healed)
         assertFalse(
             "自愈必须把坏映射清掉（否则下次 findFile 又是 null）",
@@ -289,12 +297,12 @@ class ExecPsiGateTest : BasePlatformTestCase() {
         val deadline = System.currentTimeMillis() + 1200L
         try {
             while (System.currentTimeMillis() < deadline) {
-                val attempt = runCatching { DataSourceSelectorResultsKt.findExecPsi(project, vf) }
+                val attempt = runCatching { findExecPsi(project, vf) }
                 if (attempt.isFailure) {
                     exceptions++
                 } else if (attempt.getOrNull() == null) {
                     nulls++
-                    val diag = DataSourceSelectorResultsKt.execPsiDiagnostics(project, vf)
+                    val diag = execPsiDiagnostics(project, vf)
                     if (!diag.contains("vfValid=false")) {
                         nullWithValidVf++
                         println("[RACE] null 但 vf 仍有效（第三条来源？）: $diag")
@@ -339,7 +347,7 @@ class ExecPsiGateTest : BasePlatformTestCase() {
             DialectPreMapping.setLanguageOnEdt(project, vf, NoParserForTest),
         )
         val seq = (1..5).map { i ->
-            val r = runCatching { DataSourceSelectorResultsKt.findExecPsi(project, vf) }
+            val r = runCatching { findExecPsi(project, vf) }
             val desc = when {
                 r.isFailure -> "THROW:${r.exceptionOrNull()!!.javaClass.simpleName}"
                 r.getOrNull() == null -> "NULL"
@@ -380,10 +388,10 @@ class ExecPsiGateTest : BasePlatformTestCase() {
             )
             assertNull(
                 "前置：继承坏方言下 PSI 必须拿不到（这正是用户五元组的形态）",
-                runCatching { DataSourceSelectorResultsKt.findExecPsi(project, vf) }.getOrNull(),
+                runCatching { findExecPsi(project, vf) }.getOrNull(),
             )
 
-            val healed = DataSourceSelectorResultsKt.healExecPsi(project, vf, LOG, ioFile)
+            val healed = DataSourceSelector.healExecPsi(project, vf, LOG, ioFile)
             assertNotNull("继承方言是毒源时必须靠「钉住可用方言」救回来（清映射救不了）", healed)
             val pinned = DialectPreMapping.configuredLanguageId(project, vf)
             println("[ExecPsiGate] pinned dialect after inherited-poison heal = $pinned")
@@ -415,8 +423,8 @@ class ExecPsiGateTest : BasePlatformTestCase() {
         repeat(3) { i ->
             val dialect = if (i % 2 == 0) "MySQL" else "PostgreSQL"
             val pair = com.intellij.openapi.application.ApplicationManager.getApplication()
-                .executeOnPooledThread<DataSourceSelector.TempPsiFile?> {
-                    DataSourceSelectorResultsKt.createTempPsiFile(project, "select $i", dialect)
+                .executeOnPooledThread<Pair<VirtualFile, PsiFile>?> {
+                    DataSourceSelector.createTempPsiFile(project, "select $i", dialect)
                 }.get(30, java.util.concurrent.TimeUnit.SECONDS)
             if (pair == null) {
                 failures += "#$i($dialect): ${DataSourceSelector.lastTempFileFailure}"
@@ -438,7 +446,7 @@ class ExecPsiGateTest : BasePlatformTestCase() {
      * 本用例钉三件事：①落点不在 `.idea` 下；②目录自带 `.gitignore`（不污染用户工作树）；③该落点能建 PSI。
      */
     fun testProjectRootFallbackBuildsPsi() {
-        val f = DataSourceSelectorResultsKt.projectRootExecFile(project, "select fallback")
+        val f = projectRootExecFile(project, "select fallback")
         assertNotNull("项目根备用文件应可创建", f)
         val normalized = f!!.absolutePath.replace('\\', '/')
         assertFalse("备用落点不得在 .idea 下（那正是用户报错的位置）: $normalized", normalized.contains("/.idea/"))
@@ -450,7 +458,7 @@ class ExecPsiGateTest : BasePlatformTestCase() {
             LocalFileSystem.getInstance().refreshAndFindFileByIoFile(f)
         }
         assertNotNull("备用文件应 VFS 可见", vf)
-        assertNotNull("项目根落点必须能建 PSI（用户实测项目外/桌面可用）", DataSourceSelectorResultsKt.findExecPsi(project, vf!!))
+        assertNotNull("项目根落点必须能建 PSI（用户实测项目外/桌面可用）", findExecPsi(project, vf!!))
         // 清理：把备用目录整个删掉，别在测试项目里留垃圾
         runCatching {
             File(f.parentFile!!.parentFile, ".gitignore").delete()
@@ -475,7 +483,7 @@ class ExecPsiGateTest : BasePlatformTestCase() {
      */
     fun testHealRefindsVfWhenInvalid() {
         val (ioFile, vf) = writeExecFileWithIo("select 5")
-        assertNotNull("前置：正常状态 PSI 应可建", DataSourceSelectorResultsKt.findExecPsi(project, vf))
+        assertNotNull("前置：正常状态 PSI 应可建", findExecPsi(project, vf))
 
         com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
             vf.delete(this)
@@ -486,16 +494,16 @@ class ExecPsiGateTest : BasePlatformTestCase() {
         // 后返回 null；单测模式下 LOG.error 可能抛断言，故「null 或抛」都算拿不到 PSI。
         assertNull(
             "vf 失效时必须拿不到 PSI（null 或平台断言均算）",
-            runCatching { DataSourceSelectorResultsKt.findExecPsi(project, vf) }.getOrNull(),
+            runCatching { findExecPsi(project, vf) }.getOrNull(),
         )
-        val diag = DataSourceSelectorResultsKt.execPsiDiagnostics(project, vf)
+        val diag = execPsiDiagnostics(project, vf)
         println("[ExecPsiGate] invalid-vf diagnostics=$diag")
         assertTrue("诊断必须报出 vfValid=false（区分两条 null 分支的唯一判据）: $diag", diag.contains("vfValid=false"))
 
         // 生产里文件一直在（写盘成功），只是 vf 条目失效——把内容写回盘上，vf 对象仍然失效
         ioFile.writeText("select 5")
 
-        val healed = DataSourceSelectorResultsKt.healExecPsi(project, vf, LOG, ioFile)
+        val healed = DataSourceSelector.healExecPsi(project, vf, LOG, ioFile)
         assertNotNull("文件在盘上、vf 失效时必须靠重定位拿回 PSI（这正是用户那一形态的自愈面）", healed)
         val healedVf = healed!!.virtualFile
         assertNotNull("重定位后的 PSI 必须挂在具体 vf 上", healedVf)
@@ -506,7 +514,7 @@ class ExecPsiGateTest : BasePlatformTestCase() {
     /** 失败文案的五元组：三项静态事实 + 映射语言 + 该语言能否建 PSI。 */
     fun testDiagnosticsCarryFiveFields() {
         val vf = writeExecFile("select 4")
-        val diag = DataSourceSelectorResultsKt.execPsiDiagnostics(project, vf)
+        val diag = execPsiDiagnostics(project, vf)
         println("[ExecPsiGate] diagnostics=$diag")
         for (field in listOf(
             "name=mpsql-exec", "vfValid=true", "dir=false", "fileType=", "mappedLang=", "canPsi=", "path=",
@@ -527,16 +535,16 @@ class ExecPsiGateTest : BasePlatformTestCase() {
     fun testDirProbePassesOnHealthyExecDir() {
         val (ioFile, vf) = writeExecFileWithIo("select 6")
         val dir = ioFile.parentFile!!
-        assertNotNull("前置：正常状态文件 PSI 应可建", DataSourceSelectorResultsKt.findExecPsi(project, vf))
+        assertNotNull("前置：正常状态文件 PSI 应可建", findExecPsi(project, vf))
         assertTrue(
             "文件能建 PSI ⇒ 目录探针必须也判「能」（误判成不能会把正常机器全降级）",
-            DataSourceSelectorResultsKt.execDirCanHostPsi(project, dir),
+            execDirCanHostPsi(project, dir),
         )
         assertNull(
             "正常目录不得被判出成因（否则每次执行都劝换落点、每次预览都挂横幅）",
-            DataSourceSelectorResultsKt.execDirFailureCause(project, dir),
+            execDirFailureCause(project, dir),
         )
-        val diag = DataSourceSelectorResultsKt.execDirDiagnostics(project, dir)
+        val diag = execDirDiagnostics(project, dir)
         println("[ExecPsiGate] dir diagnostics=$diag")
         assertTrue("目录诊断必须带探针结论: $diag", diag.contains("dirPsi=true"))
         assertTrue("目录诊断必须带 inContent（区分「不在内容模型」与「在但被忽略」）: $diag", diag.contains("inContent="))

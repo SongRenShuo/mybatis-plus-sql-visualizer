@@ -14,6 +14,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import java.io.File
 
 /**
  * T-Ibatis2Support 券 F-1（车道 L8）：`<sqlMap>` 文件内 id 引用用例。
@@ -30,12 +31,12 @@ class IbatisXmlIdReferenceContributorTest : BasePlatformTestCase() {
 
     override fun setUp() {
         super.setUp()
-        IbatisXmlStatementTargets.clearCachesForTest()
+        IbatisXmlStatementTargets.resetPerfLogForTest()
     }
 
     override fun tearDown() {
         try {
-            IbatisXmlStatementTargets.clearCachesForTest()
+            IbatisXmlStatementTargets.resetPerfLogForTest()
         } finally {
             super.tearDown()
         }
@@ -48,7 +49,7 @@ class IbatisXmlIdReferenceContributorTest : BasePlatformTestCase() {
     private fun refsOf(attrName: String): List<PsiReference> {
         val file = myFixture.file as XmlFile
         val value = attributeValue(file, attrName)
-        return IbatisXmlAttributeReferenceProvider.INSTANCE.getReferencesByElement(value, ProcessingContext()).toList()
+        return IbatisXmlAttributeReferenceProvider.getReferencesByElement(value, ProcessingContext()).toList()
     }
 
     private fun attributeValue(file: XmlFile, attrName: String, attrValue: String? = null): XmlAttributeValue =
@@ -174,7 +175,7 @@ class IbatisXmlIdReferenceContributorTest : BasePlatformTestCase() {
         val value = attributeValue(myFixture.file as XmlFile, "refid")
         assertTrue(
             "「根标签名 != sqlMap」须零引用（MyBatis 文件行为逐字节不变）",
-            IbatisXmlAttributeReferenceProvider.INSTANCE.getReferencesByElement(value, ProcessingContext()).isEmpty(),
+            IbatisXmlAttributeReferenceProvider.getReferencesByElement(value, ProcessingContext()).isEmpty(),
         )
     }
 
@@ -187,7 +188,7 @@ class IbatisXmlIdReferenceContributorTest : BasePlatformTestCase() {
         val value = attributeValue(myFixture.file as XmlFile, "resultMap")
         assertTrue(
             "非 sqlMap 文件不产引用（根守卫）",
-            IbatisXmlAttributeReferenceProvider.INSTANCE.getReferencesByElement(value, ProcessingContext()).isEmpty(),
+            IbatisXmlAttributeReferenceProvider.getReferencesByElement(value, ProcessingContext()).isEmpty(),
         )
     }
 
@@ -200,7 +201,7 @@ class IbatisXmlIdReferenceContributorTest : BasePlatformTestCase() {
         val value = attributeValue(myFixture.file as XmlFile, "resultClass")
         assertTrue(
             "未覆盖属性不产引用",
-            IbatisXmlAttributeReferenceProvider.INSTANCE.getReferencesByElement(value, ProcessingContext()).isEmpty(),
+            IbatisXmlAttributeReferenceProvider.getReferencesByElement(value, ProcessingContext()).isEmpty(),
         )
     }
 
@@ -213,7 +214,7 @@ class IbatisXmlIdReferenceContributorTest : BasePlatformTestCase() {
         val value = attributeValue(myFixture.file as XmlFile, "extends")
         assertTrue(
             "extends 只在 <resultMap> 上产引用",
-            IbatisXmlAttributeReferenceProvider.INSTANCE.getReferencesByElement(value, ProcessingContext()).isEmpty(),
+            IbatisXmlAttributeReferenceProvider.getReferencesByElement(value, ProcessingContext()).isEmpty(),
         )
     }
 
@@ -221,8 +222,22 @@ class IbatisXmlIdReferenceContributorTest : BasePlatformTestCase() {
     // 同文件查找的两条廉价性/正确性钉（无索引访问）
     // ------------------------------------------------------------------
 
-    /** 同文件解析不触碰文件清单缓存（零索引扫描）——热路径零索引查询的代码级证据（测试侧读数）。 */
-    fun testF1_同文件解析_零索引扫描() {
+    /**
+     * 同文件解析不触碰项目级索引/文件清单——T-IbatisGutterPerf P1 后由**源码扫描**钉住：
+     * 旧的 `indexScanCount` 计数缝已随清单状态机（TTL/换代/单槽 memo）整体退役，唯一还有意义的
+     * 判据是「这个函数体里没有索引/文件清单调用」。
+     */
+    fun testF1_同文件解析_函数体零索引查询() {
+        val body = functionBody("fun resolveSameFileIdReference(")
+            ?: error("无法提取 IbatisXmlStatementTargets.resolveSameFileIdReference 方法体——守卫扫描面失效按红处理")
+        assertFalse("同文件 id 解析不得触发项目级索引/文件清单（热路径）", touchesProjectIndex(body))
+        // 自证（防空绿）：合成样本必须被抓出——判定器退化成恒 false 即为空绿
+        assertTrue(
+            "自证：含索引调用的样本必须报红",
+            touchesProjectIndex("fun x() { SqlMapNamespaceIndex.getSqlMapFilesByNamespace(p, ns) }"),
+        )
+        assertFalse("自证：纯 PSI 样本必须放行", touchesProjectIndex("fun x() { findIdAttributeInFile(f, t, id) }"))
+        // 行为侧：同文件引用仍然解析得到（不因索引化丢功能）
         myFixture.configureByText(
             "sqlMap.xml",
             """<sqlMap namespace="m.user">
@@ -230,13 +245,42 @@ class IbatisXmlIdReferenceContributorTest : BasePlatformTestCase() {
   <select id="s">SELECT * FROM t <include refid="frag"/></select>
 </sqlMap>""",
         )
-        IbatisXmlStatementTargets.INDEX_SCAN_COUNT.set(0)
         assertResolvesTo("refid", "sql", "frag")
-        assertEquals(
-            "同文件 id 解析不得触发文件清单扫描（热路径零索引查询）",
-            0,
-            IbatisXmlStatementTargets.INDEX_SCAN_COUNT.get(),
-        )
+    }
+
+    private fun touchesProjectIndex(body: String): Boolean =
+        body.contains("SqlMapNamespaceIndex") || body.contains("FileTypeIndex")
+
+    /** 取 [IbatisXmlStatementTargets] 源码里指定函数签名的配平方法体（剥注释不做，方法体内无 `//` 陷阱）。 */
+    private fun functionBody(signature: String): String? {
+        val source = repoFile("src/main/kotlin/cn/song/mybatisplus/visualizer/ui/nav/IbatisXmlStatementTargets.kt")
+            ?: return null
+        val text = source.readText()
+        val start = text.indexOf(signature)
+        if (start < 0) return null
+        val open = text.indexOf('{', start)
+        if (open < 0) return null
+        var depth = 0
+        for (i in open until text.length) {
+            when (text[i]) {
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) return text.substring(open, i + 1)
+                }
+            }
+        }
+        return null
+    }
+
+    private fun repoFile(relative: String): File? {
+        var root = File(System.getProperty("user.dir")).absoluteFile
+        repeat(6) {
+            val candidate = File(root, relative)
+            if (candidate.isFile) return candidate
+            root = root.parentFile ?: return@repeat
+        }
+        return null
     }
 
     // ------------------------------------------------------------------
@@ -260,10 +304,10 @@ class IbatisXmlIdReferenceContributorTest : BasePlatformTestCase() {
 
     /** 红线守卫：本包源码不得出现校验器形态类注册面（既有 `MybatisXmlReferenceTest` 同款口径）。 */
     fun testF1_红线_本包无校验器形态() {
-        val dir = java.io.File("src/main/java/cn/song/mybatisplus/visualizer/ui/ref")
+        val dir = java.io.File("src/main/kotlin/cn/song/mybatisplus/visualizer/ui/ref")
         assertTrue("ui/ref 源码目录存在", dir.isDirectory)
         val banned = listOf("LocalInspectionTool", "Annotator", "ProblemHighlightType", "HighlightInfo", "InspectionManager")
-        val offenders = dir.listFiles { f -> f.name.endsWith(".java") }.orEmpty()
+        val offenders = dir.listFiles { f -> f.name.endsWith(".kt") }.orEmpty()
             .filter { f -> banned.any { f.readText().contains(it) } }
             .map { f -> f.name }
         assertFalse("ui/ref 不得引入校验器形态（红线）：$offenders", offenders.isNotEmpty())

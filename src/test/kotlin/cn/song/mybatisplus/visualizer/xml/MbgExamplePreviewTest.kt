@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelSqlViewKt.renderSql
 
 /**
  * T-MbgExamplePreview：MBG 生成器 Example 三件套（selectByExample + Example_Where_Clause + trim）
@@ -16,13 +17,6 @@ import org.junit.Test
  *  - R4 choose 互斥组默认只开含参数分支；
  *  - R5 MBG Example profile（distinct / orderByClause 不展开、集合按 1 项）；
  *  - R6 告警分帧（基线渲染错误不进 result.warning）。
- *
- * K2J 适配：{@code XmlPreviewProfile}/{@code MbgCriterionKind} 落嵌套类型；
- * {@code XmlPreviewModel.from} 具名实参 → 全参位置实参（9 参规范形态）；{@code XmlPreviewState}
- * 落 4 参 record（nulls/bindOverrides 传空）；{@code XmlPreviewService} 落类 +
- * INSTANCE 静态实例（toResult 为实例方法；includeRenderErrors=false 走 4 参全参形态）；
- * {@code resolveExampleProfile} 在生产侧为 package-private 测试缝（master internal→包私有），
- * 本用例走反射缝直呼（跨包不可见，勿改生产可见性）。
  */
 class MbgExamplePreviewTest {
 
@@ -81,30 +75,12 @@ class MbgExamplePreviewTest {
         </mapper>
     """.trimIndent()
 
-    private fun statementOf(parsed: cn.song.mybatisplus.visualizer.xml.XmlMapperModel) =
-        parsed.statements.first { it.id == "selectByExample" }
-
-    private fun model(profile: XmlPreviewModel.XmlPreviewProfile? = null): XmlPreviewModel {
-        val parsed = XmlMapperParser().parse(mapper)
-        val st = statementOf(parsed)
-        if (profile == null) {
-            return XmlPreviewModel.from(st, parsed.errors)
-        }
-        return XmlPreviewModel.from(
-            st, parsed.errors,
-            setOf<String>(), mapOf<String, Any>(), mapOf<String, Any>(), mapOf<String, Boolean>(),
-            mapOf<String, cn.song.mybatisplus.visualizer.xml.ParamTypeInfo>(),
-            profile, mapOf(),
-        )
-    }
-
-    private fun modelWithElements(elements: Map<String, List<MockObject>>): XmlPreviewModel {
+    private fun model(profile: XmlPreviewProfile? = null): XmlPreviewModel {
         val parsed = XmlMapperParser().parse(mapper)
         return XmlPreviewModel.from(
-            statementOf(parsed), parsed.errors,
-            setOf<String>(), mapOf<String, Any>(), mapOf<String, Any>(), mapOf<String, Boolean>(),
-            mapOf<String, cn.song.mybatisplus.visualizer.xml.ParamTypeInfo>(),
-            XmlPreviewModel.XmlPreviewProfile.MBG_EXAMPLE, elements,
+            parsed.statements.first { it.id == "selectByExample" },
+            parsed.errors,
+            profile = profile,
         )
     }
 
@@ -118,7 +94,13 @@ class MbgExamplePreviewTest {
             ),
             "criteria.criteria" to listOf(MbgCriterionMock("cust_id =", listOf("42")).toMockObject()),
         )
-        val m = modelWithElements(elements)
+        val parsed = XmlMapperParser().parse(mapper)
+        val m = XmlPreviewModel.from(
+            parsed.statements.first { it.id == "selectByExample" },
+            parsed.errors,
+            profile = XmlPreviewProfile.MBG_EXAMPLE,
+            collectionElements = elements,
+        )
         val sql = compact(m.renderSql().sql)
         assertEquals(
             "select 'false' as QUERYID, CUST_ID, STAFF_LOGIN from CT_CUSTMANAGER_REL WHERE ( cust_id = ? )",
@@ -129,19 +111,19 @@ class MbgExamplePreviewTest {
 
     @Test
     fun `M2方法名后缀到分支类别`() {
-        assertEquals(MbgCriterionMock.MbgCriterionKind.NO_VALUE, MbgCriterionMock.kindOf("andCustIdIsNull"))
-        assertEquals(MbgCriterionMock.MbgCriterionKind.NO_VALUE, MbgCriterionMock.kindOf("andCustIdIsNotNull"))
-        assertEquals(MbgCriterionMock.MbgCriterionKind.LIST_VALUE, MbgCriterionMock.kindOf("andCustIdIn"))
-        assertEquals(MbgCriterionMock.MbgCriterionKind.LIST_VALUE, MbgCriterionMock.kindOf("andCustIdNotIn"))
-        assertEquals(MbgCriterionMock.MbgCriterionKind.BETWEEN_VALUE, MbgCriterionMock.kindOf("andCustIdBetween"))
-        assertEquals(MbgCriterionMock.MbgCriterionKind.BETWEEN_VALUE, MbgCriterionMock.kindOf("andCustIdNotBetween"))
-        assertEquals(MbgCriterionMock.MbgCriterionKind.SINGLE_VALUE, MbgCriterionMock.kindOf("andCustIdEqualTo"))
-        assertEquals(MbgCriterionMock.MbgCriterionKind.SINGLE_VALUE, MbgCriterionMock.kindOf("andCustIdLike"))
+        assertEquals(MbgCriterionKind.NO_VALUE, MbgCriterionMock.kindOf("andCustIdIsNull"))
+        assertEquals(MbgCriterionKind.NO_VALUE, MbgCriterionMock.kindOf("andCustIdIsNotNull"))
+        assertEquals(MbgCriterionKind.LIST_VALUE, MbgCriterionMock.kindOf("andCustIdIn"))
+        assertEquals(MbgCriterionKind.LIST_VALUE, MbgCriterionMock.kindOf("andCustIdNotIn"))
+        assertEquals(MbgCriterionKind.BETWEEN_VALUE, MbgCriterionMock.kindOf("andCustIdBetween"))
+        assertEquals(MbgCriterionKind.BETWEEN_VALUE, MbgCriterionMock.kindOf("andCustIdNotBetween"))
+        assertEquals(MbgCriterionKind.SINGLE_VALUE, MbgCriterionMock.kindOf("andCustIdEqualTo"))
+        assertEquals(MbgCriterionKind.SINGLE_VALUE, MbgCriterionMock.kindOf("andCustIdLike"))
     }
 
     @Test
     fun `M2分支布尔值与参数个数一致`() {
-        val noValue = MbgCriterionMock("cust_id is null", emptyList(), MbgCriterionMock.MbgCriterionKind.NO_VALUE).toMockObject()
+        val noValue = MbgCriterionMock("cust_id is null", emptyList(), MbgCriterionKind.NO_VALUE).toMockObject()
         assertEquals(true, noValue["noValue"])
         assertEquals(null, noValue["value"])
 
@@ -150,14 +132,14 @@ class MbgExamplePreviewTest {
         assertEquals("42", single["value"])
 
         val between = MbgCriterionMock(
-            "cust_id between", listOf("1", "9"), MbgCriterionMock.MbgCriterionKind.BETWEEN_VALUE,
+            "cust_id between", listOf("1", "9"), MbgCriterionKind.BETWEEN_VALUE,
         ).toMockObject()
         assertEquals(true, between["betweenValue"])
         assertEquals("1", between["value"])
         assertEquals("9", between["secondValue"])
 
         val list = MbgCriterionMock(
-            "cust_id in", listOf("1", "2"), MbgCriterionMock.MbgCriterionKind.LIST_VALUE,
+            "cust_id in", listOf("1", "2"), MbgCriterionKind.LIST_VALUE,
         ).toMockObject()
         assertEquals(true, list["listValue"])
         assertEquals(listOf("1", "2"), list["value"])
@@ -181,10 +163,16 @@ class MbgExamplePreviewTest {
             MbgCriterionMock("CUST_ROLE_CODE =", listOf("2")),
             MbgCriterionMock("CUST_ID =", listOf("4")),
         )
-        val m = modelWithElements(mapOf(
-            "oredCriteria" to listOf(MbgCriterionMock.criteriaOf(criteria)),
-            "criteria.criteria" to criteria.map { it.toMockObject() },
-        ))
+        val parsed = XmlMapperParser().parse(mapper)
+        val m = XmlPreviewModel.from(
+            parsed.statements.first { it.id == "selectByExample" },
+            parsed.errors,
+            profile = XmlPreviewProfile.MBG_EXAMPLE,
+            collectionElements = mapOf(
+                "oredCriteria" to listOf(MbgCriterionMock.criteriaOf(criteria)),
+                "criteria.criteria" to criteria.map { it.toMockObject() },
+            ),
+        )
         val sql = compact(m.renderSql().sql)
         assertFalse("不得粘成 ?and（语法错 SQL）：$sql", sql.contains("?and"))
         assertTrue(
@@ -197,17 +185,21 @@ class MbgExamplePreviewTest {
     @Test
     fun `用户态_listValue分支_操作符与左括号不粘连`() {
         val criteria = listOf(
-            MbgCriterionMock("CUSTOMERNUMBER =", listOf("3"), MbgCriterionMock.MbgCriterionKind.LIST_VALUE),
+            MbgCriterionMock("CUSTOMERNUMBER =", listOf("3"), MbgCriterionKind.LIST_VALUE),
         )
-        val m = modelWithElements(mapOf(
-            "oredCriteria" to listOf(MbgCriterionMock.criteriaOf(criteria)),
-            "criteria.criteria" to criteria.map { it.toMockObject() },
-        ))
+        val parsed = XmlMapperParser().parse(mapper)
+        val m = XmlPreviewModel.from(
+            parsed.statements.first { it.id == "selectByExample" },
+            parsed.errors,
+            profile = XmlPreviewProfile.MBG_EXAMPLE,
+            collectionElements = mapOf(
+                "oredCriteria" to listOf(MbgCriterionMock.criteriaOf(criteria)),
+                "criteria.criteria" to criteria.map { it.toMockObject() },
+            ),
+        )
         val state = XmlPreviewState(
-            setOf("_parameter != null", "criteria.valid", "criterion.listValue"),
-            mapOf("oredCriteria" to 1, "criteria.criteria" to 1, "criterion.value" to 1),
-            emptySet(),
-            emptyMap(),
+            enabledIds = setOf("_parameter != null", "criteria.valid", "criterion.listValue"),
+            forEachCounts = mapOf("oredCriteria" to 1, "criteria.criteria" to 1, "criterion.value" to 1),
         )
         val sql = compact(m.renderSql(state).sql)
         assertFalse("操作符与左括号不得粘成 `=(`：$sql", sql.contains("=("))
@@ -247,7 +239,7 @@ class MbgExamplePreviewTest {
 
     @Test
     fun `MBG形态_默认产物_结构正确且缺段可见`() {
-        val rendered = model(XmlPreviewModel.XmlPreviewProfile.MBG_EXAMPLE).renderSql()
+        val rendered = model(XmlPreviewProfile.MBG_EXAMPLE).renderSql()
         assertEquals(
             "select 'false' as QUERYID, CUST_ID, STAFF_LOGIN from CT_CUSTMANAGER_REL " +
                 "WHERE ( {{criterion.condition}} ? )",
@@ -272,7 +264,7 @@ class MbgExamplePreviewTest {
 
     @Test
     fun `choose互斥组_默认只启用含参数的分支`() {
-        val m = model(XmlPreviewModel.XmlPreviewProfile.MBG_EXAMPLE)
+        val m = model(XmlPreviewProfile.MBG_EXAMPLE)
         assertEquals(1, m.chooseGroups.size)
         assertEquals(
             listOf("criterion.noValue", "criterion.singleValue", "criterion.betweenValue", "criterion.listValue"),
@@ -295,12 +287,18 @@ class MbgExamplePreviewTest {
     @Test
     fun `M2命中_choose组默认分支按真实kind取`() {
         val criteria = listOf(
-            MbgCriterionMock("CUSTOMERNUMBER in", listOf("1", "2"), MbgCriterionMock.MbgCriterionKind.LIST_VALUE),
+            MbgCriterionMock("CUSTOMERNUMBER in", listOf("1", "2"), MbgCriterionKind.LIST_VALUE),
         )
-        val m = modelWithElements(mapOf(
-            "oredCriteria" to listOf(MbgCriterionMock.criteriaOf(criteria)),
-            "criteria.criteria" to criteria.map { it.toMockObject() },
-        ))
+        val parsed = XmlMapperParser().parse(mapper)
+        val m = XmlPreviewModel.from(
+            parsed.statements.first { it.id == "selectByExample" },
+            parsed.errors,
+            profile = XmlPreviewProfile.MBG_EXAMPLE,
+            collectionElements = mapOf(
+                "oredCriteria" to listOf(MbgCriterionMock.criteriaOf(criteria)),
+                "criteria.criteria" to criteria.map { it.toMockObject() },
+            ),
+        )
         val enabled = m.defaultState().enabledIds
         assertTrue("M2 说是 listValue ⇒ 默认应选 listValue：$enabled", enabled.contains("criterion.listValue"))
         assertFalse("不应再落到启发式的 singleValue：$enabled", enabled.contains("criterion.singleValue"))
@@ -308,7 +306,7 @@ class MbgExamplePreviewTest {
 
     @Test
     fun `M2未命中_仍走启发式默认分支`() {
-        val enabled = model(XmlPreviewModel.XmlPreviewProfile.MBG_EXAMPLE).defaultState().enabledIds
+        val enabled = model(XmlPreviewProfile.MBG_EXAMPLE).defaultState().enabledIds
         assertTrue("无 M2 元素时应维持启发式 singleValue：$enabled", enabled.contains("criterion.singleValue"))
         assertFalse(enabled.contains("criterion.listValue"))
     }
@@ -357,10 +355,7 @@ class MbgExamplePreviewTest {
                 """.trimIndent(),
             ).statements.single(),
             emptyList(),
-            setOf<String>(), mapOf<String, Any>(), mapOf<String, Any>(), mapOf<String, Boolean>(),
-            mapOf<String, cn.song.mybatisplus.visualizer.xml.ParamTypeInfo>(),
-            XmlPreviewModel.XmlPreviewProfile(emptySet<String>(), 2),
-            mapOf(),
+            profile = XmlPreviewProfile(forEachCount = 2),
         )
         val sql = compact(m.renderSql().sql)
         assertFalse("trim 体内不得出现 1or 粘连：$sql", sql.contains("1or"))
@@ -372,7 +367,7 @@ class MbgExamplePreviewTest {
 
     @Test
     fun `示例默认档_抑制distinct与orderByClause并只展开一项`() {
-        val state = model(XmlPreviewModel.XmlPreviewProfile.MBG_EXAMPLE).defaultState()
+        val state = model(XmlPreviewProfile.MBG_EXAMPLE).defaultState()
         assertFalse(state.enabledIds.contains("distinct"))
         assertFalse(state.enabledIds.contains("orderByClause != null"))
         assertTrue(state.forEachCounts.values.all { it == 1 })
@@ -382,38 +377,21 @@ class MbgExamplePreviewTest {
 
     @Test
     fun `告警分帧_基线渲染错误不进入result_warning`() {
-        val m = model(XmlPreviewModel.XmlPreviewProfile.MBG_EXAMPLE)
+        val m = model(XmlPreviewProfile.MBG_EXAMPLE)
         // 默认（注解链口径）：基线渲染错误并入 warning
-        val withBaseline = XmlPreviewService.INSTANCE.toResult(m)
+        val withBaseline = XmlPreviewService.toResult(m)
         assertTrue(withBaseline.warning.orEmpty().contains("求值为空"))
         // 面板口径：只保留解析期/静态告警，本轮错误由 xmlErrors 单独显示
-        val panel = XmlPreviewService.INSTANCE.toResult(m, emptyList<String>(), null, false)
+        val panel = XmlPreviewService.toResult(m, includeRenderErrors = false)
         assertFalse(panel.warning.orEmpty().contains("求值为空"))
     }
 
     // ---------------- 识别入口的 null 分支 ----------------
 
-    /**
-     * K2J 适配：生产 {@code resolveExampleProfile} 为 package-private 测试缝（master internal→
-     * 包私有），测试在 xml 包跨包不可见——走反射缝（勿改生产可见性）。
-     */
-    private fun resolveExampleProfile(project: com.intellij.openapi.project.Project?,
-                                      parameterType: String?,
-                                      namespace: String?): XmlPreviewModel.XmlPreviewProfile? {
-        val m = XmlPreviewService::class.java.getDeclaredMethod(
-            "resolveExampleProfile",
-            com.intellij.openapi.project.Project::class.java, String::class.java, String::class.java,
-        )
-        m.isAccessible = true
-        @Suppress("UNCHECKED_CAST")
-        return m.invoke(XmlPreviewService.INSTANCE, project, parameterType, namespace)
-            as XmlPreviewModel.XmlPreviewProfile?
-    }
-
     @Test
     fun `Example识别_无project时返回null不改变默认`() {
-        assertEquals(null, resolveExampleProfile(null, "x.CtCustmanagerRelExample", "n"))
-        assertEquals(null, resolveExampleProfile(null, null, "n"))
+        assertEquals(null, XmlPreviewService.resolveExampleProfile(null, "x.CtCustmanagerRelExample", "n"))
+        assertEquals(null, XmlPreviewService.resolveExampleProfile(null, null, "n"))
     }
 
     /**
@@ -425,13 +403,19 @@ class MbgExamplePreviewTest {
     fun `M2两条Criteria_按or连接而不是and`() {
         val criteriaA = listOf(MbgCriterionMock("cust_id =", listOf("42")))
         val criteriaB = listOf(MbgCriterionMock("staff_login like", listOf("song%")))
-        val m = modelWithElements(mapOf(
-            "oredCriteria" to listOf(
-                MbgCriterionMock.criteriaOf(criteriaA),
-                MbgCriterionMock.criteriaOf(criteriaB),
+        val parsed = XmlMapperParser().parse(mapper)
+        val m = XmlPreviewModel.from(
+            parsed.statements.first { it.id == "selectByExample" },
+            parsed.errors,
+            profile = XmlPreviewProfile.MBG_EXAMPLE,
+            collectionElements = mapOf(
+                "oredCriteria" to listOf(
+                    MbgCriterionMock.criteriaOf(criteriaA),
+                    MbgCriterionMock.criteriaOf(criteriaB),
+                ),
+                "criteria.criteria" to (criteriaA + criteriaB).map { it.toMockObject() },
             ),
-            "criteria.criteria" to (criteriaA + criteriaB).map { it.toMockObject() },
-        ))
+        )
         val sql = compact(m.renderSql().sql)
         assertTrue("两条 Criteria 必须各自成组并用 or 连接：$sql", sql.contains("( cust_id = ? ) or ( staff_login like ? )"))
         assertFalse("不得拍平成 and：$sql", sql.contains("cust_id = ? and staff_login like"))
@@ -444,7 +428,7 @@ class MbgExamplePreviewTest {
      */
     @Test
     fun `M2未命中_MBG默认收敛到singleValue`() {
-        val m = model(XmlPreviewModel.XmlPreviewProfile.MBG_EXAMPLE)
+        val m = model(XmlPreviewProfile.MBG_EXAMPLE)
         val enabled = m.defaultState().enabledIds
         assertTrue("默认应勾 singleValue：$enabled", enabled.any { it.endsWith("singleValue") })
         assertFalse("不得停在 noValue：$enabled", enabled.any { it.endsWith("noValue") })
@@ -470,15 +454,21 @@ class MbgExamplePreviewTest {
     fun `M2混kind_每条criterion按自身分支渲染`() {
         fun render(vararg criteria: MbgCriterionMock): String {
             val list = criteria.toList()
-            val m = modelWithElements(mapOf(
-                "oredCriteria" to listOf(MbgCriterionMock.criteriaOf(list)),
-                "criteria.criteria" to list.map { it.toMockObject() },
-            ))
+            val parsed = XmlMapperParser().parse(mapper)
+            val m = XmlPreviewModel.from(
+                parsed.statements.first { it.id == "selectByExample" },
+                parsed.errors,
+                profile = XmlPreviewProfile.MBG_EXAMPLE,
+                collectionElements = mapOf(
+                    "oredCriteria" to listOf(MbgCriterionMock.criteriaOf(list)),
+                    "criteria.criteria" to list.map { it.toMockObject() },
+                ),
+            )
             return compact(m.renderSql().sql)
         }
 
         val single = MbgCriterionMock("tenant_id =", listOf("tenantId"))
-        val between = MbgCriterionMock("create_time between", listOf("startTime", "endTime"), MbgCriterionMock.MbgCriterionKind.BETWEEN_VALUE)
+        val between = MbgCriterionMock("create_time between", listOf("startTime", "endTime"), MbgCriterionKind.BETWEEN_VALUE)
 
         val betweenFirst = render(between, single)
         assertTrue("between 必须保留两个占位：$betweenFirst", betweenFirst.contains("create_time between ? and ?"))

@@ -1,14 +1,14 @@
 package cn.song.mybatisplus.visualizer.execute
 
-import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.actionSystem.DataContext
-import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.actionSystem.Presentation
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import javax.swing.Icon
+import cn.song.mybatisplus.visualizer.execute.ChooseDataSourceTakeover.ChooseDataSourceTakeoverGroup
 
 /**
  * T-DsListAddSource（20261111）：数据源列表条目口径收口与末尾「添加数据源…」。
@@ -54,12 +54,12 @@ class DsListAddSourceTest : BasePlatformTestCase() {
 
     fun test投影成功路_delegate被解成Local() {
         val dbDs = DelegateStub(delegateTarget)
-        val merged = ChooseDataSourceTakeover.mergeLocalDataSources(
-            emptyList(),
-            listOf(dbDs),
-            resolveStub,
-            idOf,
-            nameOf,
+        val merged = mergeLocalDataSources(
+            registered = emptyList(),
+            native = listOf(dbDs),
+            resolve = resolveStub,
+            uniqueIdOf = idOf,
+            nameOf = nameOf,
         )
         assertEquals("投影失败：应解出内层 LocalDataSource", listOf(delegateTarget), merged)
     }
@@ -84,12 +84,12 @@ class DsListAddSourceTest : BasePlatformTestCase() {
         val c = LocalStub("c", "dsC")
         val bTwin = LocalStub("b", "dsB") // native 集合里的重复源（同 id）
         val d = LocalStub("d", "dsD")
-        val merged = ChooseDataSourceTakeover.mergeLocalDataSources(
-            listOf(a, b, c),
-            listOf(bTwin, d),
-            resolveStub,
-            idOf,
-            nameOf,
+        val merged = mergeLocalDataSources(
+            registered = listOf(a, b, c),
+            native = listOf(bTwin, d),
+            resolve = resolveStub,
+            uniqueIdOf = idOf,
+            nameOf = nameOf,
         )
         assertEquals(listOf(a, b, c, d), merged)
     }
@@ -97,12 +97,12 @@ class DsListAddSourceTest : BasePlatformTestCase() {
     fun test合并_无名条目一律丢弃_不再渲染Unknown() {
         val named = LocalStub("a", "dsA")
         val nameless = LocalStub("x", "") // 名字解析失败（空名）
-        val merged = ChooseDataSourceTakeover.mergeLocalDataSources(
-            listOf(named, nameless),
-            listOf(Bogus),
-            resolveStub,
-            idOf,
-            nameOf,
+        val merged = mergeLocalDataSources(
+            registered = listOf(named, nameless),
+            native = listOf(Bogus),
+            resolve = resolveStub,
+            uniqueIdOf = idOf,
+            nameOf = nameOf,
         )
         assertEquals("名字取不出的条目必须丢弃（这是 unknown 死项的根因）", listOf(named), merged)
     }
@@ -110,12 +110,12 @@ class DsListAddSourceTest : BasePlatformTestCase() {
     fun test合并_同名不同id保留两条_不再按显示名误合并() {
         val prod = LocalStub("id-1", "mpj_demo@localhost")
         val replica = LocalStub("id-2", "mpj_demo@localhost")
-        val merged = ChooseDataSourceTakeover.mergeLocalDataSources(
-            listOf(prod),
-            listOf(replica),
-            resolveStub,
-            idOf,
-            nameOf,
+        val merged = mergeLocalDataSources(
+            registered = listOf(prod),
+            native = listOf(replica),
+            resolve = resolveStub,
+            uniqueIdOf = idOf,
+            nameOf = nameOf,
         )
         assertEquals("同名不同 id 是两个源，uniqueId 去重不得吞掉", listOf(prod, replica), merged)
     }
@@ -145,20 +145,14 @@ class DsListAddSourceTest : BasePlatformTestCase() {
     private val addText: String get() = MpSqlVisualizerBundle.message("execute.datasource.add")
 
     fun testB侧_无名runner不渲染() {
-        val items = DataSourceSelector.buildRunnerItems(
-            listOf<Any>(NamedRunner("mpj_demo@localhost"), NamelessRunner()),
-            false,
-        )
+        val items = DataSourceSelector.buildRunnerItems(listOf<Any>(NamedRunner("mpj_demo@localhost"), NamelessRunner()), false)
         assertEquals("只有取名成功的 runner 进列表", listOf("mpj_demo@localhost"), items.map { it.name })
     }
 
     fun testB侧_只暴露getName的runner必须保留_不得判无名丢弃() {
         // 回归（2026-11-12 CI 三轮红）：只认 getDisplayName 会把这类合法条目整条滤掉 →
         // 弹层空 → selectedIndex=0 落空 → 既不 onChosen 也不 canceled → 调用方永无回调。
-        val items = DataSourceSelector.buildRunnerItems(
-            listOf<Any>(NameOnlyRunner("mp_demo")),
-            false,
-        )
+        val items = DataSourceSelector.buildRunnerItems(listOf<Any>(NameOnlyRunner("mp_demo")), false)
         assertEquals("getName 形态必须保留并按该名字渲染", listOf("mp_demo"), items.map { it.name })
     }
 
@@ -175,10 +169,7 @@ class DsListAddSourceTest : BasePlatformTestCase() {
     }
 
     fun testB侧_末尾添加项在平台可用时追加且不携带runner() {
-        val items = DataSourceSelector.buildRunnerItems(
-            listOf<Any>(NamedRunner("dsA")),
-            true,
-        )
+        val items = DataSourceSelector.buildRunnerItems(listOf<Any>(NamedRunner("dsA")), true)
         assertEquals(2, items.size)
         val add = items.last()
         assertTrue("末尾必须是添加项", add.addNew)
@@ -188,10 +179,7 @@ class DsListAddSourceTest : BasePlatformTestCase() {
     }
 
     fun testB侧_平台不可用时不追加添加项() {
-        val items = DataSourceSelector.buildRunnerItems(
-            listOf<Any>(NamedRunner("dsA")),
-            false,
-        )
+        val items = DataSourceSelector.buildRunnerItems(listOf<Any>(NamedRunner("dsA")), false)
         assertEquals("只保留数据源条目", 1, items.size)
         assertFalse(items.single().addNew)
     }
@@ -208,7 +196,7 @@ class DsListAddSourceTest : BasePlatformTestCase() {
 
     // ---------- 用例 4：A 侧工具栏 getChildren ----------
 
-    private class StubGroup : DefaultActionGroup() {
+    private class StubGroup : com.intellij.openapi.actionSystem.DefaultActionGroup() {
         var childrenCalls = 0
         override fun getChildren(e: AnActionEvent?): Array<AnAction> {
             childrenCalls++
@@ -234,7 +222,7 @@ class DsListAddSourceTest : BasePlatformTestCase() {
         val original = NewDataSourceEntry.availabilityForTest
         NewDataSourceEntry.availabilityForTest = { true }
         try {
-            val children = ChooseDataSourceTakeover.ChooseDataSourceTakeoverGroup(StubGroup()).getChildren(event)
+            val children = ChooseDataSourceTakeoverGroup(StubGroup()).getChildren(event)
             // 测试环境无 Database jar：sources 恒空。本用例钉的是「空列表也单独给出口」（计划 §七 4）。
             assertEquals(1, children.size)
             assertEquals("末尾（唯一）条目必须是添加数据源", addText, children.single().templateText)
@@ -246,7 +234,7 @@ class DsListAddSourceTest : BasePlatformTestCase() {
     fun testA侧_exec文件平台不可用_保持委托原生组() {
         val event = execFileEvent()
         val stub = StubGroup()
-        val children = ChooseDataSourceTakeover.ChooseDataSourceTakeoverGroup(stub).getChildren(event)
+        val children = ChooseDataSourceTakeoverGroup(stub).getChildren(event)
         assertEquals("无源且平台新建入口不可用 → 原样委托原生组（D-3）", 1, children.size)
         assertEquals("native", children.single().templateText)
         assertEquals("委托只发生一次", 1, stub.childrenCalls)

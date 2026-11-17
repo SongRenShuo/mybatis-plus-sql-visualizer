@@ -32,7 +32,7 @@ on:
         required: false
         type: string
       marketplace_lite:
-        description: 'marketplace 聚合腿只跑 243 子任务（内测轮省墙钟；逐目标 API 兼容仍由 verify×3 全覆盖）'
+        description: 'marketplace 腿只跑 243（内测轮省墙钟；逐目标 API 兼容仍由 verify×3 全覆盖）'
         required: false
         type: boolean
         default: false
@@ -128,6 +128,26 @@ jobs:
           pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
           ":buildPlugin -PgifRecord=false --console=plain"
 
+      # changeNotes 双轨判据（T-ReleaseChecklist §1.2）。两条都必须在建发行版之前绿，
+      # 且查的是本轮真正要发布的那份 zip，而不是发行机上的另一份本地包：
+      #   ① 源码级：评分引导句/最新块/裸 @/全角/首个 h2/preview 逐字一致（零 Gradle，秒级）。
+      #      Kotlin 守卫 ChangeNotesRatingLineGuardTest 仍由 testFast 腿跑，此处不删 CI 环节。
+      #   ② 产物级：jar 名 / plugin.xml <version> / MANIFEST Version / change-notes 真的编进
+      #      zip / 本版块全角零命中。此前 inspect-plugin-zip.py 只在发行机本地跑，CI 无覆盖。
+      - name: changeNotes 源码级判据（含反向验证）
+        if: inputs.mode == 'gate' || inputs.mode == 'release'
+        shell: pwsh
+        run: |
+          python -I dev-support/check-change-notes.py
+          python -I dev-support/check-change-notes.py --self-test
+
+      - name: 产物自检（本轮发布的那份 zip）
+        if: inputs.mode == 'gate' || inputs.mode == 'release'
+        shell: pwsh
+        run: |
+          $v = (python -I dev-support/check-change-notes.py --print-version).Trim()
+          python -I dev-support/inspect-plugin-zip.py --version $v
+
       # T-CiMatrix（2026-11-04）：verifyGate（三目标）与 testShards（五片）已拆到独立 matrix job 并行。
       # T-CiSplitMarketplace（2026-11-05）：verifyMarketplace 原在本 job 串行跑 4.8 分钟
       # （三目标逐个验证 2m41s/4m06s/4m17s，日志时间戳可对），而它是下游九个 job 全等的墙钟起点。
@@ -141,7 +161,10 @@ jobs:
         # 「下载编译产物失败 → 分片/兼容门禁 skipped」，testShards 一片都没跑。
         # 产物在 buildPlugin 成功时就已生成，与 verifyPlugin 成败无关；让下游照常跑，
         # 才能看到「测试绿不绿」这个独立信息（本 job 仍会因 verifyPlugin 失败标红）。
-        if: ${{ !cancelled() && inputs.mode != 'publish' }}
+        # 2026-11-13：条件收窄到 gate/release——tests 模式 build job 不跑任何 gradle 构建
+        # （打包插件步 gate/release 专属），本步在 tests 下必然「No files were found」标红
+        # （run 43265523784 实证），而 test 分片自 T-CiTestDecouple 起已不消费本工件。
+        if: ${{ !cancelled() && (inputs.mode == 'gate' || inputs.mode == 'release') }}
         uses: actions/upload-artifact@v7
         with:
           name: build-outputs
@@ -326,16 +349,13 @@ jobs:
           ":verifyPlugin -x buildPlugin -PgifRecord=false --console=plain"
 
       - name: Marketplace 门禁（在线 + 无豁免，聚合任务）
-        # T-BetaMarketLite（2026-11-12，master 183c98b3d 增量按 k2j 形态适配）：marketplace_lite=true
-        # 时只跑 verifyMarketplace243 子任务。master 侧依据是墙钟实测（run 43203043486）：marketplace
-        # 腿挂在 needs: build 后面，是整轮的地板；k2j 形态里这条腿是单 job 聚合（子任务
-        # verifyMarketplace243/253/262 在本 job 内跑），lite 时收窄为 243 子任务即可达成同款收益。
-        # 覆盖上说得通：marketplace 腿验的是上架侧规则（descriptor / changeNotes / 市场约束），
-        # 各目标基本同源；**逐目标的 API 兼容**仍由 verify×3 全量覆盖，253/262 一个不少。
-        # 前置 warmup 保持全目标 :verifyPlugin -x buildPlugin（k2j 既有形态，无条件预热）不变。
-        run: |
-          $marketTask = if ('${{ inputs.marketplace_lite }}' -eq 'true') { ':verifyMarketplace243' } else { ':verifyMarketplace' }
-          pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs "$marketTask -PgifRecord=false --console=plain"
+        # T-BetaMarketLite（2026-11-12，master 为 matrix 裁剪形态）：k2j 是单 job 聚合腿
+        # （verifyMarketplace243/253/262 三子任务），lite 语义映射为只跑 243 子任务——
+        # job 本身照常 success，gate「五条腿全 success、skipped 视同未验证」断言不必开口子。
+        # 逐目标 API 兼容仍由 verify×3 全量覆盖。
+        run: >-
+          pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
+          "${{ inputs.marketplace_lite && ':verifyMarketplace243' || ':verifyMarketplace' }} -PgifRecord=false --console=plain"
 
   # T-CiMatrix（2026-11-04）：三目标兼容验证并行——每个 job 只验一个 IDE 版本
   # （-PverifyIdes=243/253/262 单版本模式，buildSrc 的 pluginVerification.ides 与 verifyGate
@@ -583,7 +603,7 @@ jobs:
           if ($bad.Count -gt 0) {
             throw ("门禁未全部通过：" + ($bad -join '、') + "。skipped 视同未验证，不得当作通过。")
           }
-          Write-Host '五条腿全部 success：build / verifyplugin / marketplace×1（k2j 聚合腿；marketplace_lite 时仅 243 子任务）/ verify×3 / test×6（5 片 + 快桶腿）'
+          Write-Host '五条腿全部 success：build / verifyplugin / marketplace×1（k2j 聚合腿；marketplace_lite 时仅 243 子任务） / verify×3 / test×6（5 片 + 快桶腿）'
 
   publish:
     # 门禁通过后才进入本 job；挂 environment 后这里会停下来等人工批准

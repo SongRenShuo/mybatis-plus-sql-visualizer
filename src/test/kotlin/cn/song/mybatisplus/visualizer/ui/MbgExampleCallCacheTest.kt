@@ -13,10 +13,6 @@ import org.junit.Test
  * （[MbgExampleCallResolver.resolveCached] + 可注入的 `compute`），因此这里不需要平台环境；
  * 「依赖文件改动后失效」走 `VirtualFile.modificationStamp` 比较，测试环境构造真实 VirtualFile
  * 成本高，改由真机 `[open-perf]` 读数验收（计划 §四 已登记）。
- *
- * K2J 适配：{@code CachedResolution} 落 record（位置实参构造）；compute 缝为
- * {@code kotlin.Function0}——Kotlin lambda 直传（函数类型即 Function0）；计数器
- * {@code cacheHits}/{@code searchRuns} 走 getter 的属性语法。
  */
 class MbgExampleCallCacheTest {
 
@@ -26,8 +22,8 @@ class MbgExampleCallCacheTest {
     }
 
     private fun entry(tag: String) = MbgExampleCallResolver.CachedResolution(
-        mapOf("criteria.criteria" to listOf(MockObject(mapOf("condition" to tag)))),
-        emptyMap(),
+        elements = mapOf("criteria.criteria" to listOf(MockObject(mapOf("condition" to tag)))),
+        stamps = emptyMap(),
     )
 
     @Test
@@ -41,8 +37,8 @@ class MbgExampleCallCacheTest {
 
         assertEquals(first, second)
         assertEquals("compute（即 ReferencesSearch）只应执行一次", 1, runs)
-        assertEquals(1, MbgExampleCallResolver.getSearchRuns())
-        assertEquals(1, MbgExampleCallResolver.getCacheHits())
+        assertEquals(1, MbgExampleCallResolver.searchRuns)
+        assertEquals(1, MbgExampleCallResolver.cacheHits)
     }
 
     @Test
@@ -55,7 +51,7 @@ class MbgExampleCallCacheTest {
         MbgExampleCallResolver.resolveCached("ns#s2", compute)
 
         assertEquals(2, runs)
-        assertEquals(0, MbgExampleCallResolver.getCacheHits())
+        assertEquals(0, MbgExampleCallResolver.cacheHits)
     }
 
     @Test
@@ -69,6 +65,6 @@ class MbgExampleCallCacheTest {
 
         // 「当时索引没就绪 / 找不到调用点」不得被固化——下次必须再试
         assertEquals(2, runs)
-        assertEquals(0, MbgExampleCallResolver.getCacheHits())
+        assertEquals(0, MbgExampleCallResolver.cacheHits)
     }
 }

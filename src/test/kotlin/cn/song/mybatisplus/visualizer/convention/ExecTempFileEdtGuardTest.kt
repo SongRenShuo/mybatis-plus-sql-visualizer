@@ -1,11 +1,3 @@
-// 自 master src/test/kotlin/.../convention/ExecTempFileEdtGuardTest.kt 移植（A 件直取 + k2j 适配）
-// master 终态 183c98b3d（含 M7「EDT 上校验 PSI」反例用例 511ad990a 增量）。
-// k2j 适配：守卫目标为 Java 承载件 DataSourceSelectorResultsKt.java（master 是
-// DataSourceSelectorResults.kt）——扫描根 src/main/kotlin/.kt → src/main/java/.java；
-// 声明锚点按 k2j Java 方法形态改（Kotlin `fun name(` → Java 修饰符行 + 返回类型 + `name(`）；
-// chooseAndPrepare/createTempPsiFile 在 Java 侧为多重载（旧参量委托壳），判定取**全部重载体合并**；
-// isPrepareActive 在 Java 侧是 `Supplier<Boolean> isPrepareActive = () ->` + `.get()` 消费形态，
-// 收口锚点改裸令牌（master 是 Kotlin 局部函数调用 `isPrepareActive(`）。
 package cn.song.mybatisplus.visualizer.convention
 
 import org.junit.Assert.assertEquals
@@ -35,9 +27,9 @@ import java.io.File
  * 2. `createTempPsiFileAsync` 必须齐备三段式（`isDispatchThread` 分流 / `executeOnPooledThread`
  *    池线程 / `invokeLater` 回 EDT）且模态为 `ModalityState.nonModal()`——`any()` 恒 write-unsafe，
  *    续接链会写文档（`ExecWriteSafeDispatchGuardTest` 同口径）；
- * 3. 回调必须经 `revalidate`（异步窗口内 PSI 可能失效，直接消费会硬抛
+ * 3. 回调必须经 `revalidateOnEdt`（异步窗口内 PSI 可能失效，直接消费会硬抛
  *    `PsiInvalidElementAccessException`）；
- * 4. `revalidate` 的两处 PSI 判定必须落在 `ReadAction` 内（UI-002：EDT 隐式读权限不可依赖）；
+ * 4. `revalidateOnEdt` 的两处 PSI 判定必须落在 `ReadAction` 内（UI-002：EDT 隐式读权限不可依赖）；
  * 5. `createTempPsiFile` 的 refresh 段必须按线程分流（`isDispatchThread`）——池线程上包 WIRA ×
  *    同步 refresh 会自锁（T-PrewarmWilDeadlock）；
  * 6. `continuePrepareAfterTempFile` 必须保留建链失败收口（`failPrepareRequests`）与迟到续接守卫
@@ -49,22 +41,19 @@ import java.io.File
 class ExecTempFileEdtGuardTest {
 
     private val resultsPath =
-        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java"
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt"
 
     /**
      * 判定内核（VIOLATIONS）：EDT 入口派发形态 + 慢段线程纪律 + 异步续接收口。
      *
-     * 输入为 `DataSourceSelectorResultsKt.java` 源码；函数体按名字定位（大括号配平），定位失败即
-     * 点名（改名/搬家后守卫必须同步跟进，不得静默空转）。k2j Java 形态：
-     * 声明 = 修饰符行（public/private/protected/static/final/synchronized）+ 返回类型 + `name(`，
-     * 同名多重载取全部函数体**合并**判定（委托壳不误伤、真身不漏检——ExplainPanelWiringGuardTest
-     * 「锚点须迁到含真身的全参签名」教训的多重载推广形态）。
+     * 输入为 `DataSourceSelectorResults.kt` 源码；函数体按名字定位（大括号配平），定位失败即
+     * 点名（改名/搬家后守卫必须同步跟进，不得静默空转）。
      */
     internal fun tempPsiEdtOffenders(source: String): List<String> {
         val src = stripComments(source)
         val out = ArrayList<String>()
 
-        val choose = mergedBodyOf(src, "chooseAndPrepare")
+        val choose = bodyOf(src, "chooseAndPrepare")
         if (choose == null) {
             out += "未定位到 chooseAndPrepare 函数体（入口改名/搬家后守卫须同步跟进）"
         } else {
@@ -77,7 +66,7 @@ class ExecTempFileEdtGuardTest {
             }
         }
 
-        val async = mergedBodyOf(src, "createTempPsiFileAsync")
+        val async = bodyOf(src, "createTempPsiFileAsync")
         if (async == null) {
             out += "未定位到 createTempPsiFileAsync 函数体（EDT 侧唯一派发入口消失）"
         } else {
@@ -106,7 +95,7 @@ class ExecTempFileEdtGuardTest {
             }
         }
 
-        val revalidate = mergedBodyOf(src, "revalidate")
+        val revalidate = bodyOf(src, "revalidate")
         if (revalidate == null) {
             out += "未定位到 revalidate 函数体（PSI 失效兜底消失）"
         } else {
@@ -120,7 +109,7 @@ class ExecTempFileEdtGuardTest {
             }
         }
 
-        val slow = mergedBodyOf(src, "createTempPsiFile")
+        val slow = bodyOf(src, "createTempPsiFile")
         if (slow == null) {
             out += "未定位到 createTempPsiFile 函数体（慢段本体消失）"
         } else {
@@ -133,7 +122,7 @@ class ExecTempFileEdtGuardTest {
             }
         }
 
-        val continuation = mergedBodyOf(src, "continuePrepareAfterTempFile")
+        val continuation = bodyOf(src, "continuePrepareAfterTempFile")
         if (continuation == null) {
             out += "未定位到 continuePrepareAfterTempFile 函数体（异步续接链消失）"
         } else {
@@ -143,10 +132,7 @@ class ExecTempFileEdtGuardTest {
             if (!continuation.contains("failPrepareRequests(")) {
                 out += "continuePrepareAfterTempFile 丢失建链失败收口 failPrepareRequests"
             }
-            // k2j 形态：Java 侧 isPrepareActive 是 `Supplier<Boolean> isPrepareActive = () ->` 定义 +
-            // `isPrepareActive.get()` 消费（master 是 Kotlin 局部函数 `isPrepareActive(` 调用）——
-            // 收口锚点取裸令牌，定义或消费任一在场即认。
-            if (!continuation.contains("isPrepareActive")) {
+            if (!continuation.contains("isPrepareActive(")) {
                 out += "continuePrepareAfterTempFile 丢失迟到续接守卫 isPrepareActive" +
                     "（异步窗口内门已易主仍会建第二条会话/控制台）"
             }
@@ -168,46 +154,39 @@ class ExecTempFileEdtGuardTest {
     /** 自证：同步直调必红、any() 投递必红、缺线程分流必红、丢收口必红、EDT 上校验必红，合规形态不误报。 */
     @Test
     fun `自证_同步直调与any投递与缺分流必被点名`() {
-        // k2j 语料按 Java 方法形态（判定内核的声明锚认修饰符行），令牌判据与 master 同一版语义。
         val syncCall = """
-            class DataSourceSelectorSample {
-                static void chooseAndPrepare(Project project, String sql) {
-                    TempPsiFile temp = createTempPsiFile(project, sql, null);
+            internal fun DataSourceSelector.chooseAndPrepare(project: Project) {
+                val temp = createTempPsiFile(project, sql, null)
+            }
+            internal fun DataSourceSelector.createTempPsiFileAsync(project: Project, sql: String, onReady: () -> Unit) {
+                val app = ApplicationManager.getApplication()
+                fun runSlow(report: () -> Unit) {
+                    val pair = createTempPsiFile(project, sql, null)
+                    revalidate(project, pair)
+                    app.invokeLater({ report() }, ModalityState.nonModal())
                 }
-                static void createTempPsiFileAsync(Project project, String sql, String dialect,
-                        java.util.function.BiConsumer<TempPsiFile, String> onReady) {
-                    Application app = ApplicationManager.getApplication();
-                    class RunSlow {
-                        void run(java.util.function.BiConsumer<TempPsiFile, String> report) {
-                            TempPsiFile pair = createTempPsiFile(project, sql, dialect);
-                            revalidate(project, pair);
-                            app.invokeLater(() -> report.accept(null, null), ModalityState.nonModal());
-                        }
-                    }
-                    if (!app.isDispatchThread()) {
-                        new RunSlow().run(onReady);
-                        return;
-                    }
-                    app.executeOnPooledThread(() -> new RunSlow().run(onReady));
+                if (!app.isDispatchThread) {
+                    runSlow { onReady() }
+                    return
                 }
-                static TempPsiFile revalidate(Project project, TempPsiFile pair) {
-                    ReadAction.compute(() -> pair.psi.isValid());
-                    ReadAction.compute(() -> null);
-                    return pair;
+                app.executeOnPooledThread { runSlow { onReady() } }
+            }
+            internal fun revalidate(project: Project, pair: Any?): Any? {
+                ReadAction.compute<Boolean, Throwable> { psi.isValid }
+                ReadAction.compute<Any?, Throwable> { null }
+                return pair
+            }
+            internal fun DataSourceSelector.createTempPsiFile(project: Project, sql: String): Any? {
+                if (ApplicationManager.getApplication().isDispatchThread) {
+                    WriteIntentReadAction.compute<Any?> { LocalFileSystem.getInstance().refreshAndFindFileByIoFile(f) }
+                } else {
+                    LocalFileSystem.getInstance().refreshAndFindFileByIoFile(f)
                 }
-                static TempPsiFile createTempPsiFile(Project project, String sql, String dialect) {
-                    if (ApplicationManager.getApplication().isDispatchThread()) {
-                        WriteIntentReadAction.compute(
-                                () -> LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile));
-                    } else {
-                        LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile);
-                    }
-                    return null;
-                }
-                static void continuePrepareAfterTempFile(TempPsiFile temp) {
-                    if (temp == null) failPrepareRequests(null, null, null, null, null, "x");
-                    if (!isPrepareActive()) return;
-                }
+                return null
+            }
+            internal fun DataSourceSelector.continuePrepareAfterTempFile(temp: Any?) {
+                if (temp == null) failPrepareRequests(null, null, null, null, null, "x")
+                if (!isPrepareActive()) return
             }
         """.trimIndent()
         val syncOffenders = tempPsiEdtOffenders(syncCall)
@@ -217,12 +196,9 @@ class ExecTempFileEdtGuardTest {
         )
 
         val anyModality = syncCall.replace(
-            "app.invokeLater(() -> report.accept(null, null), ModalityState.nonModal());",
-            "app.invokeLater(() -> report.accept(null, null), ModalityState.any());",
-        ).replace(
-            "TempPsiFile temp = createTempPsiFile(project, sql, null);",
-            "createTempPsiFileAsync(project, sql, null, (t, r) -> { });",
-        )
+            "app.invokeLater({ report() }, ModalityState.nonModal())",
+            "app.invokeLater({ report() }, ModalityState.any())",
+        ).replace("val temp = createTempPsiFile(project, sql, null)", "createTempPsiFileAsync(project, sql) { }")
         val anyOffenders = tempPsiEdtOffenders(anyModality)
         assertTrue(
             "any() 投递必须被点名：$anyOffenders",
@@ -230,17 +206,13 @@ class ExecTempFileEdtGuardTest {
         )
 
         // M7 反例：把 PSI 有效性校验挪回 invokeLater 回调（EDT 上判 isValid ＝平台慢操作）必须被点名
-        // 语料经 trimIndent 后 RunSlow.run 体内行缩进为 16 空格（原 28 空格被公共前缀剥离）。
         val revalidateOnEdt = syncCall.replace(
-            "                revalidate(project, pair);\n",
+            "        revalidate(project, pair)\n",
             "",
         ).replace(
-            "app.invokeLater(() -> report.accept(null, null), ModalityState.nonModal());",
-            "app.invokeLater(() -> { revalidate(project, pair); report.accept(null, null); }, ModalityState.nonModal());",
-        ).replace(
-            "TempPsiFile temp = createTempPsiFile(project, sql, null);",
-            "createTempPsiFileAsync(project, sql, null, (t, r) -> { });",
-        )
+            "app.invokeLater({ report() }, ModalityState.nonModal())",
+            "app.invokeLater({ revalidate(project, pair); report() }, ModalityState.nonModal())",
+        ).replace("val temp = createTempPsiFile(project, sql, null)", "createTempPsiFileAsync(project, sql) { }")
         val edtOffenders = tempPsiEdtOffenders(revalidateOnEdt)
         assertTrue(
             "EDT 上校验 PSI 有效性必须被点名：$edtOffenders",
@@ -248,12 +220,9 @@ class ExecTempFileEdtGuardTest {
         )
 
         val noBranch = syncCall.replace(
-            "if (ApplicationManager.getApplication().isDispatchThread()) {",
+            "if (ApplicationManager.getApplication().isDispatchThread) {",
             "if (true) {",
-        ).replace(
-            "TempPsiFile temp = createTempPsiFile(project, sql, null);",
-            "createTempPsiFileAsync(project, sql, null, (t, r) -> { });",
-        )
+        ).replace("val temp = createTempPsiFile(project, sql, null)", "createTempPsiFileAsync(project, sql) { }")
         val branchOffenders = tempPsiEdtOffenders(noBranch)
         assertTrue(
             "refresh 段缺线程分流必须被点名：$branchOffenders",
@@ -261,9 +230,9 @@ class ExecTempFileEdtGuardTest {
         )
 
         val noFailsafe = syncCall
-            .replace("TempPsiFile temp = createTempPsiFile(project, sql, null);", "createTempPsiFileAsync(project, sql, null, (t, r) -> { });")
-            .replace("if (temp == null) failPrepareRequests(null, null, null, null, null, \"x\");", "")
-            .replace("if (!isPrepareActive()) return;", "")
+            .replace("val temp = createTempPsiFile(project, sql, null)", "createTempPsiFileAsync(project, sql) { }")
+            .replace("if (temp == null) failPrepareRequests(null, null, null, null, null, \"x\")", "")
+            .replace("if (!isPrepareActive()) return", "")
         val failsafeOffenders = tempPsiEdtOffenders(noFailsafe)
         assertTrue(
             "续接链丢失败收口必须被点名：$failsafeOffenders",
@@ -275,8 +244,8 @@ class ExecTempFileEdtGuardTest {
         )
 
         val good = syncCall.replace(
-            "TempPsiFile temp = createTempPsiFile(project, sql, null);",
-            "createTempPsiFileAsync(project, sql, null, (temp, reason) -> continuePrepareAfterTempFile(temp));",
+            "val temp = createTempPsiFile(project, sql, null)",
+            "createTempPsiFileAsync(project, sql) { temp -> continuePrepareAfterTempFile(temp) }",
         )
         assertEquals(
             "合规形态不应误报：${tempPsiEdtOffenders(good)}",
@@ -286,7 +255,7 @@ class ExecTempFileEdtGuardTest {
     }
 
     // ------------------------------------------------------------------
-    // 夹具（k2j Java 形态锚点）
+    // 夹具
     // ------------------------------------------------------------------
 
     private fun read(path: String): String {
@@ -295,7 +264,7 @@ class ExecTempFileEdtGuardTest {
         return f.readText()
     }
 
-    /** 剥注释（块注释涂白保留换行，行注释截断）——判定只看代码，KDoc/JavaDoc 里「提」禁词不算违规。 */
+    /** 剥注释（块注释涂白保留换行，行注释截断）——判定只看代码，KDoc 里「提」禁词不算违规。 */
     private fun stripComments(src: String): String {
         val noBlock = Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL).replace(src) { m ->
             m.value.replace(Regex("[^\n]"), " ")
@@ -306,19 +275,24 @@ class ExecTempFileEdtGuardTest {
         }
     }
 
-    /**
-     * Java 方法声明点：行首缩进后跟 Java 修饰符，签名行内出现 `name(`（Kotlin `fun` 锚的 Java
-     * 等价形态）。修饰符打头 + 词边界，普通调用点/字符串内出现不命中；返回每个声明处 `name(` 的下标。
-     */
-    private fun declarationIndexes(src: String, fn: String): List<Int> {
-        val re = Regex(
-            """(?m)^[ \t]*(?:public|private|protected|static|final|synchronized)\s+[\w.<>\[\], ?]*\b""" +
-                Regex.escape(fn) + """\s*\(""",
-        )
-        return re.findAll(src).map { m ->
-            val at = m.value.lastIndexOf("$fn(")
-            m.range.first + at
-        }.toList()
+    /** 函数声明点：`fun [接收者.]name(` 里 `(` 的下标；普通调用点不命中。 */
+    private fun declarationAt(src: String, fn: String): Int? {
+        var at = src.indexOf("$fn(")
+        while (at > 0) {
+            var back = at
+            while (back > 0 && (src[back - 1].isLetterOrDigit() || src[back - 1] == '.' || src[back - 1] == '_')) {
+                back--
+            }
+            var s = back
+            while (s > 0 && src[s - 1].isWhitespace()) s--
+            if (s >= 3 && src.regionMatches(s - 3, "fun", 0, 3) &&
+                (s - 4 < 0 || !(src[s - 4].isLetterOrDigit() || src[s - 4] == '_'))
+            ) {
+                return at
+            }
+            at = src.indexOf("$fn(", at + fn.length + 1)
+        }
+        return null
     }
 
     /** 函数体区间：从声明后的首个 `{` 起按大括号配平（非固定长度窗口，避免跨界读到邻居函数）。 */
@@ -340,13 +314,6 @@ class ExecTempFileEdtGuardTest {
         return null
     }
 
-    /** 同名全部重载的函数体合并（委托壳 + 全参真身一并纳入判定面）。无任何声明时返回 null。 */
-    private fun mergedBodyOf(src: String, fn: String): String? {
-        val bodies = declarationIndexes(src, fn).mapNotNull { bodyRange(src, it)?.let { r -> src.substring(r.first, r.last + 1) } }
-        return when {
-            bodies.isEmpty() -> null
-            bodies.size == 1 -> bodies[0]
-            else -> bodies.joinToString("\n")
-        }
-    }
+    private fun bodyOf(src: String, fn: String): String? =
+        declarationAt(src, fn)?.let { bodyRange(src, it) }?.let { src.substring(it.first, it.last + 1) }
 }

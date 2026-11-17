@@ -60,6 +60,49 @@ class ExplainIndexAdvisorTest {
         assertTrue("TEMPORARY_TABLE" in rules)
     }
 
+    // ---------- R45 EXPLAIN 体检：rows 估算独立规则 ----------
+
+    /**
+     * R45：rows 估算维度此前只作 FULL_SCAN 的阈值闸门（非 ALL 时无从触发）——「命中索引但
+     * 估算行数仍超阈」的形态（索引选择性差 / 大范围扫描）无规则覆盖。体检规则清单补一条
+     * HIGH_ROWS_ESTIMATE：rows ≥ 阈值且 type 非 ALL（与 FULL_SCAN 互补不重复）时提示。
+     */
+    @Test
+    fun testR45_命中索引但rows超阈_估算异常提示() {
+        // type=range + key=idx_created 命中索引，但估算 500000 行 → 选择性差
+        val rows = listOf(listOf("1", "SIMPLE", "orders", "range", "idx_created", "500000", "Using index condition"))
+        val hints = ExplainIndexAdvisor.advise("MySQL", mysqlHeaders, rows)
+        assertTrue("命中索引但 rows 超阈应产出 HIGH_ROWS_ESTIMATE", hints.any { it.rule == "HIGH_ROWS_ESTIMATE" })
+        assertTrue("建议目标应是表名", hints.first { it.rule == "HIGH_ROWS_ESTIMATE" }.target == "orders")
+    }
+
+    @Test
+    fun testR45_rows超阈且typeALL_只报FULL_SCAN不重复报估算() {
+        // ALL 已由 FULL_SCAN 覆盖；估算规则须与 FULL_SCAN 互补不重复（防同一形态双提示噪音）
+        val rows = listOf(listOf("1", "SIMPLE", "orders", "ALL", "NULL", "500000", ""))
+        val rules = ExplainIndexAdvisor.advise("MySQL", mysqlHeaders, rows).map { it.rule }
+        assertTrue("FULL_SCAN" in rules)
+        assertTrue("ALL 形态不应重复报 HIGH_ROWS_ESTIMATE", "HIGH_ROWS_ESTIMATE" !in rules)
+    }
+
+    @Test
+    fun testR45_rows未超阈_不报估算() {
+        val rows = listOf(listOf("1", "SIMPLE", "t", "ref", "idx_a", "100", ""))
+        assertTrue(ExplainIndexAdvisor.advise("MySQL", mysqlHeaders, rows).none { it.rule == "HIGH_ROWS_ESTIMATE" })
+    }
+
+    @Test
+    fun testR45_规则清单_含全表扫与估算与文件排序() {
+        // 体检规则清单（R45 呈现层数据）：覆盖任务点名的维度——type 全表扫/key 缺失/rows 估算/extra 文件排序
+        val inventory = ExplainIndexAdvisor.ruleInventory()
+        val rules = inventory.map { it.rule }
+        assertTrue("清单应含全表扫 FULL_SCAN", "FULL_SCAN" in rules)
+        assertTrue("清单应含 key 缺失 NO_INDEX_USED", "NO_INDEX_USED" in rules)
+        assertTrue("清单应含 rows 估算 HIGH_ROWS_ESTIMATE", "HIGH_ROWS_ESTIMATE" in rules)
+        assertTrue("清单应含文件排序 FILESORT", "FILESORT" in rules)
+        assertTrue("清单应含临时表 TEMPORARY_TABLE", "TEMPORARY_TABLE" in rules)
+    }
+
     // ---------- PG 文本树 ----------
 
     @Test
@@ -328,4 +371,10 @@ class ExplainIndexAdvisorTest {
     fun testR45_规则清单_含OB全表扫() {
         assertTrue(ExplainIndexAdvisor.ruleInventory().any { it.rule == "TABLE_FULL_SCAN" })
     }
+
+    // ---------- F59（T-PerfSweep18）：文本树 Regex 提 object 单例 ----------
+
+    // k2j 注：master 侧 F59 用例断言 ExplainIndexAdvisor.SEQ_SCAN_ON / PLAN_TEXT_ROWS
+    // 两个 object 单例属性（Pattern 提常量）；k2j 生产 ExplainIndexAdvisor.java 尚未做该提常量
+    // （仍为函数体内私有 Pattern），用例暂缺，生产提常量落位后按 master 原样恢复。
 }

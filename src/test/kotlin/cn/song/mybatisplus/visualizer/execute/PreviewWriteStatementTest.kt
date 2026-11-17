@@ -5,7 +5,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * T-PreviewDmlResult：预览执行「写语句 → 结构上没有结果页签」判据（[DataSourceSelector.isWriteStatement]）。
+ * T-PreviewDmlResult：预览执行「写语句 → 结构上没有结果页签」判据（[isWriteStatement]）。
  *
  * 真机动因（20261110）：`INSERT INTO sys_config …` 执行成功、`1 row affected in 60 ms` 只写在
  * 控制台 Output，DBN 不建结果页签；40 拍窗口到期后 `hasConsoleCompletionEvidence` 读 history

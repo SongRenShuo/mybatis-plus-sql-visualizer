@@ -19,13 +19,13 @@ class SqlMapParserTest {
         val error = runCatching { parser.parse("<mapper namespace=\"x\"><select id=\"a\">SELECT 1</select></mapper>") }
             .exceptionOrNull()
         assertNotNull("非 sqlMap 根必须抛 IbatisParseException", error)
-        assertTrue(error is IbatisModel.IbatisParseException)
+        assertTrue(error is IbatisParseException)
     }
 
     @Test
     fun `XML 语法错抛结构级异常`() {
         val error = runCatching { parser.parse("<sqlMap><select id=\"a\">SELECT 1</sqlMap>") }.exceptionOrNull()
-        assertTrue(error is IbatisModel.IbatisParseException)
+        assertTrue(error is IbatisParseException)
     }
 
     @Test
@@ -46,7 +46,7 @@ class SqlMapParserTest {
             listOf("s", "i", "u", "d", "st", "p"),
             parsed.statements.map { it.id },
         )
-        assertEquals(IbatisModel.IbatisStatementKind.PROCEDURE, parsed.statementById("p")!!.kind)
+        assertEquals(IbatisStatementKind.PROCEDURE, parsed.statementById("p")!!.kind)
         assertTrue(parsed.warnings.isEmpty())
     }
 
@@ -117,7 +117,7 @@ class SqlMapParserTest {
             statement.warnings.any { it.contains("未识别的标签") },
         )
         assertFalse("未知标签不应把语句判成动态（引擎也不认它）", statement.isDynamic)
-        val texts = statement.body.filterIsInstance<IbatisModel.IbatisTextNode>().map { it.rawText }
+        val texts = statement.body.filterIsInstance<IbatisTextNode>().map { it.rawText }
         assertTrue("降级后原文应在场：$texts", texts.any { it.contains("B = ") })
     }
 
@@ -137,7 +137,7 @@ class SqlMapParserTest {
         assertFalse("type=\"pre\" 显式压过位置", pre.selectKeys.single().runAfterSql)
         assertTrue(
             "selectKey 内容绝不能落进宿主 insert 主体",
-            pre.body.filterIsInstance<IbatisModel.IbatisTextNode>().none { it.rawText.contains("SELECT 1") },
+            pre.body.filterIsInstance<IbatisTextNode>().none { it.rawText.contains("SELECT 1") },
         )
         assertTrue("无 type 时由位置推断为 post", parsed.statementById("inferredPost")!!.selectKeys.single().runAfterSql)
         assertTrue(parsed.statementById("explicitPost")!!.selectKeys.single().runAfterSql)
@@ -154,7 +154,7 @@ class SqlMapParserTest {
         assertTrue("必须给告警（已知偏差，见 SqlMapSqlRenderer 类注释 A）", statement.warnings.any { it.contains("属性占位") })
         assertTrue(
             "本链不做 \${...} 全局属性替换：${statement.body}",
-            statement.body.filterIsInstance<IbatisModel.IbatisTextNode>().any { it.rawText.contains("${'$'}{tableName}") },
+            statement.body.filterIsInstance<IbatisTextNode>().any { it.rawText.contains("${'$'}{tableName}") },
         )
     }
 

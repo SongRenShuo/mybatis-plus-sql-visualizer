@@ -109,11 +109,11 @@ dependencies {
     testImplementation(libs.dameng.jdbc)
     testImplementation(libs.opengauss.jdbc)
     testImplementation(libs.oceanbase.client)
+    // T-DialectLabMatrix：配方一致性守卫的 YAML 解析（仅测试 classpath）
+    testImplementation(libs.snakeyaml)
     // T-Ibatis2Support 券 B/C（2026-11-09）：iBatis 2.x 真引擎保真对照（golden oracle，逐字节）。
     // 仅测试 classpath——红线「零 mybatis 依赖」只约束 implementation（生产依赖图不变，生产仍只有 jsqlparser）。
     testImplementation("org.apache.ibatis:ibatis-sqlmap:2.3.4.726")
-    // T-DialectLabMatrix：配方一致性守卫的 YAML 解析（仅测试 classpath）
-    testImplementation(libs.snakeyaml)
     // T-TailSweep2 T-FS-01：真 MyBatis 引擎语义对照测试集（真引擎 jar 仅进**测试 classpath**）。
     // 来源：真引擎 jar 经 `testImplementation(libs.mp.core)`（com.baomidou:mybatis-plus-core:3.5.17）
     // 传递带入 `org.mybatis:mybatis:3.5.19`，**无需显式声明**——实测
@@ -218,7 +218,14 @@ intellijPlatform {
     // T-GifRecordSwitch：录制态用独立沙盒，避免与并行任务（record/ 脚本、其他会话）
     // 的沙盒/索引互锁；常规态用默认沙盒。
     if (gifRecord) {
-        sandboxContainer = layout.buildDirectory.dir("MPSV-GifFresh")
+        // T-SandboxReuse（20261114 提效调研 P0-1）：录制沙盒容器迁到插件仓之外的持久
+        // home（sql-visualizer-recording 仓 sandbox-live/），build/ 被 clean 不再带走
+        // idea.key、系统/工程索引、信任态与通知静音态（旧值 build/MPSV-GifFresh）。
+        sandboxContainer.fileValue(file("../sql-visualizer-recording/sandbox-live/MPSV-GifFresh"))
+    }
+    // T-SyncK2JMaster178 临时隔离（parallel_tasks 登记在册；用后还原，勿提交入库）
+    if (System.getProperty("mpvs.sandbox") == "T-SyncK2J178") {
+        sandboxContainer = layout.buildDirectory.dir("T-SyncK2J178")
     }
     // 注：并行会话临时隔离请在本块内临时加自己的 sandboxContainer（用后还原并立即提交），
     // 勿让任务专属沙盒名随提交入库（T-ListParamCollect/T-HqlInhCols 两轮实证）。

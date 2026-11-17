@@ -1,7 +1,6 @@
 package cn.song.mybatisplus.visualizer.heavy
 
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
-import cn.song.mybatisplus.visualizer.ui.IbatisParameterClassResolver
 import cn.song.mybatisplus.visualizer.ui.IbatisTypeAliasResolver
 import cn.song.mybatisplus.visualizer.ui.IbatisXmlPreviewService
 import com.intellij.openapi.command.WriteCommandAction
@@ -15,6 +14,7 @@ import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.search.PsiShortNamesCache
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.HeavyPlatformTestCase
+import cn.song.mybatisplus.visualizer.ui.IbatisParameterClassResolver
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -73,14 +73,15 @@ class IbatisParamClassQuoteHeavyTest : HeavyPlatformTestCase() {
 
     private fun backfill(id: String, values: Map<String, String>, parameterClass: String = "User"): String {
         val result = IbatisXmlPreviewService.preview(
-            xml, id, null, 0,
-            project, parameterClass, null,
+            xml, id,
+            project = project,
+            parameterClass = parameterClass,
         )
         return ParameterReplacer.buildExecutableSql(
-            result.sql,
-            result.unresolvedParams,
-            values,
-            result.paramHints,
+            sql = result.sql,
+            sources = result.unresolvedParams,
+            paramValues = values,
+            hints = result.paramHints,
         )
     }
 
@@ -140,7 +141,7 @@ class IbatisParamClassQuoteHeavyTest : HeavyPlatformTestCase() {
     fun testMultipleSameNameCandidatesKeepsHeuristic() {
         addClassFile("UserInP.java", "package p; public class User { private String username; }")
         addClassFile("UserInQ.java", "package q; public class User { private String username; }")
-        val result = IbatisXmlPreviewService.preview(xml, "byName", null, 0, project, "User", null)
+        val result = IbatisXmlPreviewService.preview(xml, "byName", project = project, parameterClass = "User")
         assertTrue(
             "多候选且同模块无法区分时应弃权：${result.paramHints}",
             result.paramHints.all { it.quote == null },
@@ -181,9 +182,10 @@ class IbatisParamClassQuoteHeavyTest : HeavyPlatformTestCase() {
             """.trimMargin(),
         )
         val result = IbatisXmlPreviewService.preview(
-            xml, "byName", null, 0,
-            project, "User",
-            ModuleManager.getInstance(project).modules.first().name,
+            xml, "byName",
+            project = project,
+            parameterClass = "User",
+            moduleName = ModuleManager.getInstance(project).modules.first().name,
         )
         assertEquals(
             "别名指向 p.User ⇒ 应拿到类型并加引号：${result.paramHints}",

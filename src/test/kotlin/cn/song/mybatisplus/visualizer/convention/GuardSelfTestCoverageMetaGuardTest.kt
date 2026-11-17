@@ -676,6 +676,27 @@ class GuardSelfTestCoverageMetaGuardTest {
          */
         val GUARD_CLASSES = listOf(
             GuardEntry(
+                "update/HotUpdateSettingsGuardTest.kt",
+                emptyList(),
+                "T-HotUpdateSettingsGuard 守卫：热更新（动态装载）后设置页「确定」无反应的兜底判定——" +
+                    "处理条件必须是「isUpdate 且本插件」、设置窗口按类名后缀 SettingsDialog 收口、" +
+                    "PLUGIN_ID 与 plugin.xml 的 <id> 一字不差。判定内核是三个纯函数，用例直接断言，" +
+                    "无「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
+                    "灵敏度=把 shouldHandle 的插件 id 改成别的、或 isSettingsDialogClass 改成正向 contains，" +
+                    "对应用例必红（实施轮以「反向探针」口径核过同类判定）。",
+            ),
+            GuardEntry(
+                "ui/XmlSqlCompletionContextResolverIndexKeySourceScanTest.kt",
+                emptyList(),
+                "L65 守卫（2026-11-13）：`JavaAnnotationIndex` 的键是**注解简单名**（243 字节码实证：" +
+                    "`JavaAnnotationElementType.indexStub` 先 indexOf('(') 截断再取短类名），" +
+                    "按 FQN 查恒空——`XmlSqlCompletionContextResolver` 的兜底分支曾如此。判定内核＝剥注释后" +
+                    "扫 `getAnnotations(` 的实参是否为简单名常量 + 常量值是否等于 TableName，无返回违规点集合的" +
+                    "具名判定函数，故 decisionFns 留空；灵敏度=把实参改回 FQN → 本类恰 1 红（实施轮实测）。",
+            ),
+            // k2j 注：master 侧此处还有 convention/VerifierCliVersionGuardTest.kt 登记项；
+            // k2j 树未移植该守卫（verifier-cli 钉子属 CI 专用面），缺文件不能登记，暂缺。
+            GuardEntry(
                 "convention/SqlDialectParserDefinitionPairingGuardTest.kt",
                 emptyList(),
                 "T-PreviewPsiDialect 根因守卫：database-optional.xml 里每个 <sql.dialect> 必须有同名 " +
@@ -938,6 +959,18 @@ class GuardSelfTestCoverageMetaGuardTest {
                 ),
                 "判定函数名不命中命名形状（叫 scan，:178）——正是「登记表为主识别面」的实证；自证 :363。" +
                     "k2j 树注（2026-10-22）：T-SyncK2JMaster496 对齐 master 后 `writesAt` 已单独成函数，登记 HELPER。",
+            ),
+            GuardEntry(
+                "convention/LastUsedWriteOnEdtGuardTest.kt",
+                listOf(
+                    DecisionFn("offendersOf", FnKind.VIOLATIONS),
+                ),
+                "last-used 写入 EDT 归位守卫（T-LastUsedEdt 守卫）：项目级 PropertiesComponent 写入必须在 EDT——"
+                    + "`rememberRunner` 曾由 Database 插件 runner session 回调（非 EDT）直行，与平台保存竞争后把"
+                    + "用户 `.idea/workspace.xml` 的 `mpsql.visualizer.last.runner.id` 值写坏（丢开头引号，"
+                    + "每次启动 JsonDecodingException 且平台不重写该条目）。判定内核扫三个写入口函数体前 1200 字符"
+                    + "是否含 isDispatchThread + invokeLater；headless 下行为测试测不出竞争，形态守卫是唯一可机器化判据。"
+                    + "自证语料=「缺归位的三个入口都被点名」与「带归位的合规形态不误报」两例。",
             ),
             GuardEntry(
                 "convention/EnumReachabilityGuardTest.kt",
@@ -1220,6 +1253,47 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "私有 leakStaleManualDialect 为污染动作夹具非判定函数",
             ),
             GuardEntry(
+                "convention/TakeoverUpdateThreadGuardTest.kt",
+                listOf(DecisionFn("takeoverUpdateThreadOffenders", FnKind.VIOLATIONS)),
+                "T-ThreadFix A：控制台数据源下拉接管组的 update 线程契约守卫。真机 SEVERE：" +
+                    "`'psi.File' is requested on EDT by ChooseDataSourceTakeoverGroup#presentation` + " +
+                    "同链 9 条 SlowOperations（findFile → findDirectory → isUnderIgnored）。根因是本类覆写了 " +
+                    "update/displayTextInToolbar，`ActionClassMetaData.isDefaultUpdate` 为 false → 平台默认落 " +
+                    "EDT，而它委托的原生 ChooseDataSourceAction javap 实证是 BGT。判据两条：必须显式声明 " +
+                    "ActionUpdateThread.BGT；update 体内不得出现 PSI/Swing/EDT-only 令牌。自证语料=" +
+                    "「未声明 BGT 与 update 体触 PSI 各必被点名」+「合规形态不误报」。",
+            ),
+            // ---- T-GutterFirstOpenDelay F1：XML→Java 跳转图标「解析失败不摘图标」接线守卫（2026-11-14） ----
+            GuardEntry(
+                "ui/gutter/MapperXmlSlowResolveFailGuardTest.kt",
+                listOf(
+                    // 判定谓词（Boolean? 形态）：读 createMarker 配平方法体，判「解析失败分支上是否先查
+                    // 正缓存（resolvedStatementKeys）再 dumb 乐观产出」。自证语料同文件——
+                    // 「F1守卫自证_修复后形态放行修复前形态必红」「F1守卫自证_Java侧…」以合成样本
+                    // 直接调用（放行/必红/先缓存后解析/空体四向），故不登记豁免。
+                    DecisionFn("failureBranchWiring", FnKind.HELPER),
+                    DecisionFn("javaFailureBranchWiring", FnKind.HELPER),
+                ),
+                "T-GutterFirstOpenDelay F1/F1' 接线守卫：钉住双向跳转两个 provider 的 createMarker" +
+                    "「解析失败不摘图标」接线——失败分支必须先查正缓存再 dumb 乐观产出，防接线漂移（判定先于" +
+                    "解析/漏缓存查询）让冷打开 S2 图标闪没/缺席回归。CI fast(1) 红的教训：新增 Guard 族文件落在 " +
+                    "ui/gutter（非 convention）也会被文件名闭包扫到，漏登即红——按文件名含 Guard 全清单登记。" +
+                    "k2j 注：本条照 master 登记随 master 版测试文件（A 件直取）落位。",
+            ),
+            // ---- T-IbatisGutterPerf P2：iBatis 调用行图标「解析失败不摘图标」接线守卫（2026-11-16） ----
+            GuardEntry(
+                "ui/gutter/IbatisGutterFailBranchGuardTest.kt",
+                listOf(
+                    // 判定谓词（Boolean? 形态）：读 createMarkers 配平方法体，判「dumb 门在索引查询之前
+                    // + 正缓存命中分支在解析之后」。自证语料同文件——「P2守卫自证_修复后形态放行…」
+                    // 以合成样本直接调用（放行/必红/dumb 门错位/缓存先于解析/空体五向），故不登记豁免。
+                    DecisionFn("failureBranchWiring", FnKind.HELPER),
+                ),
+                "T-IbatisGutterPerf P2 接线守卫：钉住 iBatis Java→XML provider 的 createMarkers" +
+                    "「dumb 乐观产出 + 正缓存命中仍产出」接线——dumb 门必须在索引查询之前（dumb 期查索引" +
+                    "抛 IndexNotReadyException），缓存分支必须在解析失败分支上。",
+            ),
+            GuardEntry(
                 "psi/FullScanCancelGuardTest.kt",
                 listOf(
                     DecisionFn("cancelOffenders", FnKind.VIOLATIONS),
@@ -1258,20 +1332,6 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "（mybatis-plus-sql-visualizer-docs/），与 src/main 树无关。自证语料（合成表漂移形态" +
                     "各一例）：`漂移自证_分页族归错被抓` / `漂移自证_ROWNUM写法被抓` / " +
                     "`漂移自证_漏方言被抓` / `漂移自证_upsert族归错被抓`。",
-            ),
-            // ---- T-ExecSlowOps-BP：执行临时文件构建移出 EDT（2026-11-04 回 port dev ba314f42；B5 落 k2j） ----
-            GuardEntry(
-                "convention/ExecTempFileEdtGuardTest.kt",
-                listOf(DecisionFn("tempPsiEdtOffenders", FnKind.VIOLATIONS)),
-                "T-ExecSlowOps-BP：执行临时文件构建的 EDT 慢操作守卫（master 真机一轮 36 条 " +
-                    "`Slow operations are prohibited on EDT`，栈 chooseAndPrepare → createTempPsiFile → " +
-                    "PsiManager.findFile → WorkspaceFileIndex.ensureIsUpToDate）。判据六条：chooseAndPrepare " +
-                    "不得直接调 createTempPsiFile（必须经 createTempPsiFileAsync）；async 三段式 + nonModal + " +
-                    "revalidate 兜底；revalidate 两处 PSI 判定包 ReadAction；慢段 refresh 按线程分流" +
-                    "（BGT 裸调防 WIRA 自锁）；续接链保留 failPrepareRequests 与迟到守卫 isPrepareActive。" +
-                    "自证语料=「同步直调/any 投递/缺分流/丢收口必被点名」+「合规形态不误报」。" +
-                    "（k2j：守卫目标 Java 承载件 DataSourceSelectorResultsKt.java；声明锚按 Java 修饰符行形态、" +
-                    "多重载合并判定、isPrepareActive 取 Supplier 裸令牌。）",
             ),
             // ---- 本元守卫自身 ----
             GuardEntry(

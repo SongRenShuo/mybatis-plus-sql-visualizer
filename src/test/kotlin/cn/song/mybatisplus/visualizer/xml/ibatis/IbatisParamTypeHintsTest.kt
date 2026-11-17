@@ -18,7 +18,7 @@ class IbatisParamTypeHintsTest {
     @Test
     fun `字符串族 jdbcType 必须要求引号`() {
         for (type in listOf("VARCHAR", "CHAR", "TEXT", "CLOB", "NVARCHAR", "LONGVARCHAR", "varchar")) {
-            val hint = IbatisParamModel.IbatisParamTypeHints.hintsFor(listOf(type)).single()
+            val hint = IbatisParamTypeHints.hintsFor(listOf(type)).single()
             assertEquals("$type 应恒引号", true, hint.quote)
             assertFalse("$type 不是时间族", hint.temporal)
         }
@@ -27,7 +27,7 @@ class IbatisParamTypeHintsTest {
     @Test
     fun `数值族 jdbcType 不得引号`() {
         for (type in listOf("INTEGER", "NUMERIC", "DECIMAL", "BIGINT", "DOUBLE", "FLOAT", "BIT", "SMALLINT")) {
-            val hint = IbatisParamModel.IbatisParamTypeHints.hintsFor(listOf(type)).single()
+            val hint = IbatisParamTypeHints.hintsFor(listOf(type)).single()
             assertEquals("$type 应裸渲染", false, hint.quote)
         }
     }
@@ -35,7 +35,7 @@ class IbatisParamTypeHintsTest {
     @Test
     fun `时间族 jdbcType 走 ANSI 类型字面量优先`() {
         for (type in listOf("DATE", "TIME", "TIMESTAMP", "DATETIME")) {
-            val hint = IbatisParamModel.IbatisParamTypeHints.hintsFor(listOf(type)).single()
+            val hint = IbatisParamTypeHints.hintsFor(listOf(type)).single()
             assertTrue("$type 应标 temporal", hint.temporal)
             assertEquals("$type 回退口径仍是引号", true, hint.quote)
         }
@@ -43,14 +43,14 @@ class IbatisParamTypeHintsTest {
 
     @Test
     fun `未知或缺失 jdbcType 时不产出提示（面板维持既有启发式）`() {
-        val hints = IbatisParamModel.IbatisParamTypeHints.hintsFor(listOf(null, "", "SOMETHING_ELSE"))
+        val hints = IbatisParamTypeHints.hintsFor(listOf(null, "", "SOMETHING_ELSE"))
         assertEquals(3, hints.size)
         hints.forEach { assertNull("未知类型不得猜", it.quote) }
     }
 
     @Test
     fun `jdbcType 序列与位点一一对应`() {
-        val hints = IbatisParamModel.IbatisParamTypeHints.hintsFor(listOf("VARCHAR", "INTEGER", "DATE"))
+        val hints = IbatisParamTypeHints.hintsFor(listOf("VARCHAR", "INTEGER", "DATE"))
         assertEquals(3, hints.size)
         assertEquals(true, hints[0].quote)
         assertEquals(false, hints[1].quote)

@@ -1,6 +1,6 @@
 package cn.song.mybatisplus.visualizer.xml.ibatis.fidelity
 
-import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisModel.IbatisStatementKind
+import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisStatementKind
 import cn.song.mybatisplus.visualizer.xml.ibatis.SqlMapParser
 import cn.song.mybatisplus.visualizer.xml.ibatis.SqlMapSqlRenderer
 import org.junit.Assert.assertEquals

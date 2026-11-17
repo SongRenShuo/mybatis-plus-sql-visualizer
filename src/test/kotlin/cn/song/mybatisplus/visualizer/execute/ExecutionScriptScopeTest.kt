@@ -1,9 +1,9 @@
 package cn.song.mybatisplus.visualizer.execute
 
-import cn.song.mybatisplus.visualizer.execute.ExecutionScriptScopeKt.shouldExecWholeScript
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import cn.song.mybatisplus.visualizer.execute.ExecutionScriptScopeKt.shouldExecWholeScript
 
 /**
  * 预览执行范围判定测试（T-DateLiteralBackfill R10）。
@@ -47,7 +47,7 @@ class ExecutionScriptScopeTest {
     @Test
     fun `调用方显式要求整批_直接透传`() {
         val two = "SET IDENTITY_INSERT t ON;\nINSERT INTO t VALUES (1);\nSET IDENTITY_INSERT t OFF;"
-        assertTrue(shouldExecWholeScript(two, true))
+        assertTrue(shouldExecWholeScript(two, requested = true))
     }
 
     @Test

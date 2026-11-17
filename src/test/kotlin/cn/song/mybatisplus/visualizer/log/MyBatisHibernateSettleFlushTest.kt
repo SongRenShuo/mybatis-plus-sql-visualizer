@@ -4,6 +4,7 @@ import com.intellij.execution.filters.Filter
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import cn.song.mybatisplus.visualizer.log.SqlLogConsoleBridgeKt.processConsoleLine
 
 /**
  * T-ConsoleFlushAlign 回归测试：MyBatis / Hibernate 解析器接入与 [JdbcTemplateLogParser.flushSettled]
@@ -16,9 +17,8 @@ import org.junit.Assert.assertTrue
  * - Hibernate：绑定行缺位（TRACE 关）时只等同线程下一条语句行闭合；截断尾「SQL 行已见、后继行未达」。
  *
  * 用例分层（构造手法照抄 [ConsoleSettleFlushTest]）：
- * - 纯逻辑（[SqlLogConsoleBridgeKt.processConsoleLine] 直驱 + 注入时钟）：settle 产出、阈值判别力、
- *   参数不被截断、冲刷后真实参数行到达不重复闭合、iBatis 参数组 Types 缺行静默产出 / 阈值内 Types
- *   不被冲撕；
+ * - 纯逻辑（[processConsoleLine] 直驱 + 注入时钟）：settle 产出、阈值判别力、参数不被截断、
+ *   冲刷后真实参数行到达不重复闭合、iBatis 参数组 Types 缺行静默产出 / 阈值内 Types 不被冲撕；
  * - 桥桩控制台（[SqlLogConsoleBridge.attachFilter]）：轮询静默冲刷产出且不重复。
  *
  * 反向验证：摘掉两解析器 flushSettled（方法体直返 0），settle 产出类用例必红。
@@ -80,28 +80,11 @@ class MyBatisHibernateSettleFlushTest : BasePlatformTestCase() {
 
     private fun newContext(): BridgeLineContext {
         val cfg = ParserConfig("Preparing:", "Parameters:", true, 20000)
-        return BridgeLineContext(
-            MyBatisLogParser(
-                LogSqlRestorer(),
-                cfg.sqlPrefix(), cfg.paramPrefix(), cfg.mixedPrefix(), cfg.maxParseLength(),
-                MyBatisLogParser.DEFAULT_SETTLE_MS, { fakeNow },
-            ),
-            HibernateLogParser(
-                LogSqlRestorer(),
-                cfg.hibernateSqlPrefix(), cfg.hibernateParamPrefix(), cfg.mixedPrefix(), cfg.maxParseLength(),
-                true, HibernateLogParser.DEFAULT_SETTLE_MS, { fakeNow },
-            ),
-            JdbcTemplateLogParser(
-                LogSqlRestorer(), cfg.jdbcEnabled(), cfg.maxParseLength(),
-                JdbcTemplateLogParser.DEFAULT_SETTLE_MS, { fakeNow },
-            ),
-            { cfg },
-            cfg.hibernateEnabled(),
-        )
+        return BridgeLineContext(MyBatisLogParser(null, cfg.sqlPrefix, cfg.paramPrefix, cfg.mixedPrefix, cfg.maxParseLength, 250L, { fakeNow }), HibernateLogParser(null, cfg.hibernateSqlPrefix, cfg.hibernateParamPrefix, cfg.mixedPrefix, cfg.maxParseLength, true, 250L, { fakeNow }), JdbcTemplateLogParser(null, cfg.jdbcEnabled, cfg.maxParseLength, 250L, { fakeNow }), { cfg }, cfg.hibernateEnabled)
     }
 
     private fun feed(ctx: BridgeLineContext, vararg lines: String): List<LogSqlEntry> =
-        lines.flatMap { SqlLogConsoleBridgeKt.processConsoleLine(it, ctx, null, {}) }
+        lines.flatMap { processConsoleLine(it, ctx, null, {}) }
 
     /** MyBatis 主场景：两条无参语句分属 exec-1/exec-2，MyBatis 不打 Parameters 行、线程此后不再有行。 */
     fun testMyBatis逐行冲刷_两线程各一条无参语句_静默后都产出() {
@@ -113,8 +96,8 @@ class MyBatisHibernateSettleFlushTest : BasePlatformTestCase() {
         fakeNow = MyBatisLogParser.DEFAULT_SETTLE_MS
         val out = feed(ctx, noiseLine)
         assertEquals("两条各自独占线程的无参语句都被静默冲刷交出", 2, out.size)
-        assertEquals("条目内容与顺序（分桶插入序）", listOf(mybatisSql1, mybatisSql2), out.map { it.rawSql() })
-        assertTrue("来源标记为 MYBATIS", out.all { it.source() == SqlSource.MYBATIS })
+        assertEquals("条目内容与顺序（分桶插入序）", listOf(mybatisSql1, mybatisSql2), out.map { it.rawSql })
+        assertTrue("来源标记为 MYBATIS", out.all { it.source == SqlSource.MYBATIS })
     }
 
     /** 参数行在阈值内到达 → 走既有即时闭合（分支 4），条目带参数；随后冲刷不重复产出。 */
@@ -124,8 +107,8 @@ class MyBatisHibernateSettleFlushTest : BasePlatformTestCase() {
         fakeNow = MyBatisLogParser.DEFAULT_SETTLE_MS / 2
         val out = feed(ctx, mybatisParams("nio-8086-exec-1", "7(Long)"))
         assertEquals("Parameters 行到达即闭合（原语义不变，不依赖冲刷）", 1, out.size)
-        assertEquals("7", out[0].params()[0].value())
-        assertTrue("还原 SQL 含参数值", out[0].restoredSql().contains("7"))
+        assertEquals("7", out[0].params[0].value)
+        assertTrue("还原 SQL 含参数值", out[0].restoredSql.contains("7"))
 
         fakeNow = MyBatisLogParser.DEFAULT_SETTLE_MS * 2
         assertTrue("桶已空，冲刷不得重复产出", feed(ctx, noiseLine).isEmpty())
@@ -139,8 +122,8 @@ class MyBatisHibernateSettleFlushTest : BasePlatformTestCase() {
         fakeNow = MyBatisLogParser.DEFAULT_SETTLE_MS + 500
         val out = feed(ctx, noiseLine)
         assertEquals("静默冲刷交出 1 条", 1, out.size)
-        assertEquals("参数未达 → 条目为未还原形态（不伪造参数）", 0, out[0].params().size)
-        assertTrue("rawSql 保留占位符", out[0].rawSql().contains("?"))
+        assertEquals("参数未达 → 条目为未还原形态（不伪造参数）", 0, out[0].params.size)
+        assertTrue("rawSql 保留占位符", out[0].rawSql.contains("?"))
 
         assertTrue("迟到的参数行不得再闭合出第二条", feed(ctx, mybatisParams("nio-8086-exec-1", "7(Long)")).isEmpty())
         assertEquals("累计仍 1 条（无重复）", 1, out.size + ctx.myBatisParser.takeEntries().size)
@@ -156,8 +139,8 @@ class MyBatisHibernateSettleFlushTest : BasePlatformTestCase() {
         fakeNow = MyBatisLogParser.DEFAULT_SETTLE_MS + 500
         val out = feed(ctx, noiseLine)
         assertEquals("挂起组静默后产出 1 条", 1, out.size)
-        assertTrue("来源标记为 IBATIS", out.all { it.source() == SqlSource.IBATIS })
-        assertEquals("参数保留（Types 缺行按无类型启发式渲染）", 2, out[0].params().size)
+        assertTrue("来源标记为 IBATIS", out.all { it.source == SqlSource.IBATIS })
+        assertEquals("参数保留（Types 缺行按无类型启发式渲染）", 2, out[0].params.size)
 
         assertTrue("迟到的 Types 行不得再闭合出第二条", feed(ctx, ibatisLine("{pstm-100021} Types: [java.lang.Long, java.lang.String]")).isEmpty())
         assertEquals("直调冲刷亦无重复", 0, ctx.myBatisParser.flushSettled())
@@ -171,7 +154,7 @@ class MyBatisHibernateSettleFlushTest : BasePlatformTestCase() {
         fakeNow = MyBatisLogParser.DEFAULT_SETTLE_MS / 2
         val out = feed(ctx, ibatisLine("{pstm-100022} Types: [java.lang.Long]"))
         assertEquals("Types 行到达即按位并入闭合", 1, out.size)
-        assertEquals("类型已并入（纯数字串不裸出）", "java.lang.Long", out[0].params()[0].type())
+        assertEquals("类型已并入（纯数字串不裸出）", "java.lang.Long", out[0].params[0].type)
 
         fakeNow = MyBatisLogParser.DEFAULT_SETTLE_MS * 2
         assertTrue("挂起组已清空，冲刷不得重复产出", feed(ctx, noiseLine).isEmpty())
@@ -187,8 +170,8 @@ class MyBatisHibernateSettleFlushTest : BasePlatformTestCase() {
         fakeNow = HibernateLogParser.DEFAULT_SETTLE_MS
         val out = feed(ctx, noiseLine)
         assertEquals("两条各自独占线程的语句都被静默冲刷交出", 2, out.size)
-        assertEquals("条目内容与顺序（分桶插入序）", listOf(hibernateSql1, hibernateSql2), out.map { it.rawSql() })
-        assertTrue("来源标记为 HIBERNATE", out.all { it.source() == SqlSource.HIBERNATE })
+        assertEquals("条目内容与顺序（分桶插入序）", listOf(hibernateSql1, hibernateSql2), out.map { it.rawSql })
+        assertTrue("来源标记为 HIBERNATE", out.all { it.source == SqlSource.HIBERNATE })
     }
 
     /** 绑定行在阈值内到达 → 追加参数（保持 COLLECTING）；条目随后由冲刷闭合，参数不丢。 */
@@ -201,9 +184,9 @@ class MyBatisHibernateSettleFlushTest : BasePlatformTestCase() {
         fakeNow = HibernateLogParser.DEFAULT_SETTLE_MS + 500
         val out = feed(ctx, noiseLine)
         assertEquals("冲刷闭合 1 条", 1, out.size)
-        assertEquals("绑定参数已随条目还原（未被冲刷截断）", 1, out[0].params().size)
-        assertEquals("7", out[0].params()[0].value())
-        assertTrue("还原 SQL 含参数值", out[0].restoredSql().contains("7"))
+        assertEquals("绑定参数已随条目还原（未被冲刷截断）", 1, out[0].params.size)
+        assertEquals("7", out[0].params[0].value)
+        assertTrue("还原 SQL 含参数值", out[0].restoredSql.contains("7"))
     }
 
     /** 冲刷交出零参条目后，迟到的真实绑定行不再重复闭合（无上下文丢弃，不产出第二条）。 */
@@ -213,7 +196,7 @@ class MyBatisHibernateSettleFlushTest : BasePlatformTestCase() {
         fakeNow = HibernateLogParser.DEFAULT_SETTLE_MS + 500
         val out = feed(ctx, noiseLine)
         assertEquals("静默冲刷交出 1 条（零参条目随 takeEntries 交出）", 1, out.size)
-        assertEquals("绑定行未达 → 条目零参（不伪造参数）", 0, out[0].params().size)
+        assertEquals("绑定行未达 → 条目零参（不伪造参数）", 0, out[0].params.size)
 
         assertTrue("迟到的绑定行不得再闭合出第二条", feed(ctx, hibernateBinding("nio-8086-exec-1", "binding parameter [1] as [INTEGER] - [7]")).isEmpty())
         assertEquals("累计仍 1 条（无重复）", 1, out.size + ctx.hibernateParser.takeEntries().size)
@@ -242,7 +225,7 @@ class MyBatisHibernateSettleFlushTest : BasePlatformTestCase() {
 
     /** MyBatis：应用安静下来（无参语句后一行都不再打）→ 轮询静默冲刷是唯一出路。 */
     fun testMyBatis桥轮询冲刷_应用安静后仍产出() {
-        val buffer = SqlLogEntryBuffer().apply { setDedupeEnabled(false) }
+        val buffer = SqlLogEntryBuffer().apply { dedupeEnabled = false }
         val (bridge, pair) = newBridgeFilter(buffer)
         val filter = pair.first
 
@@ -263,7 +246,7 @@ class MyBatisHibernateSettleFlushTest : BasePlatformTestCase() {
 
     /** Hibernate：应用安静下来（语句后无绑定行、无线程后继行）→ 轮询静默冲刷是唯一出路。 */
     fun testHibernate桥轮询冲刷_应用安静后仍产出() {
-        val buffer = SqlLogEntryBuffer().apply { setDedupeEnabled(false) }
+        val buffer = SqlLogEntryBuffer().apply { dedupeEnabled = false }
         val (bridge, pair) = newBridgeFilter(buffer)
         val filter = pair.first
 

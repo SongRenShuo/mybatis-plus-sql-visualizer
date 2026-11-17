@@ -250,16 +250,8 @@ class SettingsPanelSearchableGuardTest : BasePlatformTestCase() {
         panel.updateSection.installedLabel,
         // T-LocalUpdateDir：本地安装包目录的扫描/校验状态行（动态文案：目录合法性与包计数随输入变化，
         // 不是固定设置项；行标签 settings.update.localDir 已在搜索索引登记，搜索面不缺）
-        // k2j 移植注记：master 侧为 internal val 直取；k2j 生产侧该字段私有且尚未落 getLocalDirStatusLabel()
-        // 访问器（k2j 惯例见上方 versionLabel 等三件），守卫暂经反射取件保判据不缩水——生产补访问器后改回属性直取。
-        localDirStatusLabelOf(panel),
+        panel.updateSection.localDirStatusLabel,
     )
-
-    /** k2j 反射取件：UpdateSection 私有字段 localDirStatusLabel（生产缺访问器期间的过渡形态）。 */
-    private fun localDirStatusLabelOf(panel: PluginSettingsPanel): Component =
-        UpdateSection::class.java.getDeclaredField("localDirStatusLabel")
-            .apply { isAccessible = true }
-            .get(panel.updateSection) as Component
 
     // ------------------------------------------------------------------
     // 扫描与 bundle 反解

@@ -30,23 +30,25 @@ import java.io.File
  * 3. **全文件遍历**：`PsiTreeUtil` / `collectElements`（热路径只看「自身 + 父标签」，遍历属越界）。
  *
  * 自证（防空绿）：合成样本含禁用调用必须被抓出、干净样本必须放行——判定器退化成恒空即红。
- *
- * k2j 适配：生产树为 src/main/java 下的 .java 文件（master 侧为 .kt），扫描 marker 用 Java 声明形态。
  */
 class IbatisGutterHotPathTest {
 
     private val providerRelativePath =
-        "src/main/java/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlGutterLineMarkerProvider.java"
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlGutterLineMarkerProvider.kt"
 
     private val detectorRelativePath =
-        "src/main/java/cn/song/mybatisplus/visualizer/xml/XmlInlineSqlDetector.java"
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/xml/XmlInlineSqlDetector.kt"
 
     /**
      * T-Ibatis2Gap 券 B 扩面：两个跳转 provider 的扫描面。
      *
-     * 只扫**函数体**（`collectSlowLineMarkers` 慢趟门控 + `createMarker` 锚定判定），不做整文件扫描——
-     * 这两个文件里合法存在点击期目标解析（`IbatisJavaCallSites` 的词索引），整文件扫描会对着
-     * 点击路径误报。daemon 每趟真正跑的判定路径就是被扫的这两个函数。
+     * 只扫**函数体**（`collectSlowLineMarkers` 慢趟门控 + `createMarker` 锚定判定），不做整文件扫描。
+     * daemon 每趟真正跑的判定路径就是被扫的这两个函数。
+     *
+     * 禁用词表钉的是**裸平台 API**（`GlobalSearchScope`/`PsiSearchHelper`/`PsiTreeUtil`/`.resolve(`…）：
+     * T-IbatisXmlArrowCallerGate（2026-11-16）起，XML 侧 `createMarker` 会经
+     * `IbatisJavaCallSites.lookupCallSite(` 做一次**封装好的**调用点存在性查询（词索引，命中即缓存、
+     * 确认缺失即收回）——搜索能力只准从这一个收口走，仍不得在本 provider 里直接写搜索 API。
      */
     /**
      * 券 B 两个跳转 provider 被扫的 daemon 判定函数（慢趟门控 + 锚定判定）。
@@ -55,13 +57,13 @@ class IbatisGutterHotPathTest {
      * 两枚 marker），两份 provider 的函数名不再相同，故按文件分列；签名再漂移时提取失败会直接 error。
      */
     private val navProviderScanMarkers: Map<String, List<String>> = mapOf(
-        "src/main/java/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlToJavaLineMarkerProvider.java" to
-            listOf("public void collectSlowLineMarkers(", "createMarker(@NotNull"),
-        "src/main/java/cn/song/mybatisplus/visualizer/ui/gutter/IbatisJavaToXmlLineMarkerProvider.java" to
-            listOf("public void collectSlowLineMarkers(", "createMarkers(@NotNull"),
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlToJavaLineMarkerProvider.kt" to
+            listOf("override fun collectSlowLineMarkers", "private fun createMarker"),
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisJavaToXmlLineMarkerProvider.kt" to
+            listOf("override fun collectSlowLineMarkers", "private fun createMarkers"),
     )
 
-    /** 禁止 token（正则片段；判定前先剥注释，故 Javadoc 里点名这些 API 不会误报）。 */
+    /** 禁止 token（正则片段；判定前先剥注释，故 KDoc 里点名这些 API 不会误报）。 */
     private val forbiddenPatterns: List<Pair<String, String>> = listOf(
         "classpath/索引查询" to "IbatisXmlRecognizer",
         "classpath/索引查询" to "sqlMapClientOnClasspath",
@@ -70,7 +72,7 @@ class IbatisGutterHotPathTest {
         "classpath/索引查询" to "GlobalSearchScope",
         "classpath/索引查询" to "SearchScope",
         "引用解析" to "\\.resolve\\s*\\(",
-        // T-Ibatis2Gap 券 B：`PsiReferenceExpression` 的 **类型检查**（`instanceof` 结构判定）是慢趟门控的
+        // T-Ibatis2Gap 券 B：`PsiReferenceExpression` 的 **类型检查**（`as?` 结构判定）是慢趟门控的
         // 合法 O(1) 形态（Java→XML 跳转 provider 用它锚调用行）；被禁的是「引用解析」本身
         // （拿 PsiReference / .resolve 取目标），故用负向先行排除类型名，不放过真解析形态
         "引用解析" to "PsiReference(?!Expression)",
@@ -83,7 +85,7 @@ class IbatisGutterHotPathTest {
     @Test
     fun `provider热路径_getLineMarkerInfo零resolve零索引查询`() {
         val source = readMain(providerRelativePath)
-        val body = extractBracedBody(stripComments(source), "getLineMarkerInfo(@NotNull")
+        val body = extractBracedBody(stripComments(source), "override fun getLineMarkerInfo")
             ?: error("无法提取 getLineMarkerInfo 方法体（签名形态漂移？）——扫描面失效按红处理")
         assertNoForbidden("getLineMarkerInfo", body)
     }
@@ -91,7 +93,7 @@ class IbatisGutterHotPathTest {
     @Test
     fun `provider热路径_isStatementAnchor零resolve零索引查询`() {
         val source = readMain(providerRelativePath)
-        val body = extractBracedBody(stripComments(source), "isStatementAnchor(@NotNull")
+        val body = extractBracedBody(stripComments(source), "internal fun isStatementAnchor")
             ?: error("无法提取 isStatementAnchor 函数体（签名形态漂移？）——扫描面失效按红处理")
         assertNoForbidden("isStatementAnchor", body)
     }
@@ -100,7 +102,7 @@ class IbatisGutterHotPathTest {
     @Test
     fun `让位判定_isClaimedByKnownStructure零resolve零索引查询`() {
         val source = readMain(detectorRelativePath)
-        val body = extractBracedBody(stripComments(source), "isClaimedByKnownStructure(@NotNull")
+        val body = extractBracedBody(stripComments(source), "fun isClaimedByKnownStructure")
             ?: error("无法提取 isClaimedByKnownStructure 函数体（签名形态漂移？）——扫描面失效按红处理")
         assertNoForbidden("isClaimedByKnownStructure", body)
     }
@@ -130,12 +132,12 @@ class IbatisGutterHotPathTest {
     @Test
     fun `自证_券B慢趟判定_含项目级搜索样本必抓_干净样本放行`() {
         val dirty = """
-            @Override
-            public void collectSlowLineMarkers(
-                List<? extends PsiElement> elements,
-                Collection<? super LineMarkerInfo<?>> result) {
-                SearchScope scope = GlobalSearchScope.projectScope(element.getProject());
-                return;
+            override fun collectSlowLineMarkers(
+                elements: MutableList<out PsiElement>,
+                result: MutableCollection<in LineMarkerInfo<*>>,
+            ) {
+                val scope = GlobalSearchScope.projectScope(element.project)
+                return null
             }
         """.trimIndent()
         assertTrue(
@@ -143,22 +145,14 @@ class IbatisGutterHotPathTest {
             forbiddenHitsIn(dirty).isNotEmpty(),
         )
         val clean = """
-            @Override
-            public void collectSlowLineMarkers(
-                List<? extends PsiElement> elements,
-                Collection<? super LineMarkerInfo<?>> result) {
-                PluginSettings.State gutterState = null;
-                try {
-                    gutterState = PluginSettings.getInstance().getState();
-                } catch (Throwable t) {
-                    gutterState = null;
-                }
-                if (gutterState == null || !gutterState.getShowGutterIcon()) return;
-                if (!GutterGroups.enabledFor(getClass(), gutterState)) return;
-                for (PsiElement element : elements) {
-                    LineMarkerInfo<PsiElement> marker = createMarker(element);
-                    if (marker != null) result.add(marker);
-                }
+            override fun collectSlowLineMarkers(
+                elements: MutableList<out PsiElement>,
+                result: MutableCollection<in LineMarkerInfo<*>>,
+            ) {
+                val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
+                if (gutterState != null && !gutterState.showGutterIcon) return
+                if (!GutterGroups.enabledFor(javaClass, gutterState)) return
+                elements.mapNotNullTo(result, ::createMarker)
             }
         """.trimIndent()
         assertEquals(
@@ -189,9 +183,9 @@ class IbatisGutterHotPathTest {
     @Test
     fun `自证_含classpath探针的样本必须被抓出`() {
         val sample = """
-            public LineMarkerInfo<PsiElement> getLineMarkerInfo(PsiElement element) {
-                if (!IbatisXmlRecognizer.sqlMapClientOnClasspath(element.getProject())) return null;
-                return null;
+            override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? {
+                if (!IbatisXmlRecognizer.sqlMapClientOnClasspath(element.project)) return null
+                return null
             }
         """.trimIndent()
         assertTrue("判定器必须看得见 IbatisXmlRecognizer 调用（否则本守卫是空绿）", forbiddenHitsIn(sample).isNotEmpty())
@@ -200,8 +194,8 @@ class IbatisGutterHotPathTest {
     @Test
     fun `自证_含引用解析的样本必须被抓出`() {
         val sample = """
-            public LineMarkerInfo<PsiElement> getLineMarkerInfo(PsiElement element) {
-                return tag.references.firstOrNull()?.resolve()?.let { null };
+            override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? {
+                return tag.references.firstOrNull()?.resolve()?.let { null }
             }
         """.trimIndent()
         assertTrue("判定器必须看得见 references/resolve（否则本守卫是空绿）", forbiddenHitsIn(sample).size >= 2)
@@ -210,10 +204,10 @@ class IbatisGutterHotPathTest {
     @Test
     fun `自证_干净样本必须放行`() {
         val sample = """
-            public LineMarkerInfo<PsiElement> getLineMarkerInfo(PsiElement element) {
-                XmlTag tag = (element instanceof XmlToken t) ? (XmlTag) t.getParent() : null;
-                if (tag == null || !STATEMENT_TAGS.contains(tag.getName())) return null;
-                return null;
+            override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? {
+                val tag = (element as? XmlToken)?.parent as? XmlTag ?: return null
+                if (tag.name !in STATEMENT_TAGS || tag.parentTag?.name != SQL_MAP_TAG) return null
+                return null
             }
         """.trimIndent()
         assertEquals("零 resolve 形态不得被误报：${forbiddenHitsIn(sample)}", emptyList<String>(), forbiddenHitsIn(sample))
@@ -260,7 +254,7 @@ class IbatisGutterHotPathTest {
         return null
     }
 
-    /** 剥行注释与块注释（Javadoc 里点名 `IbatisXmlRecognizer` / `零 resolve` 属说明文字，不算违规）。 */
+    /** 剥行注释与块注释（KDoc 里点名 `IbatisXmlRecognizer` / `零 resolve` 属说明文字，不算违规）。 */
     private fun stripComments(source: String): String {
         val out = StringBuilder(source.length)
         var i = 0
@@ -283,9 +277,9 @@ class IbatisGutterHotPathTest {
     private fun repoRoot(): File {
         var dir = File(System.getProperty("user.dir")).absoluteFile
         repeat(6) {
-            if (File(dir, "src/main/java").isDirectory) return dir
+            if (File(dir, "src/main/kotlin").isDirectory) return dir
             dir = dir.parentFile ?: return@repeat
         }
-        error("未定位到仓库根（src/main/java 不存在于 user.dir 及上层）: " + System.getProperty("user.dir"))
+        error("未定位到仓库根（src/main/kotlin 不存在于 user.dir 及上层）: " + System.getProperty("user.dir"))
     }
 }

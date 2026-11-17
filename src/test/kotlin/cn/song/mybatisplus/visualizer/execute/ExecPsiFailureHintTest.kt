@@ -1,15 +1,16 @@
 package cn.song.mybatisplus.visualizer.execute
 
-import cn.song.mybatisplus.visualizer.execute.ExecPsiFailureHint.ExecPsiFailureCause
-import cn.song.mybatisplus.visualizer.execute.ExecPsiFailureHint.classifyExecPsiFailure
-import cn.song.mybatisplus.visualizer.execute.ExecPsiFailureHint.parseExecHintMessage
-import cn.song.mybatisplus.visualizer.execute.ExecPsiFailureHint.resolveTempFileHintCause
-import cn.song.mybatisplus.visualizer.execute.ExecPsiFailureHint.withExecHint
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import cn.song.mybatisplus.visualizer.execute.DataSourceSelector.TempFileHintRecord
+import cn.song.mybatisplus.visualizer.execute.ExecPsiFailureHintKt.ExecPsiFailureCause
+import cn.song.mybatisplus.visualizer.execute.ExecPsiFailureHintKt.classifyExecPsiFailure
+import cn.song.mybatisplus.visualizer.execute.ExecPsiFailureHintKt.parseExecHintMessage
+import cn.song.mybatisplus.visualizer.execute.ExecPsiFailureHintKt.resolveTempFileHintCause
+import cn.song.mybatisplus.visualizer.execute.ExecPsiFailureHintKt.withExecHint
 
 /**
  * T-ExecPsiGate 13.10：失败原因判定的表驱动用例。
@@ -131,7 +132,7 @@ class ExecPsiFailureHintTest {
      */
     @Test
     fun `预览兜底提示只出一次`() {
-        val gate = cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelEditorLifecycleKt.PreviewFallbackNoticeGate()
+        val gate = cn.song.mybatisplus.visualizer.ui.PreviewFallbackNoticeGate()
         assertTrue("首个调用方应当提示", gate.shouldNotify())
         assertFalse("第二次不应再提示", gate.shouldNotify())
         assertFalse("第三次同理", gate.shouldNotify())
@@ -150,7 +151,7 @@ class ExecPsiFailureHintTest {
     @Test
     fun `落点不许自动改写_提示不许引导改 gitignore`() {
         val execSource = java.io.File(
-            "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java",
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt",
         ).readText()
         for (banned in listOf("shouldRelocateExecToRoot", "notifyExecRootFallbackOnce")) {
             assertFalse(
@@ -159,8 +160,8 @@ class ExecPsiFailureHintTest {
             )
         }
         for (uiFile in listOf(
-            "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecutionKt.java",
-            "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelEditorLifecycleKt.java",
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt",
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelEditorLifecycle.kt",
         )) {
             val ui = java.io.File(uiFile).readText()
             assertFalse(
@@ -179,7 +180,7 @@ class ExecPsiFailureHintTest {
     @Test
     fun `成因按文案匹配_非 PSI 失败不借用`() {
         DataSourceSelector.lastTempFileHintRecord =
-            DataSourceSelector.TempFileHintRecord("findPsiAfterHeal", ExecPsiFailureCause.IGNORED_BY_VCS)
+            TempFileHintRecord("findPsiAfterHeal", ExecPsiFailureCause.IGNORED_BY_VCS)
         assertNull(
             "写出/刷新类失败与「为什么建不出 PSI」无关，不得借用该成因",
             DataSourceSelector.consumeTempFileHintFor("创建临时 SQL 文件失败：writeFile: boom"),
@@ -189,7 +190,7 @@ class ExecPsiFailureHintTest {
     @Test
     fun `成因可重复读取_同一次失败渲染两次都拿得到`() {
         DataSourceSelector.lastTempFileHintRecord =
-            DataSourceSelector.TempFileHintRecord("findPsiAfterHeal", ExecPsiFailureCause.IGNORED_BY_VCS)
+            TempFileHintRecord("findPsiAfterHeal", ExecPsiFailureCause.IGNORED_BY_VCS)
         val msg = "执行失败：创建临时 SQL 文件失败：findPsiAfterHeal: name=mpsql-exec.sql"
         assertEquals(
             ExecPsiFailureCause.IGNORED_BY_VCS,
@@ -221,7 +222,7 @@ class ExecPsiFailureHintTest {
                 ExecPsiFailureCause.IGNORED_BY_VCS,
                 resolveTempFileHintCause(message),
             )
-            assertFalse("展示文案里不得残留标记", parseExecHintMessage(message).text().contains("[hint="))
+            assertFalse("展示文案里不得残留标记", parseExecHintMessage(message).text.contains("[hint="))
         }
     }
 
@@ -230,10 +231,10 @@ class ExecPsiFailureHintTest {
         val plain = "findPsiAfterHeal: name=x"
         val marked = withExecHint(plain, ExecPsiFailureCause.DIR_NOT_INDEXED)
         val parsed = parseExecHintMessage(marked)
-        assertEquals(ExecPsiFailureCause.DIR_NOT_INDEXED, parsed.cause())
-        assertEquals("剥掉标记必须回到原文", plain, parsed.text())
+        assertEquals(ExecPsiFailureCause.DIR_NOT_INDEXED, parsed.cause)
+        assertEquals("剥掉标记必须回到原文", plain, parsed.text)
         // 无标记 ⇒ 原样返回，且不误判成因
-        assertNull(parseExecHintMessage(plain).cause())
+        assertNull(parseExecHintMessage(plain).cause)
         assertEquals(plain, withExecHint(plain, null))
     }
 
@@ -248,9 +249,9 @@ class ExecPsiFailureHintTest {
     @Test
     fun `执行回调不得绕过 showTempFileError`() {
         val src = java.io.File(
-            "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecutionKt.java",
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt",
         ).readText()
-        val bypass = Regex("""errorMsg\s*->\s*(p\.)?resultPanel\.showError""")
+        val bypass = Regex("""onError = \{\s*errorMsg ->\s*resultPanel\.showError""")
         assertFalse(
             "执行回调直连 resultPanel.showError 会丢掉临时文件失败的成因与蓝字入口",
             bypass.containsMatchIn(src),
@@ -260,8 +261,8 @@ class ExecPsiFailureHintTest {
     @Test
     fun `成因标记容错_未知枚举名不炸`() {
         val parsed = parseExecHintMessage("boom [hint=NOT_A_CAUSE]")
-        assertNull("未知成因名只能当没有，不许抛", parsed.cause())
-        assertEquals("boom", parsed.text())
+        assertNull("未知成因名只能当没有，不许抛", parsed.cause)
+        assertEquals("boom", parsed.text)
     }
 
     @Test

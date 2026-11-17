@@ -22,6 +22,9 @@ import java.io.File
  * 灵敏度自证：把引导句复制到第二块 → 第 1 条红；只留历史块、删掉最新块那行 → 第 2 条红。
  * 两条都在实施轮实测过（见 2026-10-30 提交记录）。
  *
+ * k2j 移植注：判定对象是 `gradle/plugin-change-notes.html`（构建产物文案，非 Kotlin/Java 源码），
+ * 两分支同文件同内容形态，无扫描根/后缀适配点。
+ *
  * ## 二、注解名不得写成裸 `@`
  *
  * 背景（用户 2026-11-10 报障「GitHub 发行版的 Contributors 每次多两个我不认识的」）：正文是从本文件
@@ -39,9 +42,6 @@ import java.io.File
  *  - `<code>@Query</code>` 有效且干净（实测输出无 user-mention）。
  *
  * 灵敏度自证：把任一处 `<code>@X</code>` 拆成裸 `@X` → 该用例红并点出行号。
- *
- * k2j 移植注：判定对象是 `gradle/plugin-change-notes.html`（构建产物文案，非 Kotlin/Java 源码），
- * 两分支同文件同内容形态，无扫描根/后缀适配点。
  */
 class ChangeNotesRatingLineGuardTest {
 

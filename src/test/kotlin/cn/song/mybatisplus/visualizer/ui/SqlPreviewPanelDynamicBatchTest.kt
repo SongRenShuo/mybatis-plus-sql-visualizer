@@ -52,6 +52,7 @@ import java.awt.datatransfer.DataFlavor
 import java.awt.datatransfer.StringSelection
 import java.awt.event.ActionEvent
 import javax.swing.KeyStroke
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelParamPanelKt.syncParamFieldText
 
 /**
  * SqlPreviewPanel dynamic-condition / batch-model / execute-sql tests (split from SqlPreviewPanelTest).
@@ -204,7 +205,7 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
                 """<isEqual property="status" compareValue="1">AND status = #status#</isEqual>""" +
                 """<isGreaterThan property="age" compareValue="18">AND age > #age#</isGreaterThan>""" +
                 """</dynamic></select></sqlMap>"""
-        return IbatisXmlPreviewService.preview(xml, "selectByCondition", "select", 0, null, null, null)
+        return IbatisXmlPreviewService.preview(xml, "selectByCondition")
     }
 
     fun testIbatisSelectAllRerendersSql() {
@@ -213,7 +214,7 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
         // iBatis 条件 id（`ibatis-cond-N`）在 ibatisParamModel 里，两份皆空 ⇒ enabledIds 一个没动，
         // rerender 收到的启用集与基线相同，SQL 逐字节不变。单框切换（listener 直写 enabledIds）不受影响。
         val panel = SqlPreviewPanel(project)
-        SqlPreviewPanelResultViewKt.showResult(panel, ibatisDynamicResult())
+        panel.showResult(ibatisDynamicResult())
         assertTrue("前置：四个 iBatis 条件行必须建成复选框", panel.conditionCheckboxForTest(3) != null)
         // 无参基线：条件整段跳过（无 WHERE）
         val baselineSql = panel.editorForTest()!!.document.text
@@ -237,18 +238,18 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
         // 单框切换路径回归钉：全不选后勾单个条件，WHERE 段同样实时出现（既有行为，不得被本次修复波及）
         panel.conditionCheckboxForTest(0)!!.doClick()
         assertTrue(panel.editorForTest()!!.document.text.contains("WHERE"))
-        SqlPreviewPanelSqlViewKt.clear(panel)
+        panel.clear()
     }
 
     fun testIbatisClearButtonClearsConditionValues() {
         // 清除按钮（iBatis 链）：填写条件值 → 点击清除 → 输入框清空、勾选态保留、SQL 恢复 ?。
         // 此前只枚举 Wrapper 条件值来源与 unresolvedParams（iBatis 基线两者皆空），点清除毫无反应。
         val panel = SqlPreviewPanel(project)
-        SqlPreviewPanelResultViewKt.showResult(panel, ibatisDynamicResult())
+        panel.showResult(ibatisDynamicResult())
         assertNotNull("清除按钮应存在", panel.clearButtonForTest())
         // 勾选 isNotNull(id) + 填值 42（程序化 setText 经监听链同步 paramValues 并同步重渲染）
         panel.conditionCheckboxForTest(0)!!.doClick()
-        SqlPreviewPanelParamPanelKt.syncParamFieldText(panel, "id", "42")
+        panel.syncParamFieldText("id", "42")
         assertTrue("填值后 SQL 应回填 42", panel.editorForTest()!!.document.text.contains("id = 42"))
 
         // 点击清除：值清空、勾选态保留、SQL 回 ? 形态
@@ -257,7 +258,7 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
         assertTrue("清除不影响勾选态", panel.conditionCheckboxForTest(0)!!.isSelected)
         assertTrue("清除后 SQL 应恢复 ?", panel.editorForTest()!!.document.text.contains("id = ?"))
         assertFalse(panel.editorForTest()!!.document.text.contains("id = 42"))
-        SqlPreviewPanelSqlViewKt.clear(panel)
+        panel.clear()
     }
 
     fun testClearButtonClearsConditionValues() {

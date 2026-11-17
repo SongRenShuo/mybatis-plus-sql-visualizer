@@ -1,7 +1,5 @@
 package cn.song.mybatisplus.visualizer.ui
 
-import cn.song.mybatisplus.visualizer.model.PreviewRerenderInput
-import cn.song.mybatisplus.visualizer.model.PreviewResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -12,7 +10,7 @@ import org.junit.Test
 /**
  * iBatis 预览服务端到端测试（T-Ibatis2Support 券 A 触发面三登记义务的第 3 条）。
  *
- * 形态照 `PagesXmlPreviewServiceTest`：**真实 iBatis XML 文本 → 预览 → 断言 [PreviewResult]
+ * 形态照 `PagesXmlPreviewServiceTest`：**真实 iBatis XML 文本 → 预览 → 断言 [cn.song.mybatisplus.visualizer.model.PreviewResult]
  * 的期望快照**（`?` 形态 + 参数名序列）——纯 JUnit 零平台依赖，可进 testFast 桶。
  *
  * 覆盖域（对齐验收项）：
@@ -22,16 +20,11 @@ import org.junit.Test
  * - `$x$` 直替与未替换的 `${prop}` 都置 `hasDollarRawSegments`（接既有注入闸门）；
  * - 声明 `parameterMap` 的非动态语句：`#` 不转 `?`（引擎守卫），面板不得报假参数表；
  * - 非 `<sqlMap>` / 定位失败 / 空体 → 不抛穿，返回带 warning 的空结果。
- *
- * K2J 适配：生产 {@link IbatisXmlPreviewService#preview} 仅 7 参规范形态 + 2 参旧重载（无
- * master 的 3 参 tagName 默认参形态）——测试 helper 直呼 7 参全参位置实参（tagName 缺省
- * "select"、ordinal 0、平台三参 null，与 master 默认值逐位对齐）；{@code PreviewRerenderInput}
- * 落 record 位置实参构造；{@code rerender} 为 Function1 回调字段，Kotlin invoke 直呼。
  */
 class IbatisXmlPreviewServiceTest {
 
     private fun preview(xml: String, id: String?, tagName: String? = "select") =
-        IbatisXmlPreviewService.preview(xml, id, tagName, 0, null, null, null)
+        IbatisXmlPreviewService.preview(xml, id, tagName, 0)
 
     // ------------------------------------------------------------------
     // 端到端正例：静态语句
@@ -78,7 +71,7 @@ class IbatisXmlPreviewServiceTest {
     fun `按标签名与序号定位_无id也能对齐`() {
         val xml =
             """<sqlMap><select id="first">SELECT 1 FROM T</select><select>SELECT 2 FROM T</select></sqlMap>"""
-        val result = IbatisXmlPreviewService.preview(xml, null, "select", 1, null, null, null)
+        val result = IbatisXmlPreviewService.preview(xml, null, "select", 1)
         assertEquals("SELECT 2 FROM T", result.sql)
     }
 
@@ -245,11 +238,11 @@ class IbatisXmlPreviewServiceTest {
         </sqlMap>
     """.trimIndent()
 
-    private fun condRow(result: PreviewResult, tagName: String) =
+    private fun condRow(result: cn.song.mybatisplus.visualizer.model.PreviewResult, tagName: String) =
         result.ibatisParamModel!!.conditionRows.first { it.kindTagName == tagName }
 
-    private fun rerender(result: PreviewResult, input: PreviewRerenderInput) =
-        result.rerender!!(input)
+    private fun rerender(result: cn.song.mybatisplus.visualizer.model.PreviewResult, input: cn.song.mybatisplus.visualizer.model.PreviewRerenderInput) =
+        result.getRerender()!!.invoke(input)
 
     @Test
     fun `券A_预览携带行清单与重渲染回调_基线与现状一致`() {
@@ -259,7 +252,7 @@ class IbatisXmlPreviewServiceTest {
         assertEquals("占位符行让用户看见语句需要哪些参数", listOf("id", "status", "age"), result.ibatisParamModel!!.placeholderRows.map { it.name })
         assertNotNull("重渲染回调必须在场", result.rerender)
         // 基线（无参）= 现状：条件整段跳过、零参数（多行夹具的空白归一是引擎行为，比对走 compactSql）
-        val baseline = rerender(result, PreviewRerenderInput())
+        val baseline = rerender(result, cn.song.mybatisplus.visualizer.model.PreviewRerenderInput())
         assertEquals("SELECT ID, USER_NAME, EMAIL, AGE, STATUS FROM T_USER ORDER BY ID", baseline.compactSql)
         assertEquals("基线零占位符", emptyList<String>(), baseline.unresolvedParams)
     }
@@ -270,7 +263,7 @@ class IbatisXmlPreviewServiceTest {
         val isEqual = condRow(result, "isEqual")
         val fresh = rerender(
             result,
-            PreviewRerenderInput(emptyMap(), setOf(isEqual.id), null),
+            cn.song.mybatisplus.visualizer.model.PreviewRerenderInput(emptyMap(), setOf(isEqual.id), emptyMap()),
         )
         assertTrue("SQL 出现 STATUS 段：${fresh.sql}", fresh.sql.contains("STATUS = ?"))
         assertEquals("参数 status（compareValue 兜底成立）", listOf("status"), fresh.unresolvedParams)
@@ -281,11 +274,7 @@ class IbatisXmlPreviewServiceTest {
         val result = preview(conditionXml, "selectByCondition")
         val fresh = rerender(
             result,
-            PreviewRerenderInput(
-                mapOf("id" to "5"),
-                setOf(condRow(result, "isNotNull").id, condRow(result, "isEqual").id),
-                null,
-            ),
+            cn.song.mybatisplus.visualizer.model.PreviewRerenderInput(mapOf("id" to "5"), setOf(condRow(result, "isNotNull").id, condRow(result, "isEqual").id), emptyMap()),
         )
         assertEquals(
             "两段拼接形态（首段 prepend 被 dynamic 的 WHERE 消费；空白归一后单空格）：${fresh.sql}",
@@ -300,11 +289,7 @@ class IbatisXmlPreviewServiceTest {
         val result = preview(conditionXml, "selectByCondition")
         val fresh = rerender(
             result,
-            PreviewRerenderInput(
-                mapOf("age" to "20"),
-                setOf(condRow(result, "isGreaterThan").id),
-                null,
-            ),
+            cn.song.mybatisplus.visualizer.model.PreviewRerenderInput(mapOf("age" to "20"), setOf(condRow(result, "isGreaterThan").id), emptyMap()),
         )
         assertTrue("AND AGE > ? 应出现：${fresh.sql}", fresh.sql.contains("AGE > ?"))
         assertEquals(listOf("age"), fresh.unresolvedParams)
@@ -315,11 +300,7 @@ class IbatisXmlPreviewServiceTest {
         val result = preview(conditionXml, "selectByCondition")
         val fresh = rerender(
             result,
-            PreviewRerenderInput(
-                mapOf("age" to "9"),
-                setOf(condRow(result, "isGreaterThan").id),
-                null,
-            ),
+            cn.song.mybatisplus.visualizer.model.PreviewRerenderInput(mapOf("age" to "9"), setOf(condRow(result, "isGreaterThan").id), emptyMap()),
         )
         assertFalse("age=9 不满足 >18（字典序 \"9\">\"18\" 会误判成立——本券要修的形态）：${fresh.sql}", fresh.sql.contains("AGE > ?"))
     }
@@ -329,7 +310,7 @@ class IbatisXmlPreviewServiceTest {
         val result = preview(conditionXml, "selectByIterate")
         val fresh = rerender(
             result,
-            PreviewRerenderInput(emptyMap(), emptySet(), mapOf("ids" to listOf("X1", "X2", "X3"))),
+            cn.song.mybatisplus.visualizer.model.PreviewRerenderInput(emptyMap(), emptySet(), mapOf("ids" to listOf("X1", "X2", "X3"))),
         )
         assertTrue("OR 链：${fresh.sql}", fresh.compactSql.contains("( ID = ? OR ID = ? OR ID = ? )"))
         assertEquals("参数名按列表长度生成 ids[0..2]", listOf("ids[0]", "ids[1]", "ids[2]"), fresh.unresolvedParams)
@@ -340,11 +321,7 @@ class IbatisXmlPreviewServiceTest {
         val result = preview(conditionXml, "selectByCondition")
         val fresh = rerender(
             result,
-            PreviewRerenderInput(
-                mapOf("username" to "ali"),
-                setOf(condRow(result, "isNotEmpty").id),
-                null,
-            ),
+            cn.song.mybatisplus.visualizer.model.PreviewRerenderInput(mapOf("username" to "ali"), setOf(condRow(result, "isNotEmpty").id), emptyMap()),
         )
         assertTrue("USER_NAME LIKE '%ali%'：${fresh.sql}", fresh.sql.contains("USER_NAME LIKE '%ali%'"))
         assertTrue("`\$x\$` 直替照常触发注入闸门", fresh.isHasDollarRawSegments())
@@ -359,7 +336,7 @@ class IbatisXmlPreviewServiceTest {
     @Test
     fun `券A_iterate留空_降级路径与现状一致`() {
         val result = preview(conditionXml, "selectByIterate")
-        val fresh = rerender(result, PreviewRerenderInput())
+        val fresh = rerender(result, cn.song.mybatisplus.visualizer.model.PreviewRerenderInput())
         assertEquals("iterate 取值非集合 ⇒ 语句级降级（顶层文本节点），与无参基线现状一致", "SELECT ID, USER_NAME FROM T_USER", fresh.sql.trim())
         assertNotNull("降级必须有可见告警", fresh.warning)
     }
@@ -369,7 +346,7 @@ class IbatisXmlPreviewServiceTest {
         val xml = "<sqlMap><select id=\"s\">SELECT A FROM T WHERE B = #b:VARCHAR#</select></sqlMap>"
         val result = preview(xml, "s")
         assertEquals(listOf("b"), result.ibatisParamModel!!.placeholderRows.map { it.name })
-        val fresh = rerender(result, PreviewRerenderInput(mapOf("b" to "X"), emptySet(), null))
+        val fresh = rerender(result, cn.song.mybatisplus.visualizer.model.PreviewRerenderInput(mapOf("b" to "X"), emptySet(), emptyMap()))
         assertEquals("静态路径渲染结果与基线一致（值只影响回填）", result.sql, fresh.sql)
     }
 
@@ -382,7 +359,7 @@ class IbatisXmlPreviewServiceTest {
         val result = preview(conditionXml, "selectByIterate")
         val fresh = rerender(
             result,
-            PreviewRerenderInput(emptyMap(), emptySet(), mapOf("ids" to listOf("X1", "X2", "X3"))),
+            cn.song.mybatisplus.visualizer.model.PreviewRerenderInput(emptyMap(), emptySet(), mapOf("ids" to listOf("X1", "X2", "X3"))),
         )
         assertNull("供值后 SQL 完整，告警必须为空（面板横幅据此恢复即隐藏）", fresh.warning)
         assertFalse(fresh.isInformationalWarning())
@@ -393,7 +370,7 @@ class IbatisXmlPreviewServiceTest {
         val result = preview(conditionXml, "selectByIterate")
         assertNotNull("基线告警仍在（不得吞掉）", result.warning)
         assertTrue("iterate 未供值 = 待填值提示，不是渲染失败", result.isInformationalWarning())
-        val baseline = rerender(result, PreviewRerenderInput())
+        val baseline = rerender(result, cn.song.mybatisplus.visualizer.model.PreviewRerenderInput())
         assertTrue("面板初始态同一语义", baseline.isInformationalWarning())
     }
 
@@ -625,7 +602,7 @@ class IbatisXmlPreviewServiceTest {
         val result = preview(insertSelectKeyPre, "insertUser", "insert")
         val fresh = rerender(
             result,
-            PreviewRerenderInput(mapOf("id" to "1", "username" to "a"), emptySet(), null),
+            cn.song.mybatisplus.visualizer.model.PreviewRerenderInput(mapOf("id" to "1", "username" to "a"), emptySet(), emptyMap()),
         )
         assertTrue("重渲染同样带 selectKey 块：${fresh.sql}", fresh.sql.contains("SEQ_USER_ID"))
         assertTrue(fresh.sql.contains("-- [selectKey type=pre → id"))
@@ -654,11 +631,7 @@ class IbatisXmlPreviewServiceTest {
         val result = preview(conditionXml, "selectByCondition")
         val fresh = rerender(
             result,
-            PreviewRerenderInput(
-                mapOf("status" to "1"),
-                setOf(condRow(result, "isEqual").id),
-                null,
-            ),
+            cn.song.mybatisplus.visualizer.model.PreviewRerenderInput(mapOf("status" to "1"), setOf(condRow(result, "isEqual").id), emptyMap()),
         )
         assertTrue("正常路径不得误报失败档", fresh.warning?.contains("重渲染失败") != true)
     }

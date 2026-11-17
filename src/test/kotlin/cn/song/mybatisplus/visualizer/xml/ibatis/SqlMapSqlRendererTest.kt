@@ -130,7 +130,7 @@ class SqlMapSqlRendererTest {
         assertEquals("SELECT * FROM T_ORG WHERE 1=1 AND A = ?", result.sql)
         assertEquals(1, result.dollarRawCount)
         assertEquals(listOf("T_ORG"), result.dollarRenderedValues)
-        assertTrue("含 $ 直替段必须可被注入闸门识别", result.hasDollarRawSegments())
+        assertTrue("含 $ 直替段必须可被注入闸门识别", result.isHasDollarRawSegments())
     }
 
     @Test
@@ -337,7 +337,7 @@ class SqlMapSqlRendererTest {
         val node = result.unrenderedNodes.single()
         assertEquals("未渲染的顶层节点是 <dynamic>", "dynamic", node.tagName)
         assertEquals("第 2 个顶层节点起未渲染（0 基）", 1, node.topNodeIndex)
-        assertEquals(SqlMapSqlRenderer.IbatisRenderFailureKind.ITERATE_NOT_COLLECTION, node.reason)
+        assertEquals(IbatisRenderFailureKind.ITERATE_NOT_COLLECTION, node.reason)
         assertEquals("需要填值的参数名要透出（UI 据此显示待填参数）", "ids", node.property)
 
         val degraded = result.warnings.single { it.contains("渲染降级") }
@@ -363,7 +363,7 @@ class SqlMapSqlRendererTest {
         val node = result.unrenderedNodes.single()
         assertEquals("iterate", node.tagName)
         assertEquals(1, node.topNodeIndex)
-        assertEquals(SqlMapSqlRenderer.IbatisRenderFailureKind.ITERATE_NOT_COLLECTION, node.reason)
+        assertEquals(IbatisRenderFailureKind.ITERATE_NOT_COLLECTION, node.reason)
         assertEquals("ids", node.property)
     }
 }

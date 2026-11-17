@@ -14,9 +14,6 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
  * - entityClass 根实体 + 嵌入属性 + `#{}` 框架占位符 → 转换出可执行 SQL；
  * - 实体不可解析 → 回退原文 + warning（不空白、不抛）；
  * - 原生 SQL 页（demo orderMaintain 形态）→ 保持 SQL，零行为变化。
- *
- * K2J 适配：k2j 树此前从未携带本件（历轮遗留盲区），按 A 件整件直取落位；
- * {@code PagesXmlPreviewService} 落类 + INSTANCE——preview 走实例方法（4 参全参形态生产已备）。
  */
 class PagesXmlHqlPreviewTest : BasePlatformTestCase() {
 
@@ -57,7 +54,7 @@ class PagesXmlHqlPreviewTest : BasePlatformTestCase() {
         myFixture.configureByText("pages.xml", xml)
         val file = myFixture.file
         val tag = PsiTreeUtil.findChildrenOfType(file, XmlTag::class.java).first { it.name == "maintainPage" }
-        return PagesXmlPreviewService.INSTANCE.preview(file.text, pageId, project, tag)
+        return PagesXmlPreviewService.preview(file.text, pageId, project, tag)
     }
 
     fun testHqlWithEntityClassAndFrameworkPlaceholder_isConverted() {

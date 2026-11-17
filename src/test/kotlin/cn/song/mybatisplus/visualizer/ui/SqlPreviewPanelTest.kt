@@ -493,15 +493,15 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         val longLabel = panel.paramRowLabelForTest(2)!!
         // T-ParamNameTruncation：同一场景所有参数行共享标签列宽（夹在 80~480 之间）
         val columnWidth = shortLabel.preferredSize.width
-        assertTrue("列宽应不小于下限 ${SqlPreviewPanelParamPanelKt.LABEL_COLUMN_MIN_PX}", columnWidth >= SqlPreviewPanelParamPanelKt.LABEL_COLUMN_MIN_PX)
-        assertTrue("列宽应不超过上限 ${SqlPreviewPanelParamPanelKt.LABEL_COLUMN_MAX_PX}", columnWidth <= SqlPreviewPanelParamPanelKt.LABEL_COLUMN_MAX_PX)
+        assertTrue("列宽应不小于下限 $LABEL_COLUMN_MIN_PX", columnWidth >= LABEL_COLUMN_MIN_PX)
+        assertTrue("列宽应不超过上限 $LABEL_COLUMN_MAX_PX", columnWidth <= LABEL_COLUMN_MAX_PX)
         assertEquals("标签列宽应统一", columnWidth, mediumLabel.preferredSize.width)
         assertEquals("标签列宽应统一", columnWidth, longLabel.preferredSize.width)
         // 超长名：截断显示（文本 != 全名）+ tooltip 全名（超过折行阈值走 HTML 折行，见下一条用例）
-        assertEquals("超长标签 tooltip 应为全名", SqlPreviewPanelParamPanelKt.wrappedLabelTooltip("#$long"), longLabel.toolTipText)
+        assertEquals("超长标签 tooltip 应为全名", wrappedLabelTooltip("#$long"), longLabel.toolTipText)
         assertNotEquals("超长标签应截断显示", "#$long", longLabel.text)
-        assertEquals("短参数 tooltip 恒为全名", "#$short", shortLabel.toolTipText)
-        assertEquals("中等长度参数 tooltip 恒为全名", "#$medium", mediumLabel.toolTipText)
+        assertNull("短参数不设 tooltip", shortLabel.toolTipText)
+        assertNull("中等长度参数不设 tooltip", mediumLabel.toolTipText)
         SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
@@ -510,29 +510,29 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         // 列宽改为跟随视口后，宽视口要能完整显示、窄视口回到中段省略且 tooltip 仍是全名。
         val panel = SqlPreviewPanel(project)
         val name = "productInfo.getDicProtocolType().getDeviceName()"
-        SqlPreviewPanelResultViewKt.showResult(panel, result(params = listOf(name)))
+        panel.showResult(result(params = listOf(name)))
         val label = panel.paramRowLabelForTest(0)!!
         val scroll = panel.paramScrollForTest()
         scroll.viewport.setSize(java.awt.Dimension(1000, 300))
-        SqlPreviewPanelParamPanelKt.relabelParamLabels(panel)
+        panel.relabelParamLabels()
         val wide = label.preferredSize.width
         assertEquals("宽视口列宽应容下全名，标签完整显示", "#$name", label.text)
         scroll.viewport.setSize(java.awt.Dimension(220, 300))
-        SqlPreviewPanelParamPanelKt.relabelParamLabels(panel)
+        panel.relabelParamLabels()
         val narrow = label.preferredSize.width
         assertTrue("窄视口列宽应收缩（$wide -> $narrow）", narrow < wide)
         assertNotEquals("窄视口应回到中段省略", "#$name", label.text)
         assertEquals("截断后 tooltip 仍为全名", "#$name", label.toolTipText)
-        SqlPreviewPanelSqlViewKt.clear(panel)
+        panel.clear()
     }
 
     fun testWrappedLabelTooltipWrapsLongName() {
         // T-ParamNameTruncation：超长名 tooltip 走 HTML 软折行——Swing 对纯文本 tooltip 不折行，
         // 单行超屏宽会被裁掉（「悬停也看不全」的成因面之一）
         val short = "#id"
-        assertEquals("短名 tooltip 原样返回", short, SqlPreviewPanelParamPanelKt.wrappedLabelTooltip(short))
+        assertEquals("短名 tooltip 原样返回", short, wrappedLabelTooltip(short))
         val long = "productInfo.getDicProtocolType().getDeviceName().getStatusName().getDetailInfo().getRemark()"
-        val wrapped = SqlPreviewPanelParamPanelKt.wrappedLabelTooltip(long)
+        val wrapped = wrappedLabelTooltip(long)
         assertTrue("超长名应转 HTML 折行：$wrapped", wrapped.startsWith("<html>"))
         val plain = wrapped.removePrefix("<html>").removeSuffix("</html>").replace("<br>", "")
         assertEquals("折行后必须保留全部字符", long, plain)
@@ -540,17 +540,16 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
 
     fun testParamLabelColumnWidthBudget() {
         // T-ParamNameTruncation：列宽预算纯函数——内容优先、视口比例封顶、未布局按兜底视口估算
-        // K2J 适配：paramLabelColumnWidth 的 insets 默认参在生产侧未落重载，显式传空表对齐 master 默认值
-        assertEquals(SqlPreviewPanelParamPanelKt.LABEL_COLUMN_MIN_PX, SqlPreviewPanelParamPanelKt.paramLabelColumnWidth(emptyList(), 1000, emptyList()))
-        assertEquals("内容窄时取内容宽度", 200, SqlPreviewPanelParamPanelKt.paramLabelColumnWidth(listOf(200), 1000, emptyList()))
-        assertEquals("视口 55% 封顶", 264, SqlPreviewPanelParamPanelKt.paramLabelColumnWidth(listOf(2000), 480, emptyList()))
-        assertEquals("低于下限抬到下限", SqlPreviewPanelParamPanelKt.LABEL_COLUMN_MIN_PX, SqlPreviewPanelParamPanelKt.paramLabelColumnWidth(listOf(10), 400, emptyList()))
+        assertEquals(LABEL_COLUMN_MIN_PX, paramLabelColumnWidth(emptyList(), 1000))
+        assertEquals("内容窄时取内容宽度", 200, paramLabelColumnWidth(listOf(200), 1000))
+        assertEquals("视口 55% 封顶", 264, paramLabelColumnWidth(listOf(2000), 480))
+        assertEquals("低于下限抬到下限", LABEL_COLUMN_MIN_PX, paramLabelColumnWidth(listOf(10), 400))
         assertEquals(
             "未布局（视口 0）按兜底视口估算",
-            (SqlPreviewPanelParamPanelKt.LABEL_COLUMN_FALLBACK_VIEWPORT_PX * SqlPreviewPanelParamPanelKt.LABEL_COLUMN_VIEWPORT_RATIO).toInt(),
-            SqlPreviewPanelParamPanelKt.paramLabelColumnWidth(listOf(9999), 0, emptyList()),
+            (LABEL_COLUMN_FALLBACK_VIEWPORT_PX * LABEL_COLUMN_VIEWPORT_RATIO).toInt(),
+            paramLabelColumnWidth(listOf(9999), 0),
         )
-        assertEquals("视口极宽时受硬上限约束", SqlPreviewPanelParamPanelKt.LABEL_COLUMN_MAX_PX, SqlPreviewPanelParamPanelKt.paramLabelColumnWidth(listOf(9999), 4000, emptyList()))
+        assertEquals("视口极宽时受硬上限约束", LABEL_COLUMN_MAX_PX, paramLabelColumnWidth(listOf(9999), 4000))
     }
 
     // ------------------------------------------------------------------

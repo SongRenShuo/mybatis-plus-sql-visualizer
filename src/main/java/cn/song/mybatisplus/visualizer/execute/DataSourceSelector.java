@@ -2841,6 +2841,65 @@ public final class DataSourceSelector {
         }
     }
 
+    /** T-ExecPsiGate：exec 侧方言映射的三态结果（供日志与测试判别，生产链只看「有没有映射上」）。 */
+    public enum ExecMappingOutcome {
+        APPLIED,
+        SKIPPED_NO_PSI,
+        NOT_APPLIED,
+    }
+
+    /** master 默认参（renderedDialectName=null, targetDs=null）的 5 参形态。 */
+    public static ExecMappingOutcome applyExecDialectMapping(Project project, VirtualFile vf, Logger LOG,
+                                                              Object targetLanguage, String targetId) {
+        return applyExecDialectMapping(project, vf, LOG, targetLanguage, targetId, null, null);
+    }
+
+    /** master 默认参（targetDs=null）的 6 参形态。 */
+    public static ExecMappingOutcome applyExecDialectMapping(Project project, VirtualFile vf, Logger LOG,
+                                                              Object targetLanguage, String targetId,
+                                                              String renderedDialectName) {
+        return applyExecDialectMapping(project, vf, LOG, targetLanguage, targetId, renderedDialectName, null);
+    }
+
+    /**
+     * T-ExecPsiGate 可建 PSI 门 + 映射落地（exec 链）；T-PreviewNoReindex S2：映射落在父目录。
+     */
+    public static ExecMappingOutcome applyExecDialectMapping(Project project, VirtualFile vf, Logger LOG,
+                                                              Object targetLanguage, String targetId,
+                                                              String renderedDialectName, Object targetDs) {
+        // T-PreviewNoReindex S2：方言映射落在父目录而不是文件本身（平台按层级继承，内容重写不再触发替换重算）
+        com.intellij.openapi.vfs.VirtualFile mappingTarget = vf.getParent() != null ? vf.getParent() : vf;
+        if (targetLanguage != null
+                && !cn.song.mybatisplus.visualizer.sql.SqlPsiCapabilityKt.canCreateSqlPsiFor(targetLanguage)) {
+            boolean cleared = false;
+            try {
+                cleared = DialectPreMapping.clearMapping(project, mappingTarget);
+            } catch (Throwable ignored) {
+                // getOrDefault(false)
+            }
+            dialectMappedVf = null;
+            dialectMappedLanguageId = null;
+            LOG.warn("[M36][T-ExecPsiGate] exec dialect mapping SKIPPED for " + vf.getName()
+                    + ": language '" + targetId + "' cannot build SQL PSI (rendered=" + renderedDialectName
+                    + "), historical mapping cleared=" + cleared + "; keep platform default dialect");
+            return ExecMappingOutcome.SKIPPED_NO_PSI;
+        }
+        boolean inProcessMapped = dialectMappedVf != null && dialectMappedVf.isValid()
+                && dialectMappedVf == mappingTarget && targetId.equals(dialectMappedLanguageId);
+        if (DialectPreMapping.ensureMapped(project, mappingTarget, targetLanguage, inProcessMapped)) {
+            dialectMappedVf = mappingTarget;
+            dialectMappedLanguageId = targetId;
+            LOG.info("[M36] dialect pre-mapped to " + targetId + " for " + vf.getName()
+                    + " (O-136 ds-dialect routing, ds="
+                    + (targetDs != null ? targetDs.getClass().getSimpleName() : null) + ")");
+            return ExecMappingOutcome.APPLIED;
+        }
+        LOG.warn("[M36][T-ExecPsiGate] exec dialect mapping NOT applied for " + vf.getName()
+                + ": target=" + targetId + ", rendered=" + renderedDialectName + ", mappedLang="
+                + DialectPreMapping.configuredLanguageId(project, vf));
+        return ExecMappingOutcome.NOT_APPLIED;
+    }
+
     /** 打开 Database 工具窗口（无配置数据源时引导用户，仅显式执行路径调用；预览路径静默）。 */
     public static void openDatabaseToolWindow(Project project) {
         try {

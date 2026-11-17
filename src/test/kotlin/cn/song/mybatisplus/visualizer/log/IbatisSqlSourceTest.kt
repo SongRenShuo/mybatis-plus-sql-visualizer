@@ -10,8 +10,11 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 import java.nio.file.Files
 import java.util.Base64
+import cn.song.mybatisplus.visualizer.log.LogEntryPreviewRecognizerKt.toPreviewResult
+import cn.song.mybatisplus.visualizer.log.SqlLogConsoleBridgeKt.processConsoleLine
 
 /**
  * `SqlSource.IBATIS` 枚举兑现与扩散面用例（T-Ibatis2Support 券 H）。
@@ -52,11 +55,11 @@ class IbatisSqlSourceTest {
         parser.closePending()
         val entries = parser.takeEntries()
         assertEquals("三行组应闭合为 1 条", 1, entries.size)
-        assertEquals(SqlSource.IBATIS, entries.single().source())
+        assertEquals(SqlSource.IBATIS, entries.single().source)
         // 与来源标记一并钉住既有还原行为（来源改动不得顺带打断参数还原）
         assertEquals(
             "INSERT INTO bs_rwd_group_info_his (ORGID, SORT_NO) VALUES ('00340025002200200006', 7)",
-            entries.single().restoredSql(),
+            entries.single().restoredSql,
         )
     }
 
@@ -68,21 +71,16 @@ class IbatisSqlSourceTest {
         parser.closePending()
         val entries = parser.takeEntries()
         assertEquals(1, entries.size)
-        assertEquals("MyBatis 桶闭合路径的来源不得被 iBatis 改动带偏", SqlSource.MYBATIS, entries.single().source())
+        assertEquals("MyBatis 桶闭合路径的来源不得被 iBatis 改动带偏", SqlSource.MYBATIS, entries.single().source)
     }
 
     // ---------- 2. 消费点：预览警告按来源分流 ----------
 
-    private fun unboundEntry(source: SqlSource) = LogSqlEntry(
-        "SELECT * FROM user WHERE id = ?",
-        "SELECT * FROM user WHERE id = ?",
-        emptyList(),
-        source,
-    )
+    private fun unboundEntry(source: SqlSource) = LogSqlEntry("SELECT * FROM user WHERE id = ?", "SELECT * FROM user WHERE id = ?", emptyList(), source)
 
     @Test
     fun `iBatis条目的未捕获绑定警告走iBatis文案`() {
-        val warning = LogEntryPreviewRecognizerKt.toPreviewResult(unboundEntry(SqlSource.IBATIS), false, false).warning
+        val warning = unboundEntry(SqlSource.IBATIS).toPreviewResult(false, false).warning
         assertEquals(
             MpSqlVisualizerBundle.message("log.preview.unresolvedNoBinding.ibatis"),
             warning,
@@ -94,11 +92,11 @@ class IbatisSqlSourceTest {
     @Test
     fun `其余来源的警告键不受影响`() {
         val generic = MpSqlVisualizerBundle.message("log.preview.unresolvedNoBinding")
-        assertEquals(generic, LogEntryPreviewRecognizerKt.toPreviewResult(unboundEntry(SqlSource.MYBATIS), false, false).warning)
-        assertEquals(generic, LogEntryPreviewRecognizerKt.toPreviewResult(unboundEntry(SqlSource.UNKNOWN), false, false).warning)
+        assertEquals(generic, unboundEntry(SqlSource.MYBATIS).toPreviewResult(false, false).warning)
+        assertEquals(generic, unboundEntry(SqlSource.UNKNOWN).toPreviewResult(false, false).warning)
         assertEquals(
             MpSqlVisualizerBundle.message("log.preview.unresolvedNoBinding.jdbc"),
-            LogEntryPreviewRecognizerKt.toPreviewResult(unboundEntry(SqlSource.JDBC), false, false).warning,
+            unboundEntry(SqlSource.JDBC).toPreviewResult(false, false).warning,
         )
     }
 
@@ -109,16 +107,11 @@ class IbatisSqlSourceTest {
 
     @Test
     fun `IBATIS条目落盘不带s键_与MYBATIS同口径读回UNKNOWN`() {
-        val entry = LogSqlEntry(
-            insertSql,
-            "INSERT INTO bs_rwd_group_info_his (ORGID, SORT_NO) VALUES ('00340025002200200006', 7)",
-            listOf(LogSqlParam("00340025002200200006", "java.lang.String"), LogSqlParam("7", "java.lang.Integer")),
-            SqlSource.IBATIS,
-        )
+        val entry = LogSqlEntry(insertSql, "INSERT INTO bs_rwd_group_info_his (ORGID, SORT_NO) VALUES ('00340025002200200006', 7)", listOf(LogSqlParam("00340025002200200006", "java.lang.String"), LogSqlParam("7", "java.lang.Integer")), SqlSource.IBATIS)
         val encoded = SqlLogParamCodec.encodeEntry(entry)
         val json = String(Base64.getDecoder().decode(encoded), Charsets.UTF_8)
         assertFalse("非 MCP/SHARDINGSPHERE 不落 s 键（写入集合不扩张）: $json", json.contains("\"s\""))
-        assertNull("读端回退 null → SqlLogFileReader 沿用 UNKNOWN", SqlLogParamCodec.decode(encoded)!!.source())
+        assertNull("读端回退 null → SqlLogFileReader 沿用 UNKNOWN", SqlLogParamCodec.decode(encoded)!!.source)
 
         // 真实回环：自动存档 → 历史读回
         val dir = Files.createTempDirectory("ibatis-source-").toFile().also { it.deleteOnExit() }
@@ -127,10 +120,10 @@ class IbatisSqlSourceTest {
         saver.write(entry)
         saver.close()
         val file = dir.listFiles { f -> f.extension == "sql" }!!.single()
-        val read = SqlLogFileReader.INSTANCE.readFromFile(file)
+        val read = SqlLogFileReader.readFromFile(file)
         assertEquals("回环条数一致", 1, read.size)
-        assertEquals("SQL 正文回环一致", entry.restoredSql(), read.single().restoredSql())
-        assertEquals("来源未落盘 → 读回 UNKNOWN（与 MYBATIS 现状同口径）", SqlSource.UNKNOWN, read.single().source())
+        assertEquals("SQL 正文回环一致", entry.restoredSql, read.single().restoredSql)
+        assertEquals("来源未落盘 → 读回 UNKNOWN（与 MYBATIS 现状同口径）", SqlSource.UNKNOWN, read.single().source)
     }
 
     @Test
@@ -138,54 +131,39 @@ class IbatisSqlSourceTest {
         // 旧条目/未来回滚场景：s 键里出现 MYBATIS 时必须仍解析到该枚举值（新增 IBATIS 不得打乱名字空间）
         assertEquals(
             SqlSource.MYBATIS,
-            SqlLogParamCodec.decode(payload("""{"r":"SELECT 1","p":[],"s":"MYBATIS"}"""))!!.source(),
+            SqlLogParamCodec.decode(payload("""{"r":"SELECT 1","p":[],"s":"MYBATIS"}"""))!!.source,
         )
         assertEquals(
             SqlSource.IBATIS,
-            SqlLogParamCodec.decode(payload("""{"r":"SELECT 1","p":[],"s":"IBATIS"}"""))!!.source(),
+            SqlLogParamCodec.decode(payload("""{"r":"SELECT 1","p":[],"s":"IBATIS"}"""))!!.source,
         )
         // 与本版本不认识的未来名字同口径：只丢来源标记，不丢整条
-        assertNull(SqlLogParamCodec.decode(payload("""{"r":"SELECT 1","p":[],"s":"SOME_FUTURE_SOURCE"}"""))!!.source())
+        assertNull(SqlLogParamCodec.decode(payload("""{"r":"SELECT 1","p":[],"s":"SOME_FUTURE_SOURCE"}"""))!!.source)
     }
 
     // ---------- 4. 去重键与来源枚举无关 ----------
 
-    private fun sameExecution(source: SqlSource) = LogSqlEntry(
-        insertSql,
-        "INSERT INTO bs_rwd_group_info_his (ORGID, SORT_NO) VALUES ('00340025002200200006', 7)",
-        listOf(LogSqlParam("00340025002200200006", "java.lang.String"), LogSqlParam("7", "java.lang.Integer")),
-        source,
-    )
+    private fun sameExecution(source: SqlSource) = LogSqlEntry(insertSql, "INSERT INTO bs_rwd_group_info_his (ORGID, SORT_NO) VALUES ('00340025002200200006', 7)", listOf(LogSqlParam("00340025002200200006", "java.lang.String"), LogSqlParam("7", "java.lang.Integer")), source)
 
     @Test
     fun `来源枚举不入去重键`() {
         assertEquals(
             "同一 SQL 的 dedupeKey 不得因来源枚举不同而分叉（键 = 还原后文本指纹）",
-            sameExecution(SqlSource.MYBATIS).dedupeKey(),
-            sameExecution(SqlSource.IBATIS).dedupeKey(),
+            sameExecution(SqlSource.MYBATIS).dedupeKey,
+            sameExecution(SqlSource.IBATIS).dedupeKey,
         )
         assertEquals(
-            sameExecution(SqlSource.IBATIS).dedupeKey(),
-            sameExecution(SqlSource.AGENT).dedupeKey(),
+            sameExecution(SqlSource.IBATIS).dedupeKey,
+            sameExecution(SqlSource.AGENT).dedupeKey,
         )
     }
 
     @Test
     fun `iBatis控制台条目与agent事件仍有跨通道折叠`() {
         val cfg = ParserConfig("Preparing:", "Parameters:", true, 20000)
-        val ctx = BridgeLineContext(
-            MyBatisLogParser(
-                cfg.sqlPrefix(), cfg.paramPrefix(), cfg.mixedPrefix(), cfg.maxParseLength(),
-            ),
-            HibernateLogParser(
-                cfg.hibernateSqlPrefix(), cfg.hibernateParamPrefix(), cfg.mixedPrefix(), cfg.maxParseLength(),
-            ),
-            JdbcTemplateLogParser(cfg.jdbcEnabled(), cfg.maxParseLength()),
-            { cfg },
-            cfg.hibernateEnabled(),
-        )
+        val ctx = BridgeLineContext(MyBatisLogParser(null, cfg.sqlPrefix, cfg.paramPrefix, cfg.mixedPrefix, cfg.maxParseLength, 250L, { System.currentTimeMillis() }), HibernateLogParser(null, cfg.hibernateSqlPrefix, cfg.hibernateParamPrefix, cfg.mixedPrefix, cfg.maxParseLength, true, 250L, { System.currentTimeMillis() }), JdbcTemplateLogParser(null, cfg.jdbcEnabled, cfg.maxParseLength, 250L, { System.currentTimeMillis() }), { cfg }, cfg.hibernateEnabled)
         SqlCaptureGate.paused.set(false)
-        val buffer = SqlLogEntryBuffer(20)
+        val buffer = SqlLogEntryBuffer(maxEntries = 20)
         // 布尔参数是两套还原器口径分叉的既有形态（控制台按 java.lang.Boolean 直出 true，agent 侧
         // 非数值型 → 加引号）——取它是为了让折叠走**跨通道兜底**分支（键分叉时才会走到），
         // 从而断言得到「同一次执行两份观测合并、不计 ⨉N 丢弃」这一跨通道语义。
@@ -196,39 +174,26 @@ class IbatisSqlSourceTest {
             "{pstm-100031} Types: [java.lang.Boolean]",
         )
         val consoleOut = mutableListOf<LogSqlEntry>()
-        lines.forEach { consoleOut += SqlLogConsoleBridgeKt.processConsoleLine(it, ctx, null, {}) }
-        val console = consoleOut.map { it.withCaptureProvenance(CaptureProvenance.CONSOLE_BRIDGE) }
+        lines.forEach { consoleOut += processConsoleLine(it, ctx, null, {}) }
+        val console = consoleOut.map { it.copy(captureProvenance = CaptureProvenance.CONSOLE_BRIDGE) }
         assertEquals("控制台侧确实产出一条 iBatis 条目", 1, console.size)
-        assertEquals(SqlSource.IBATIS, console.single().source())
+        assertEquals(SqlSource.IBATIS, console.single().source)
         console.forEach { buffer.addEntry(it) }
 
         // 同一次执行的 agent 侧观测（真实适配链：字段映射 + 参数还原）
         val agent = AgentEventAdapter.toEntry(
-            AgentEvent(
-                sql,
-                System.currentTimeMillis(),
-                7_000_000L,
-                1L,
-                null,
-                "src/main/java/com/example/RwdGroupService.java",
-                42,
-                "RwdGroupService#save",
-                null,
-                listOf(Triple(1, "true", "Boolean")),
-                "main",
-                "jdbc:mysql://localhost:3306/demo",
-            ),
+            AgentEvent(sql, System.currentTimeMillis(), 7_000_000L, 1L, null, "src/main/java/com/example/RwdGroupService.java", 42, "RwdGroupService#save", null, listOf(Triple(1, "true", "Boolean")), "main", "jdbc:mysql://localhost:3306/demo"),
         )
         assertNotEquals(
             "前提：两侧 dedupeKey 确实分叉（否则本用例只测到同键去重、测不到跨通道兜底）",
-            console.single().dedupeKey(),
-            agent.dedupeKey(),
+            console.single().dedupeKey,
+            agent.dedupeKey,
         )
         buffer.addEntry(agent)
 
         val rows = buffer.snapshot()
         assertEquals("同一次执行只留一行（来源枚举不阻断跨通道折叠）", 1, rows.size)
-        assertEquals("通道归并 MERGED", CaptureProvenance.MERGED, rows.single().captureProvenance())
+        assertEquals("通道归并 MERGED", CaptureProvenance.MERGED, rows.single().captureProvenance)
         assertEquals("跨通道折叠不计 ⨉N 徽章（不是重复丢弃）", 0, buffer.dedupeCountsSnapshot().size)
     }
 }

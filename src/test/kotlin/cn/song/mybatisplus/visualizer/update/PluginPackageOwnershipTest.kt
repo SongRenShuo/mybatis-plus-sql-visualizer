@@ -9,6 +9,7 @@ import org.junit.rules.TemporaryFolder
 import java.nio.file.Path
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import cn.song.mybatisplus.visualizer.update.PluginPackageOwnershipKt.Ownership
 
 /**
  * 归属与布局校验单测（T-LocalUpdateDir M2，计划 T2b）：这个通道只能装本插件。
@@ -86,12 +87,12 @@ class PluginPackageOwnershipTest {
     fun verify_standardIpgpLayout_isOurs() {
         val zip = tmp.root.toPath().resolve("ok.zip")
         buildIpgpZip(zip)
-        val result = PluginPackageOwnership.verify(zip)
-        assertTrue("标准布局应为 Ours：$result", result is PluginPackageOwnership.Ownership.Ours)
-        val ours = result as PluginPackageOwnership.Ownership.Ours
-        assertEquals("2026.11.12", ours.version())
-        assertEquals(243, ours.sinceBuildBaseline())
-        assertEquals(UpdateSource.INSTALL_DIR_NAME, ours.topLevelDir())
+        val result = PluginPackageOwnershipKt.verify(zip)
+        assertTrue("标准布局应为 Ours：$result", result.isOurs)
+        val ours = result
+        assertEquals("2026.11.12", ours.version)
+        assertEquals(243, ours.sinceBuildBaseline)
+        assertEquals(UpdateSource.INSTALL_DIR_NAME, ours.topLevelDir)
     }
 
     @Test
@@ -103,18 +104,18 @@ class PluginPackageOwnershipTest {
             zipOut.write(pluginXml(version = "2026.11.13").toByteArray())
             zipOut.closeEntry()
         }
-        val result = PluginPackageOwnership.verify(zip)
-        assertTrue("直属布局应为 Ours：$result", result is PluginPackageOwnership.Ownership.Ours)
-        assertEquals("2026.11.13", (result as PluginPackageOwnership.Ownership.Ours).version())
+        val result = PluginPackageOwnershipKt.verify(zip)
+        assertTrue("直属布局应为 Ours：$result", result.isOurs)
+        assertEquals("2026.11.13", result.version)
     }
 
     @Test
     fun verify_noSinceBuild_sinceBuildNull() {
         val zip = tmp.root.toPath().resolve("nosb.zip")
         buildIpgpZip(zip, xml = pluginXml(sinceBuild = null))
-        val result = PluginPackageOwnership.verify(zip)
-        assertTrue(result is PluginPackageOwnership.Ownership.Ours)
-        assertNull((result as PluginPackageOwnership.Ownership.Ours).sinceBuildBaseline())
+        val result = PluginPackageOwnershipKt.verify(zip)
+        assertTrue(result.isOurs)
+        assertNull(result.sinceBuildBaseline)
     }
 
     // ---------- G1：不是本插件 ----------
@@ -124,16 +125,16 @@ class PluginPackageOwnershipTest {
         // 反向夹具（G1 专用）：id 不符 + 布局干净——摘掉 G2 时本用例仍应独立由 G1 拦下
         val zip = tmp.root.toPath().resolve("foreign.zip")
         buildIpgpZip(zip, xml = pluginXml(id = "com.example.other-plugin"))
-        val result = PluginPackageOwnership.verify(zip)
-        assertTrue("别的插件应 NotOurs：$result", result is PluginPackageOwnership.Ownership.NotOurs)
-        assertTrue((result as PluginPackageOwnership.Ownership.NotOurs).reason().contains("com.example.other-plugin"))
+        val result = PluginPackageOwnershipKt.verify(zip)
+        assertTrue("别的插件应 NotOurs：$result", !result.isOurs && !result.isTainted)
+        assertTrue(result.reason.contains("com.example.other-plugin"))
     }
 
     @Test
     fun verify_corruptFile_notOurs() {
         val zip = tmp.root.toPath().resolve("corrupt.zip")
         java.nio.file.Files.write(zip, "not a zip".toByteArray())
-        assertTrue(PluginPackageOwnership.verify(zip) is PluginPackageOwnership.Ownership.NotOurs)
+        assertTrue(!PluginPackageOwnershipKt.verify(zip).isOurs && !PluginPackageOwnershipKt.verify(zip).isTainted)
     }
 
     @Test
@@ -144,7 +145,7 @@ class PluginPackageOwnershipTest {
             zipOut.write(ByteArray(0))
             zipOut.closeEntry()
         }
-        assertTrue(PluginPackageOwnership.verify(zip) is PluginPackageOwnership.Ownership.NotOurs)
+        assertTrue(!PluginPackageOwnershipKt.verify(zip).isOurs && !PluginPackageOwnershipKt.verify(zip).isTainted)
     }
 
     // ---------- G2：id 是本插件但包不可信 ----------
@@ -159,9 +160,9 @@ class PluginPackageOwnershipTest {
                 "evil-plugin/lib/evil.jar" to pluginXml(id = "com.evil.plugin", version = "1.0"),
             ),
         )
-        val result = PluginPackageOwnership.verify(zip)
-        assertTrue("夹带插件应 Tainted：$result", result is PluginPackageOwnership.Ownership.Tainted)
-        assertTrue((result as PluginPackageOwnership.Ownership.Tainted).reason().contains("多个顶层目录"))
+        val result = PluginPackageOwnershipKt.verify(zip)
+        assertTrue("夹带插件应 Tainted：$result", result.isTainted)
+        assertTrue(result.reason.contains("多个顶层目录"))
     }
 
     @Test
@@ -169,9 +170,9 @@ class PluginPackageOwnershipTest {
         // id 对但顶层目录名不是本插件目录：重启路径会装成别的名字/覆盖别的目录
         val zip = tmp.root.toPath().resolve("wrongname.zip")
         buildIpgpZip(zip, topDir = "evil-plugin")
-        val result = PluginPackageOwnership.verify(zip)
-        assertTrue(result is PluginPackageOwnership.Ownership.Tainted)
-        assertTrue((result as PluginPackageOwnership.Ownership.Tainted).reason().contains("evil-plugin"))
+        val result = PluginPackageOwnershipKt.verify(zip)
+        assertTrue(result.isTainted)
+        assertTrue(result.reason.contains("evil-plugin"))
     }
 
     @Test
@@ -179,8 +180,8 @@ class PluginPackageOwnershipTest {
         // 大小写变体：Windows 解包会互相覆盖，zip 条目大小写敏感——拦
         val zip = tmp.root.toPath().resolve("case.zip")
         buildIpgpZip(zip, topDir = UpdateSource.INSTALL_DIR_NAME.uppercase())
-        val result = PluginPackageOwnership.verify(zip)
-        assertTrue("大小写变体应 Tainted：$result", result is PluginPackageOwnership.Ownership.Tainted)
+        val result = PluginPackageOwnershipKt.verify(zip)
+        assertTrue("大小写变体应 Tainted：$result", result.isTainted)
     }
 
     @Test
@@ -188,35 +189,35 @@ class PluginPackageOwnershipTest {
         // 插件目录之外多出一个顶层文件：真实产物没有（P-9 实证），出现即不可信
         val zip = tmp.root.toPath().resolve("stray.zip")
         buildIpgpZip(zip, extraTopEntries = listOf("readme.txt"))
-        val result = PluginPackageOwnership.verify(zip)
-        assertTrue("顶层外来文件应 Tainted：$result", result is PluginPackageOwnership.Ownership.Tainted)
-        assertTrue((result as PluginPackageOwnership.Ownership.Tainted).reason().contains("readme.txt"))
+        val result = PluginPackageOwnershipKt.verify(zip)
+        assertTrue("顶层外来文件应 Tainted：$result", result.isTainted)
+        assertTrue(result.reason.contains("readme.txt"))
     }
 
     // ---------- since-build 解析与 D-5 判定（纯函数） ----------
 
     @Test
     fun parseSinceBuildBaseline_variants() {
-        assertEquals(243, PluginPackageOwnership.parseSinceBuildBaseline("""<idea-version since-build="243.*"/>"""))
-        assertEquals(253, PluginPackageOwnership.parseSinceBuildBaseline("""<idea-version since-build="253"/>"""))
+        assertEquals(243, PluginPackageOwnershipKt.parseSinceBuildBaseline("""<idea-version since-build="243.*"/>"""))
+        assertEquals(253, PluginPackageOwnershipKt.parseSinceBuildBaseline("""<idea-version since-build="253"/>"""))
         assertEquals(
             263,
-            PluginPackageOwnership.parseSinceBuildBaseline(
+            PluginPackageOwnershipKt.parseSinceBuildBaseline(
                 """<idea-version since-build="263.*" until-build=""/>""",
             ),
         )
-        assertNull(PluginPackageOwnership.parseSinceBuildBaseline("""<idea-plugin/>"""))
-        assertNull(PluginPackageOwnership.parseSinceBuildBaseline("""<idea-version since-build="abc"/>"""))
+        assertNull(PluginPackageOwnershipKt.parseSinceBuildBaseline("""<idea-plugin/>"""))
+        assertNull(PluginPackageOwnershipKt.parseSinceBuildBaseline("""<idea-version since-build="abc"/>"""))
     }
 
     @Test
     fun isSinceBuildIncompatible_matrix() {
         // (包要求, 当前 baseline)：包要求更高 → 不兼容；任一侧未知 → 不拦（D-5 口径）
-        assertTrue(PluginPackageOwnership.isSinceBuildIncompatible(253, 243))
-        assertTrue(PluginPackageOwnership.isSinceBuildIncompatible(244, 243))
-        assertEquals(false, PluginPackageOwnership.isSinceBuildIncompatible(243, 253))
-        assertEquals(false, PluginPackageOwnership.isSinceBuildIncompatible(243, 243))
-        assertEquals(false, PluginPackageOwnership.isSinceBuildIncompatible(null, 243))
-        assertEquals(false, PluginPackageOwnership.isSinceBuildIncompatible(253, null))
+        assertTrue(PluginPackageOwnershipKt.isSinceBuildIncompatible(253, 243))
+        assertTrue(PluginPackageOwnershipKt.isSinceBuildIncompatible(244, 243))
+        assertEquals(false, PluginPackageOwnershipKt.isSinceBuildIncompatible(243, 253))
+        assertEquals(false, PluginPackageOwnershipKt.isSinceBuildIncompatible(243, 243))
+        assertEquals(false, PluginPackageOwnershipKt.isSinceBuildIncompatible(null, 243))
+        assertEquals(false, PluginPackageOwnershipKt.isSinceBuildIncompatible(253, null))
     }
 }

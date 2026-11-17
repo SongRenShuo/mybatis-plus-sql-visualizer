@@ -3,7 +3,7 @@ package cn.song.mybatisplus.visualizer.ui
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.xml.XmlMapperParser
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
-import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel.XmlPreviewProfile
+import cn.song.mybatisplus.visualizer.xml.XmlPreviewProfile
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -69,18 +69,12 @@ class XmlPreviewBannerRefreshTest : BasePlatformTestCase() {
     private fun panelWithDeleteByExample(): SqlPreviewPanel {
         val parsed = XmlMapperParser().parse(deleteByExampleXml)
         val model = XmlPreviewModel.from(
-            parsed.statements().first { it.id == "deleteByExample" },
-            parsed.errors(),
-            emptySet(),
-            emptyMap(),
-            emptyMap(),
-            emptyMap(),
-            emptyMap(),
-            XmlPreviewProfile.MBG_EXAMPLE,
-            emptyMap(),
+            parsed.statements.first { it.id == "deleteByExample" },
+            parsed.errors,
+            profile = XmlPreviewProfile.MBG_EXAMPLE,
         )
         val panel = SqlPreviewPanel(project)
-        SqlPreviewPanelResultViewKt.showResult(panel, XmlPreviewService.INSTANCE.toResult(model, emptyList(), null, false))
+        panel.showResult(XmlPreviewService.toResult(model, includeRenderErrors = false))
         return panel
     }
 
@@ -131,7 +125,7 @@ class XmlPreviewBannerRefreshTest : BasePlatformTestCase() {
                 panel.currentWarning.orEmpty().contains("求值为空"),
             )
         } finally {
-            SqlPreviewPanelSqlViewKt.clear(panel)
+            panel.clear()
         }
     }
 
@@ -147,11 +141,11 @@ class XmlPreviewBannerRefreshTest : BasePlatformTestCase() {
             </mapper>
         """.trimIndent()
         val parsed = XmlMapperParser().parse(xml)
-        val model = XmlPreviewModel.from(parsed.statements().first { it.id == "deleteByExample" }, parsed.errors())
+        val model = XmlPreviewModel.from(parsed.statements.first { it.id == "deleteByExample" }, parsed.errors)
         val panel = SqlPreviewPanel(project)
         val banner = panel.degradationBannerForTest()
         try {
-            SqlPreviewPanelResultViewKt.showResult(panel, XmlPreviewService.INSTANCE.toResult(model, emptyList(), null, false))
+            panel.showResult(XmlPreviewService.toResult(model, includeRenderErrors = false))
             panel.renderSqlForTest()
             assertEquals("入场即无 WHERE 的全表写", FullTableWriteRisk.DELETE, panel.writeRiskWarning)
             assertEquals(
@@ -160,7 +154,7 @@ class XmlPreviewBannerRefreshTest : BasePlatformTestCase() {
                 banner.kindForTest(),
             )
         } finally {
-            SqlPreviewPanelSqlViewKt.clear(panel)
+            panel.clear()
         }
     }
 
@@ -187,17 +181,17 @@ class XmlPreviewBannerRefreshTest : BasePlatformTestCase() {
                 panel.xmlForEachInertLabels.single().second.isVisible,
             )
         } finally {
-            SqlPreviewPanelSqlViewKt.clear(panel)
+            panel.clear()
         }
     }
 
     // ---------------- 判据本身（纯函数） ----------------
 
     fun test展开判据_按frch映射前缀() {
-        assertTrue("有 __frch_listItem_0 ⇒ 展开过", SqlPreviewPanelParamPanelKt.forEachExpandedThisRound("listItem", listOf("__frch_listItem_0")))
-        assertFalse("无该前缀 ⇒ 本轮没走到", SqlPreviewPanelParamPanelKt.forEachExpandedThisRound("listItem", listOf("criterion.value")))
-        assertTrue("item 未知时保守判展开（不误报）", SqlPreviewPanelParamPanelKt.forEachExpandedThisRound(null, emptyList()))
-        assertTrue("item 空白同样保守", SqlPreviewPanelParamPanelKt.forEachExpandedThisRound("   ", emptyList()))
-        assertFalse("前缀必须整词（listItemX 不算）", SqlPreviewPanelParamPanelKt.forEachExpandedThisRound("listItem", listOf("__frch_listItemX_0")))
+        assertTrue("有 __frch_listItem_0 ⇒ 展开过", forEachExpandedThisRound("listItem", listOf("__frch_listItem_0")))
+        assertFalse("无该前缀 ⇒ 本轮没走到", forEachExpandedThisRound("listItem", listOf("criterion.value")))
+        assertTrue("item 未知时保守判展开（不误报）", forEachExpandedThisRound(null, emptyList()))
+        assertTrue("item 空白同样保守", forEachExpandedThisRound("   ", emptyList()))
+        assertFalse("前缀必须整词（listItemX 不算）", forEachExpandedThisRound("listItem", listOf("__frch_listItemX_0")))
     }
 }

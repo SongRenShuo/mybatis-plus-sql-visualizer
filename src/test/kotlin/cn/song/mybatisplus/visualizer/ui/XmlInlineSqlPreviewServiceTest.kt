@@ -94,6 +94,38 @@ class XmlInlineSqlPreviewServiceTest : BasePlatformTestCase() {
     }
 
     // ------------------------------------------------------------------
+    // T-PagesHql 泛化：无 type、无 entityClass 的载体标签（<dataValue> 形态）
+    // ------------------------------------------------------------------
+
+    fun test无type无entityClass_HQL按根实体自动识别并转换() {
+        myFixture.addFileToProject(
+            "WmsQuality.java",
+            """
+            @javax.persistence.Entity
+            @javax.persistence.Table(name = "wms_quality")
+            public class WmsQuality {
+                @javax.persistence.Id
+                private Long id;
+                private String code;
+            }
+            """.trimIndent(),
+        )
+        xmlFile("<root><dataValue><![CDATA[SELECT qc.code FROM WmsQuality qc]]></dataValue></root>")
+        val result = XmlInlineSqlPreviewService.preview(project, tagNamed("dataValue"))
+        assertEquals("应自动识别为 HQL", SourceLanguage.HQL, result.sourceLanguage)
+        assertTrue("实体名应映射为表名，实际：${result.sql}", result.sql.contains("wms_quality"))
+        assertEquals("原文应保留", "SELECT qc.code FROM WmsQuality qc", result.originalSql)
+    }
+
+    fun test无type无entityClass_原生SQL保持直显() {
+        xmlFile("<root><dataValue><![CDATA[SELECT * FROM t_order]]></dataValue></root>")
+        val result = XmlInlineSqlPreviewService.preview(project, tagNamed("dataValue"))
+        assertEquals("根名不可解析为实体 → 保持 SQL", SourceLanguage.SQL, result.sourceLanguage)
+        assertNull(result.originalSql)
+        assertEquals("SELECT * FROM t_order", result.sql)
+    }
+
+    // ------------------------------------------------------------------
     // 券 0（T-Ibatis2SlowFix）：同步预览不得付「@Entity(name) 反查」全扫代价
     // ------------------------------------------------------------------
 
@@ -110,7 +142,7 @@ class XmlInlineSqlPreviewServiceTest : BasePlatformTestCase() {
         myFixture.addFileToProject("Foo.java", "@jakarta.persistence.Entity(name=\"Shared\") class Foo {}")
         xmlFile("<root><dataValue><![CDATA[SELECT o.id FROM t_order o WHERE o.id = ?]]></dataValue></root>")
         EntityAliasSweep.resetScanCountForTest()
-        val result = XmlInlineSqlPreviewService.INSTANCE.preview(project, tagNamed("dataValue"))
+        val result = XmlInlineSqlPreviewService.preview(project, tagNamed("dataValue"))
         assertEquals("物理表名不可解析为实体 → 保持 SQL", SourceLanguage.SQL, result.sourceLanguage)
         assertEquals("同步预览不得触发别名反查全扫", 0, EntityAliasSweep.scanCountForTest())
     }

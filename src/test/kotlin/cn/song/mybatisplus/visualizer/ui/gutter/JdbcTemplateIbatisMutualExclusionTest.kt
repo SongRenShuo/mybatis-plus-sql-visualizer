@@ -34,9 +34,6 @@ import org.junit.Assert.assertTrue
  * `IbatisCallYieldGate.isIbatisStatementIdCall` 直接 return false）→ [testiBatis调用行_JdbcTemplate让位] 必红
  * （DAO 调用行重新出现 1 枚 JdbcTemplate 图标）。补丁见 `dev-support/reverse-probes/`。
  *
- * k2j 适配：`IbatisCallYieldGate` 是 `JdbcTemplateSqlGutterLineMarkerProvider` 的嵌套类（master 侧为
- * 独立 .kt 文件），判定直调须用嵌套限定名 `JdbcTemplateSqlGutterLineMarkerProvider.IbatisCallYieldGate`。
- *
  * ## 对照组（证明「让位」不是把 JDBC 通道整体关掉）
  *
  * 普通 Java 类上的 `queryForList("SELECT … WHERE ID = ?")` / `execute("DELETE FROM T_USER")`
@@ -49,7 +46,7 @@ class JdbcTemplateIbatisMutualExclusionTest : BasePlatformTestCase() {
 
     override fun setUp() {
         super.setUp()
-        IbatisXmlStatementTargets.clearCachesForTest()
+        IbatisXmlStatementTargets.resetPerfLogForTest()
         PluginSettings.getInstance().state.showGutterIcon = true
         PluginSettings.getInstance().state.jdbcSqlPreviewEnabled = true
         PluginSettings.getInstance().state.gutterGroupMapperXml = true
@@ -58,7 +55,7 @@ class JdbcTemplateIbatisMutualExclusionTest : BasePlatformTestCase() {
 
     override fun tearDown() {
         try {
-            IbatisXmlStatementTargets.clearCachesForTest()
+            IbatisXmlStatementTargets.resetPerfLogForTest()
             PluginSettings.getInstance().state.showGutterIcon = true
             PluginSettings.getInstance().state.jdbcSqlPreviewEnabled = true
             PluginSettings.getInstance().state.gutterGroupMapperXml = true
@@ -210,13 +207,13 @@ class JdbcTemplateIbatisMutualExclusionTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     fun test让位判据_标识符形态与SQL文本() {
-        assertTrue("id 形态", JdbcTemplateSqlGutterLineMarkerProvider.IbatisCallYieldGate.isStatementIdShape("selectById"))
-        assertTrue("ns.id 形态", JdbcTemplateSqlGutterLineMarkerProvider.IbatisCallYieldGate.isStatementIdShape("User.selectById"))
-        assertTrue("带下划线/美元符/数字", JdbcTemplateSqlGutterLineMarkerProvider.IbatisCallYieldGate.isStatementIdShape("app_user.get_by_$1"))
-        assertTrue("SQL 文本不命中", !JdbcTemplateSqlGutterLineMarkerProvider.IbatisCallYieldGate.isStatementIdShape("SELECT ID FROM T_USER WHERE ID = ?"))
-        assertTrue("带空格不命中", !JdbcTemplateSqlGutterLineMarkerProvider.IbatisCallYieldGate.isStatementIdShape("User.select ById"))
-        assertTrue("含括号不命中", !JdbcTemplateSqlGutterLineMarkerProvider.IbatisCallYieldGate.isStatementIdShape("fn(x)"))
-        assertTrue("空串不命中", !JdbcTemplateSqlGutterLineMarkerProvider.IbatisCallYieldGate.isStatementIdShape("   "))
-        assertTrue("以数字开头不命中", !JdbcTemplateSqlGutterLineMarkerProvider.IbatisCallYieldGate.isStatementIdShape("1abc"))
+        assertTrue("id 形态", IbatisCallYieldGate.isStatementIdShape("selectById"))
+        assertTrue("ns.id 形态", IbatisCallYieldGate.isStatementIdShape("User.selectById"))
+        assertTrue("带下划线/美元符/数字", IbatisCallYieldGate.isStatementIdShape("app_user.get_by_$1"))
+        assertTrue("SQL 文本不命中", !IbatisCallYieldGate.isStatementIdShape("SELECT ID FROM T_USER WHERE ID = ?"))
+        assertTrue("带空格不命中", !IbatisCallYieldGate.isStatementIdShape("User.select ById"))
+        assertTrue("含括号不命中", !IbatisCallYieldGate.isStatementIdShape("fn(x)"))
+        assertTrue("空串不命中", !IbatisCallYieldGate.isStatementIdShape("   "))
+        assertTrue("以数字开头不命中", !IbatisCallYieldGate.isStatementIdShape("1abc"))
     }
 }

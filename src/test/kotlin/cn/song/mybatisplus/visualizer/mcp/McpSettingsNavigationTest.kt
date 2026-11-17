@@ -12,7 +12,7 @@ import java.io.File
  * `intellij.mcpserver.frontend` 并换包名，写死的旧 FQN `Class.forName` 恒 null，设置页跳转被
  * 误报成「需要 IDEA 2025.2+」。本守卫钉死两件事：
  *  1. 候选链必须同时覆盖「263 新形态」与「262/更早形态」，且新形态在前；
- *  2. 设置页类名只允许出现在 [McpSettingsNavigationKt] 的候选链里——别处再写一次
+ *  2. 设置页类名只允许出现在 [McpSettingsNavigation.kt] 的候选链里——别处再写一次
  *     `Class.forName("com.intellij.mcpserver…McpServerSettingsConfigurable")` 就是复发形态。
  *
  * 运行时行为（真机能不能选中目标页）本类不覆盖：无 platform 服务时构造不出 Project，
@@ -23,10 +23,10 @@ class McpSettingsNavigationTest {
     private fun repoRoot(): File {
         var dir = File(System.getProperty("user.dir")).absoluteFile
         repeat(6) {
-            if (File(dir, "src/main/java").isDirectory) return dir
+            if (File(dir, "src/main/kotlin").isDirectory) return dir
             dir = dir.parentFile ?: return@repeat
         }
-        error("未定位到仓库根（src/main/java 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
+        error("未定位到仓库根（src/main/kotlin 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
     }
 
     private val newFormFqn = "com.intellij.mcpserver.frontend.settings.McpServerSettingsConfigurable"
@@ -34,7 +34,7 @@ class McpSettingsNavigationTest {
 
     @Test
     fun `候选链覆盖新旧两形态且新形态在前`() {
-        val candidates = McpSettingsNavigationKt.MCP_SETTINGS_CONFIGURABLE_CLASSES
+        val candidates = MCP_SETTINGS_CONFIGURABLE_CLASSES
         assertEquals(
             "候选链首项必须是 263 新形态（intellij.mcpserver.frontend 模块）——排在旧形态之后时，" +
                 "高版本会先撞空一次旧 FQN 才回落，探测日志与真机排障都会指向错的类",
@@ -57,15 +57,15 @@ class McpSettingsNavigationTest {
             "页面 id 是平台对外寻址契约（263 插件描述 id=\"com.intellij.mcpserver.settings\"）；" +
                 "改它必须先改 263 安装内 mcpserver-plugin.jar 的 META-INF/plugin.xml 证据注释",
             "com.intellij.mcpserver.settings",
-            McpSettingsNavigationKt.MCP_SETTINGS_PAGE_ID,
+            MCP_SETTINGS_PAGE_ID,
         )
     }
 
     @Test
     fun `设置页类名只允许出现在候选链文件`() {
-        val navigationFile = "src/main/java/cn/song/mybatisplus/visualizer/mcp/McpSettingsNavigationKt.java"
-        val offenders = repoRoot().resolve("src/main/java").walkTopDown()
-            .filter { it.isFile && it.extension == "java" }
+        val navigationFile = "src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpSettingsNavigation.kt"
+        val offenders = repoRoot().resolve("src/main/kotlin").walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
             .map { it.relativeTo(repoRoot()).path.replace('\\', '/') to it.readText() }
             .filter { (path, text) ->
                 path != navigationFile && (text.contains(newFormFqn) || text.contains(legacyFormFqn))
@@ -74,7 +74,7 @@ class McpSettingsNavigationTest {
             .toList()
         assertTrue(
             "设置页类名出现在 $navigationFile 之外：$offenders。平台搬动设置页（263 已发生一次）时这些" +
-                "写死点会静默失配并把用户引向「版本不够」——一律改调 McpSettingsNavigationKt.openMcpServerSettingsPage(...)",
+                "写死点会静默失配并把用户引向「版本不够」——一律改调 openMcpServerSettingsPage(...)",
             offenders.isEmpty(),
         )
     }

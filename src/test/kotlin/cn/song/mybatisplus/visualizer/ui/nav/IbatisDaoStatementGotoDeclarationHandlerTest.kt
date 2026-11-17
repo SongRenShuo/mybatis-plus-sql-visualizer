@@ -30,12 +30,12 @@ class IbatisDaoStatementGotoDeclarationHandlerTest : BasePlatformTestCase() {
 
     override fun setUp() {
         super.setUp()
-        IbatisXmlStatementTargets.clearCachesForTest()
+        IbatisXmlStatementTargets.resetPerfLogForTest()
     }
 
     override fun tearDown() {
         try {
-            IbatisXmlStatementTargets.clearCachesForTest()
+            IbatisXmlStatementTargets.resetPerfLogForTest()
         } finally {
             super.tearDown()
         }
@@ -112,7 +112,7 @@ class IbatisDaoStatementGotoDeclarationHandlerTest : BasePlatformTestCase() {
 
     /** handler 不读 editor/offset（纯元素形态判定），传 null 即可。 */
     private fun targets(element: PsiElement): List<PsiElement> =
-        handler.getGotoDeclarationTargets(element, element.textOffset, null)?.toList()?.filterNotNull().orEmpty()
+        handler.getGotoDeclarationTargets(element, element.textOffset, null)?.toList().orEmpty()
 
     private fun assertAnchor(target: PsiElement, expectedId: String, expectedFile: String) {
         assertTrue("落点应是 id 属性值元素，实际 ${target.javaClass.name}", target is XmlAttributeValue)
@@ -257,24 +257,23 @@ class IbatisDaoStatementGotoDeclarationHandlerTest : BasePlatformTestCase() {
     }
 
     // ------------------------------------------------------------------
-    // 缓存：裸 id 重复解析不重复实扫（热路径零索引查询的测试侧读数）
+    // 裸 id 重复解析：结果稳定（无 TTL/清单代抖动）
     // ------------------------------------------------------------------
 
-    fun testF2_裸id重复解析_命中memo不重复实扫() {
+    /**
+     * T-IbatisGutterPerf P1：清单状态机（TTL/清单代/单槽 memo）已被自定义索引替换，
+     * 旧的 `indexScanCount` / `statementScanCount` 计数缝随之退役。仍然有意义的行为判据是
+     * **重复解析必须给出同一落点**——索引查询无负缓存、无清单代抖动，就不会出现
+     * 「这一刻查得到、下一刻查不到」的交替（用户 2026-11-16 报障的形态）。
+     */
+    fun testF2_裸id重复解析_结果稳定同锚() {
         addSqlMap("<select id=\"selectBare\">SELECT 1</select>")
         val java = addDao()
-        IbatisXmlStatementTargets.INDEX_SCAN_COUNT.set(0)
-        IbatisXmlStatementTargets.STATEMENT_SCAN_COUNT.set(0)
-
         val element = methodNameOf(callOf(java, "selectBare"))
-        assertEquals(1, targets(element).size)
-        assertEquals("首次解析应有一次文件清单扫描", 1, IbatisXmlStatementTargets.INDEX_SCAN_COUNT.get())
-        val scans = IbatisXmlStatementTargets.STATEMENT_SCAN_COUNT.get()
-        assertEquals("首次解析应有一次语句实扫", 1, scans)
-
-        assertEquals(1, targets(element).size)
-        assertEquals("二次解析不得重扫文件清单", 1, IbatisXmlStatementTargets.INDEX_SCAN_COUNT.get())
-        assertEquals("同 id 二次解析应命中 memo", scans, IbatisXmlStatementTargets.STATEMENT_SCAN_COUNT.get())
+        val first = targets(element).single()
+        val second = targets(element).single()
+        assertEquals("裸 id 重复解析必须给出同一落点", first, second)
+        assertEquals("落点应是语句 id 的属性值元素", "selectBare", (first as XmlAttributeValue).value)
     }
 
     // ------------------------------------------------------------------

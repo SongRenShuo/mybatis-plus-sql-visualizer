@@ -14,7 +14,7 @@ import java.awt.datatransfer.DataFlavor
 /**
  * T-InjectionGate：`${}` 预览注入确认闸门（T-IG-01 ~ T-IG-03 的 headless 面板验收）。
  *
- * 判定信号是**解析期 `${` token 事实**（`PreviewResult.hasDollarRawSegments`），不是最终文本
+ * 判定信号是**解析期 `${` token 事实**（`PreviewResult.isHasDollarRawSegments()`），不是最终文本
  * regex——`${}` 成功替换为模拟值后文本里已无 `${}` 痕迹，regex 会漏掉全部成功场景（用例
  * [test信号_成功替换为模拟值仍为真] 钉住该口径）。
  *
