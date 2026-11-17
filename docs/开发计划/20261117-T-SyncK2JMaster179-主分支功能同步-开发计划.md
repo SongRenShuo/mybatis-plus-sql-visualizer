@@ -126,7 +126,8 @@
 ### 8.3 门禁读数
 
 - **本地 sanity**：`compileJava` + `compileTestKotlin --rerun-tasks` **BUILD SUCCESSFUL / 0 错**；45 个曾在 CI 红的测试类本地全绿。
-- **CI push-test**（最终 HEAD `4d523ace7` 对应 run `44077846390`）：`fast(1/2)`、`test(1/2/3/4)` 均 success，`nightly-nudge` skipped；`test(5)` 历轮稳定绿、末轮收尾中。根治后长期卡住的 `test(3)` 已转绿。
+- **CI push-test**（`4d523ace7` 起）：`fast(1/2)`、`test(1/2/3/4)` 均 success，`nightly-nudge` skipped；长期卡住的 `test(3)` 已转绿。
+- **`test(5)` 曾被误记为「历轮稳定绿」（20261117 订正）**：实测跑完的四个轮次（`44024907874` / `44037321840` / `44069616993` / `44082606101`）里 `test(5)` **次次 31m14s~31m24s 撞 30 分钟步骤超时**（`##[error]The action '分片 5' has timed out after 30 minutes`），日志零输出；同轮 `test(1~4)` 只需 6~9 分钟，`test(4)` 的 `:testShard4` 实测仅 **92 秒**。基线绿轮 `42904843372`（`efd3f9e0a`，2026-11-10）的 `test(5)` 是 `7m24s` 绿 ⇒ 属本轮引入。已加 `if: always()` 分片进度诊断步骤（结果 XML 清单 + 首末完成时刻），以便区分「某用例挂死」与「用例全跑完但 JVM 不退出」。
 - **CI flake 已根治**：`testShard3` 的 `McpSourceLocatorRenderAtLineTest::testiBatis_Java调用行` 早前 CI-only 偶发 `SOURCE_NOT_FOUND`。根因＝长分片下写 sqlMap 触发 dumb mode，`SqlMapNamespaceIndex` 查询抛 `IndexNotReadyException` → 定位返回空锚（生产链与 master 冻结 tip 逐字一致，是测试对索引异步可见性的环境时序依赖；索引正确性另有 `SqlMapNamespaceIndexTest` 专测）。根治＝`addSqlMap()` 用该链自带 `lookupOverrideForTest` 缝从刚建 PSI 直接提供 id 锚点（按 `namespace.id` 取裸 id 匹配），令测试对 dumb/索引时序完全免疫，`tearDown` 复位不污染同 JVM 后续用例。多轮无效尝试（接缝自清/EDT-pump 等 dumb/索引 ensureUpToDate）中 `waitForSmartMode` 曾在 EDT 挂死 17+ 分钟已回退。
 - **gate**：push-test 全绿读数确认后派发。
 
@@ -140,3 +141,23 @@
 6. **跨测试静态缝泄漏**：`IbatisXmlStatementTargets.lookupOverrideForTest` 等 object 级全局缝被前序用例置 Absent/Unknown 后未复位，污染同 JVM 后续用例；在 setUp/tearDown 自清（顺序无关）。
 7. **`waitForSmartMode()` 在 EDT 测试线程挂死**：CI job 17+ 分钟无进展，EDT-pump 等 dumb 也无效（dumb 是测试体写文件后才触发）；最终改用测试缝注入锚点、彻底消除对 dumb/索引时序的依赖（对抗时序不如消除时序）。
 8. **写 CI-only flake 诊断断言时不要直接调索引查询**：dumb 模式下抛 `IndexNotReadyException`，反把测试红因盖住；诊断信息须在无索引调用前提下采集。
+
+### 8.5 `test(5)` 超时追查与 5 处漏移植补齐（20261117 续轮）
+
+**方法**：CI 冷树无 `build/test-results` 样本 ⇒ 权重只吃入库画像 `dev-support/test-shard-weights.tsv`、缺类取已知中位数，无 S3 拆分/无 handicap，**分片分配是确定性的**。按 `buildSrc/src/main/kotlin/mpv-testing.gradle.kts` 的贪心算法离线复算（`build/shard_replay.py`），打印的 `loads=` 行与 CI 日志**逐字一致**（当轮 `shard1=175.9s/158classes … shard5=175.9s/160classes`，基线轮 `171.9s/143,152,144,145,144` 亦一致），据此拿到 shard5 的 160 个类清单。
+
+**关键发现：`test(5)` 超时掩盖了 15 个潜伏失败**。本地跑 shard5（`-PtestShardIgnoreLocalWeights=true -PtestSplitHeavy=false` 复现同一分片，1900 用例）得 **15 failed / 5 个类**，全部可单独复现（非顺序依赖）：
+
+| 类 | 失败 | 根因（Kotlin 有、Java 端口无） | 修复 |
+|---|---|---|---|
+| `ui.inject.SqlMapperIbatisDelimiterTest` | 10 | lexer 缺 iBatis 单字符定界符四态（`scanIbatisDelimiter`/`findIbatisParamClose`，master `ac9181463`），`IBATIS_ESCAPE` 只声明不产出 | `69a132e56` |
+| `psi.XmlCrossNsFragmentResolverTest` | 2 | `XmlPreviewService.preview()` 只把 `fileText` 送静态常量扫描，缺 `Collection<String>` 多文本入口 ⇒ 跨 ns include 片段里的 `<bind value="@Cls@FIELD"/>` 从不进 `staticFieldValues` | `e145e7f79` |
+| `ui.XmlSqlCompletionContextResolverTest` | 1 | 测试移植漏了 master 的 `setUp()` 隔离（候选实体是项目级缓存，同类用例互相污染）；生产侧与 master 一致 | `e145e7f79` |
+| `ui.PagesXmlHqlPreviewTest` | 1 | 端口自创 `probe(cheap=false)` 全扫形态，`<pages>` 判定链接了它（实体解析 + 根标识符各扫一次）；Kotlin 只有 `probeCheap` | `8f2668c8a` |
+| `config.PluginSettingsPanelBindingTest` | 1 | 面板 `isModified()`/`apply()` 漏了 `localDirField`（本地安装包目录）子句，改目录不被视为变化 | `33ad7ac6e` |
+
+**订正**：8.3 原写「45 个曾在 CI 红的测试类本地全绿」不足以证明全绿——那些类来自 CI 失败清单，而 shard5 从未跑完，其 15 个失败从未进入该清单。验证覆盖面必须按分片齐套，而不是只补 CI 报出来的类。
+
+**本地复跑**：修复后 `:testShard5` **BUILD SUCCESSFUL，160 类 0 失败，3m06s**。
+
+**坑（第 9 条）**：**「任务超时」会把该分片的失败一并吞掉**，红读数只剩超时，且日志零输出；查这类问题先用「权重画像 → 离线复算分片」拿类清单，再本地整片跑，别在 CI 上盲试。
