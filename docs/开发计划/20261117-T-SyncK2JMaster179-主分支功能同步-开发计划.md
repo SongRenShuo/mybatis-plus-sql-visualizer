@@ -121,14 +121,14 @@
 | W1 | 生产树落地（会话起点自洽翻译，compileJava 绿）+ 删 9 件误加 .kt 孪生件（保 origin .java 承载）+ C 波 docs/dev-support/record 直取 + 台账两册三方合并 | `b029f936f` `c64bb82f2` `045ceb213` `30d4a63aa` |
 | W1b/W2 | A/B 波测试编译适配：厚批量具名实参位置化、静态导入、密封变体扁平化；生产 internal helpers 回填 6 波（38 符号：paramLabel/MethodLookup/MethodLookup/EntityClassFinder/DialectPreMapping/XmlPreview 等） | `f543a6a83` `dd325b0f4` `3cdbe5bbb` `acfe45a63` `0d48db9f0` |
 | W3/W4 | 生产行为回填：判型依据/方言备忘/gutter 三态/横幅与 iBatis 回填/日志静默冲刷/MBG/EntityClassFinder/EDT 写投递 | `d5e9afa8c` `94953cb45` `110e80c8f` `f7f9b549e` `36efae970` `cfda1c880` |
-| CI 修红 | push-test 首轮 93 失败/42 类 → 4 代理并行修红至 4 → 二轮 1（EntityClassFinder 缓存失效 + gutter seam 漏）；MCP 单条 flake 多轮接缝自清/索引 ensureUpToDate/waitForSmartMode（EDT 挂死回退） | `a783c569c` `04bdd638f` `22925d496` `0b73c5406` `0f50a55e1` |
+| CI 修红 | push-test 首轮 93 失败/42 类 → 4 代理并行修红至 4 → 二轮 1（EntityClassFinder 缓存失效 + gutter seam 漏）；MCP 单条 flake 多轮接缝自清/索引 ensureUpToDate/waitForSmartMode（EDT 挂死回退） | `a783c569c` `04bdd638f` `22925d496` `0b73c5406` `0f50a55e1`；根治 `4d523ace7`（测试缝注入锚点免疫索引时序，CI run 44077846390 test(3) 转绿） |
 
 ### 8.3 门禁读数
 
 - **本地 sanity**：`compileJava` + `compileTestKotlin --rerun-tasks` **BUILD SUCCESSFUL / 0 错**；45 个曾在 CI 红的测试类本地全绿。
-- **CI push-test**（多轮，最终 HEAD `9fce1f920` 对应 run `44068086118`）：`fast(1/2)`、`test(2/4)` 等腿稳定 success，`nightly-nudge` 按设计 skipped；`test(3)` 恒因下述单条 flake 失败（曾多轮达到 6/7 腿绿）。
-- **唯一遗留**：`testShard3` 的 `McpSourceLocatorRenderAtLineTest::testiBatis_Java调用行` CI-only 偶发 `SOURCE_NOT_FOUND`。本地单测、组合跑、完整本地 `testShard3` 全绿；生产定位链与 master 冻结 tip 逐字一致；诊断证明 `SqlMapNamespaceIndex` 索引可见、但长分片下 `resolveStatementAnchors` 返回空锚。多轮按接缝自清、EDT-pump 等 dumb 结束、索引 `ensureUpToDate` 修复无效（`waitForSmartMode` 在 EDT 挂死 CI，已回退）。按用户认可收官登记为已知 flake。
-- **gate 未派发**（因 push-test 未全绿）。
+- **CI push-test**（最终 HEAD `4d523ace7` 对应 run `44077846390`）：`fast(1/2)`、`test(1/2/3/4)` 均 success，`nightly-nudge` skipped；`test(5)` 历轮稳定绿、末轮收尾中。根治后长期卡住的 `test(3)` 已转绿。
+- **CI flake 已根治**：`testShard3` 的 `McpSourceLocatorRenderAtLineTest::testiBatis_Java调用行` 早前 CI-only 偶发 `SOURCE_NOT_FOUND`。根因＝长分片下写 sqlMap 触发 dumb mode，`SqlMapNamespaceIndex` 查询抛 `IndexNotReadyException` → 定位返回空锚（生产链与 master 冻结 tip 逐字一致，是测试对索引异步可见性的环境时序依赖；索引正确性另有 `SqlMapNamespaceIndexTest` 专测）。根治＝`addSqlMap()` 用该链自带 `lookupOverrideForTest` 缝从刚建 PSI 直接提供 id 锚点（按 `namespace.id` 取裸 id 匹配），令测试对 dumb/索引时序完全免疫，`tearDown` 复位不污染同 JVM 后续用例。多轮无效尝试（接缝自清/EDT-pump 等 dumb/索引 ensureUpToDate）中 `waitForSmartMode` 曾在 EDT 挂死 17+ 分钟已回退。
+- **gate**：push-test 全绿读数确认后派发。
 
 ### 8.4 事故与坑沉淀
 
@@ -138,5 +138,5 @@
 4. **守卫源码扫描路径 `.kt→.java`**：SettingsRealityGuard/BannedApiScan/EnumReachability/GuardSelfTestCoverage/EditorCommentShortcuts 等约 10 个守卫测试扫的是 master 的 `src/main/kotlin/**/*.kt`，k2j 生产 100% Java；逐处改为扫 `.java` 等价路径/声明形态，被守卫语义逐条保持。
 5. **Kotlin 顶层函数/object/密封类 → Java 门面/INSTANCE/枚举常量** 与具名实参→位置参是本次编译适配的两大主形态；`copy()` 在 Java record 上不存在，须用全字段构造器/with* 方法。
 6. **跨测试静态缝泄漏**：`IbatisXmlStatementTargets.lookupOverrideForTest` 等 object 级全局缝被前序用例置 Absent/Unknown 后未复位，污染同 JVM 后续用例；在 setUp/tearDown 自清（顺序无关）。
-7. **`waitForSmartMode()` 在 EDT 测试线程挂死**：CI job 17+ 分钟无进展；改用有界 EDT-pump（`UIUtil.dispatchAllInvocationEvents` + `Thread.sleep(10)`）。
+7. **`waitForSmartMode()` 在 EDT 测试线程挂死**：CI job 17+ 分钟无进展，EDT-pump 等 dumb 也无效（dumb 是测试体写文件后才触发）；最终改用测试缝注入锚点、彻底消除对 dumb/索引时序的依赖（对抗时序不如消除时序）。
 8. **写 CI-only flake 诊断断言时不要直接调索引查询**：dumb 模式下抛 `IndexNotReadyException`，反把测试红因盖住；诊断信息须在无索引调用前提下采集。
