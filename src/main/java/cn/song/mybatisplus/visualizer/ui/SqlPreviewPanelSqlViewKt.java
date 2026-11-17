@@ -292,7 +292,51 @@ public final class SqlPreviewPanelSqlViewKt {
         SqlPreviewModel model = result.getPreviewModel();
         cn.song.mybatisplus.visualizer.model.BatchModel batch = result.getBatchModel();
         XmlPreviewModel xml = result.getXmlModel();
-        if (xml != null) {
+        kotlin.jvm.functions.Function1<cn.song.mybatisplus.visualizer.model.PreviewRerenderInput, PreviewResult> ibatisRerender = result.getRerender();
+        if (ibatisRerender != null) {
+            // T-Ibatis2Gap 券 A：iBatis 参数/条件可交互——面板状态交给预览服务闭包重渲染。
+            Map<String, List<String>> collections = new LinkedHashMap<>();
+            for (Map.Entry<String, String> e : p.ibatisIterateValues.entrySet()) {
+                List<String> values = new ArrayList<>();
+                for (String part : e.getValue().split("[,\n]")) {
+                    String v = part.trim();
+                    if (!v.isEmpty()) values.add(v);
+                }
+                collections.put(e.getKey(), values);
+            }
+            cn.song.mybatisplus.visualizer.model.PreviewRerenderInput input =
+                    new cn.song.mybatisplus.visualizer.model.PreviewRerenderInput(
+                            new LinkedHashMap<>(p.paramValues), new LinkedHashSet<>(p.enabledIds), collections);
+            PreviewResult fresh;
+            try {
+                fresh = ibatisRerender.invoke(input);
+            } catch (Throwable e) {
+                p.ibatisRenderWarnings = List.of(e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
+                showSql(p, p.compactMode ? result.getCompactSql() : result.getSql());
+                SqlPreviewPanelResultViewKt.updateMeta(p, result);
+                return;
+            }
+            p.ibatisRenderWarnings = fresh.getWarning() != null && !fresh.getWarning().isBlank()
+                    ? List.of(fresh.getWarning()) : List.of();
+            p.ibatisRenderWarningIsNote = fresh.isInformationalWarning();
+            // iterate 值播种：渲染器按列表长度产出 ids[0..n-1] 参数名——按当前值序回填（不留旧键）
+            if (fresh.getIbatisParamModel() != null) {
+                for (cn.song.mybatisplus.visualizer.xml.ibatis.IbatisIterateRow row
+                        : fresh.getIbatisParamModel().getIterateRows()) {
+                    List<String> values = collections.get(row.property());
+                    if (values == null) values = List.of();
+                    for (int i = 0; i < values.size(); i++) {
+                        p.paramValues.put(row.property() + "[" + i + "]", values.get(i));
+                    }
+                }
+            }
+            String base = p.compactMode ? fresh.getCompactSql() : fresh.getSql();
+            List<String> sources = !fresh.getPlaceholderParamNames().isEmpty()
+                    ? fresh.getPlaceholderParamNames() : fresh.getUnresolvedParams();
+            showSql(p, SqlPreviewPanelParamPanelKt.backfillParamsBySource(p, base, sources, fresh.getParamHints()));
+            // 警示行与横幅随本轮刷新（iterate 留空等降级形态必须可见）
+            SqlPreviewPanelResultViewKt.updateMeta(p, fresh);
+        } else if (xml != null) {
             // T-M24-04：XML 动态 SQL——渲染单源 XmlPreviewModel.renderSql(state)，勾选/次数/覆盖变更重渲染
             XmlPreviewState state = new XmlPreviewState(
                     new LinkedHashSet<>(p.enabledIds),
@@ -307,6 +351,8 @@ public final class SqlPreviewPanelSqlViewKt {
             // 值状态→渲染单向流动，不再有「渲染后同步读键清单」的错位窗口）
             SqlPreviewPanelParamPanelKt.syncForEachItemValues(p, xml);
             p.xmlDollarSubstitutions = rendered.dollarSubstitutions();
+            // T-ForEachInert：同帧刷新「本轮未展开」提示（判据也是 __frch_ 映射清单）
+            SqlPreviewPanelParamPanelKt.syncXmlForEachInertStates(p, xml);
             // R30 探镜：本轮条件判定结果刷新条件行尾三态标注（只读观测，不参与渲染文本）
             SqlPreviewPanelParamPanelKt.syncXmlConditionOutcomeLabels(p, xml, rendered);
             // T-M25.5：bind 自动求值结果并入参数回填（用户手动输入优先，清空则恢复自动值）
@@ -330,6 +376,11 @@ public final class SqlPreviewPanelSqlViewKt {
             Set<Integer> inListIndices = SqlPreviewPanelParamPanelKt.detectInClauseParams(p, sql);
             List<ParamHint> xmlHints = XmlParamBackfillHints.xmlBackfillHints(xml, sources, inListIndices, p.xmlMappings);
             showSql(p, SqlPreviewPanelParamPanelKt.backfillParamsBySource(p, sql, sources, xmlHints));
+            // T-FullTableWriteRisk：判据取未回填的本轮产物（回填会把参数值当字面量填进文本污染关键词判定）
+            p.writeRiskWarning = SqlWriteRiskTextKt.fullTableWriteRisk(rendered.sql());
+            // T-PreviewBannerLiveRefresh：横幅/元信息随本轮重渲染刷新（勾选变化后陈旧警示清除、
+            // 全表写风险顶上）——此前 XML 分支不调 updateMeta，横幅停在 showResult 那一刻。
+            SqlPreviewPanelResultViewKt.updateMeta(p, result);
         } else if (batch != null) {
             // T-M23-04：批量列级勾选路径——BatchModel.renderSql 按活跃列重建 + 按列序回填
             Set<String> active = new LinkedHashSet<>(p.enabledIds);

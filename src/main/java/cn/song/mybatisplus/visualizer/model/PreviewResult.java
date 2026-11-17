@@ -835,6 +835,25 @@ public final class PreviewResult {
     }
 
     /**
+     * Kotlin data class {@code copy(renderedDialect = …, dialectDecision = …)} 的全量保留等价——
+     * 其余字段（含后加的 rerender/ibatisParamModel/informationalWarning/判型字段/源语言字段等）逐项保留。
+     * 方言解析入口 ({@code PreviewDialectResolver.copyWith}) 必须走本方法，否则短参构造会丢掉这些尾字段。
+     */
+    public PreviewResult copyWithDialect(Dialect newDialect,
+                                         DialectDecisionEngine.Decision newDecision) {
+        return new PreviewResult(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning,
+                columns, columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel,
+                xmlModel, initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns,
+                namedParamHints, stackDigest, threadName, hasDollarRawSegments, countSql, paginationLimitLine,
+                placeholderParamNames, duplicateParamNames, diagramStatement, historyFingerprintSeed,
+                paginationParamSources, newDialect, newDecision, historyEntryId, actualSql,
+                sourceLanguage, originalSql, degradations, runtimeSlots,
+                retryWhenIndexReady, m2AwaitKey, informationalWarning,
+                ibatisParamModel, rerender, decidingConsumption, otherConsumptions,
+                statementTypeOptions, statementTypeSwitch);
+    }
+
+    /**
      * T-PreviewStmtTypeScope：派生出携带判型依据 / 候选集 / 可切换档位的新结果
      * （Kotlin data class {@code copy(decidingConsumption, otherConsumptions, statementTypeOptions,
      * statementTypeSwitch = …)} 的 Java 等价），其余字段全量保留。

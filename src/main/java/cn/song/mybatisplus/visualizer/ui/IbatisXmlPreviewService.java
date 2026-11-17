@@ -474,6 +474,10 @@ public final class IbatisXmlPreviewService {
                 || statementHasRawSubstitutionSites
                 || sql.contains("${");
 
+        String warningLine = joinWarnings(warningsForLine);
+        // UI-001：信息级分档——纯信息级说明（无真失败且有告警）标 informationalWarning，
+        // 面板 updateMeta 据此用 ℹ 前缀（master: failureWarnings.isEmpty() && warningsForLine.isNotEmpty()）。
+        boolean informational = failureWarnings.isEmpty() && !warningsForLine.isEmpty();
         return new PreviewResult(
                 sql,
                 compactSql,
@@ -481,7 +485,7 @@ public final class IbatisXmlPreviewService {
                 ParameterReplacer.buildParamTable(unresolved),
                 null,
                 null,
-                joinWarnings(warningsForLine),
+                warningLine,
                 List.<String>of(),
                 Map.<String, String>of(),
                 null,
@@ -503,7 +507,8 @@ public final class IbatisXmlPreviewService {
                 //    一并置闸，否则「勾上 isNotEmpty 填值后执行」绕过注入确认；
                 // ② 未替换的 `${prop}`（引擎按全局属性替换、本链保留原文）在 SQL 文本里就是 ${} 原文段；
                 // ③ T-IbatisFix2 修复一：selectKey 块内的 `$` 站点同样计闸。
-                hasDollarRawSegments);
+                hasDollarRawSegments)
+                .withWarning(warningLine, informational);
     }
 
     private static void classify(@NotNull String warning,

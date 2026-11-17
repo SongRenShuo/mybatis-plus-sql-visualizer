@@ -162,6 +162,9 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     /** T-PreviewTopOverlap F3：元信息宽度预算下限（px）——极窄时保底可读，超出仍由 ellipsize 收。 */
     public static final int MIN_META_BUDGET_PX = 80;
 
+    /** T-DegradedPreviewUx P1：预热超时横幅的宽限期（ms）——期内产物到达即静默换装，横幅不出现。 */
+    public static final long DEGRADED_GRACE_MS = 3000L;
+
     /** M36.5.44：re-host 最小重挂间隔（ms）——DBN 结果刷新期高频 reparent，低于此间隔视为"还在被 DBN 处理"，跳过不抢，防死循环刷新闪烁。 */
     public static final long REHOST_MIN_INTERVAL_MS = 800L;
 
@@ -474,6 +477,11 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
      *  {@link #prewarmLifecycleGate}）都置它，预热线程在下一个检查点放弃（不再取服务）。 */
     public volatile boolean previewDisposed = false;
 
+    /** T-DegradedPreviewUx P1：预热超时宽限定时器（期内产物到达即取消，横幅不出现）。 */
+    public volatile javax.swing.Timer degradedGraceTimer = null;
+    /** T-DegradedPreviewUx P1：宽限定时器到点时该显示哪类降级原因。 */
+    public volatile PreviewDegradationReason degradedGraceReason = null;
+
     /**
      * T-StabilityTail（窗口内异步泄漏治理）：预热任务的「项目开始销毁」取消门。
      *
@@ -692,6 +700,10 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     public boolean currentWarningIsNote = false;
     /** iBatis iterate 本轮供值（property → 逗号分隔值列表）。 */
     public final Map<String, String> ibatisIterateValues = new LinkedHashMap<>();
+    /** iBatis rerender 本轮重渲染告警（以本轮结果为唯一事实源，供值后清空、撤值后回归）。 */
+    public List<String> ibatisRenderWarnings = List.of();
+    /** iBatis rerender 本轮告警是否信息级（ℹ）。 */
+    public boolean ibatisRenderWarningIsNote = false;
 
     /** 别名常量：写风险横幅类别，便于按 SqlPreviewPanel 检索（权威枚举为 DegradationBanner.Kind）。 */
     public static final DegradationBanner.Kind WRITE_RISK = DegradationBanner.Kind.WRITE_RISK;

@@ -98,6 +98,7 @@ public final class SqlPreviewPanelParamPanelKt {
         p.batchCheckBoxes.clear();
         p.xmlForEachNullBoxes.clear();
         p.xmlForEachValueFields.clear();
+        p.xmlForEachInertLabels.clear(); // T-ForEachInert：随 rebuild 清场
         // T-M26.3：按钮随场景重建（标题行右侧）——先清空上次场景的残留引用
         p.toggleSelectButton = null;
         p.clearButton = null;
@@ -981,6 +982,18 @@ public final class SqlPreviewPanelParamPanelKt {
         row.add(valuesField);
         p.paramFields.add(valuesField);
         p.xmlForEachValueFields.add(new Pair<>(view.collectionExpr(), valuesField)); // R22 T-03：召回时按 expr 同步字段文本
+        // T-ForEachInert：条件对象容器（item=criteria/criterion）的值框只读、不挂本轮未展开提示；
+        // 真正可填值的集合行挂一枚灰字提示，由 syncXmlForEachInertStates 在渲染帧内刷新可见性。
+        boolean objectContainer = "criteria".equals(view.item()) || "criterion".equals(view.item());
+        if (!objectContainer) {
+            JBLabel inertHint = new JBLabel("");
+            inertHint.setVisible(false);
+            inertHint.setForeground(SqlPreviewPanel.PARAM_WARN_FOREGROUND);
+            inertHint.setBorder(JBUI.Borders.empty(0, 6, 0, 0));
+            inertHint.putClientProperty("html.disable", true);
+            row.add(inertHint);
+            p.xmlForEachInertLabels.add(new Pair<>(view.collectionExpr(), inertHint));
+        }
         JCheckBox nullBox = new JCheckBox(MpSqlVisualizerBundle.message("panel.xml.foreach.null"),
                 p.xmlForEachNulls.contains(view.collectionExpr()));
         nullBox.putClientProperty(SqlPreviewPanel.PROP_FOREACH_NULL, view.collectionExpr()); // R22 T-02：召回同步的 expr 锚点
@@ -1051,6 +1064,31 @@ public final class SqlPreviewPanelParamPanelKt {
                     else p.paramValues.remove(key);
                 }
             }
+        }
+    }
+
+    /**
+     * T-ForEachInert：foreach 行「本轮是否真参与渲染」提示刷新（渲染帧内调用，xmlMappings 恒新鲜）。
+     * 判据与 syncForEachItemValues 同源：渲染器只为被展开出来的集合产 __frch_&lt;item&gt;_&lt;n&gt; 映射；
+     * 缺席即本轮没走到，需说清「为什么填了没用」。
+     */
+    public static void syncXmlForEachInertStates(@NotNull SqlPreviewPanel p, XmlPreviewModel xml) {
+        if (p.xmlForEachInertLabels.isEmpty()) return;
+        List<String> properties = new ArrayList<>();
+        for (cn.song.mybatisplus.visualizer.xml.ParameterMapping m : p.xmlMappings) properties.add(m.property());
+        for (Pair<String, JBLabel> entry : p.xmlForEachInertLabels) {
+            String expr = entry.getFirst();
+            JBLabel hint = entry.getSecond();
+            String item = null;
+            for (XmlForEachView v : xml.getForEachViews()) {
+                if (v.collectionExpr().equals(expr)) {
+                    item = v.item();
+                    break;
+                }
+            }
+            boolean expanded = forEachExpandedThisRound(item, properties);
+            hint.setVisible(!expanded);
+            if (!expanded) hint.setText(MpSqlVisualizerBundle.message("panel.xml.foreach.inert"));
         }
     }
 

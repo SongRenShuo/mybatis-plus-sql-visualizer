@@ -652,6 +652,8 @@ public final class SqlPreviewPanelEditorLifecycleKt {
                     // T-PrewarmLateRecover F2：动作一并摘除
                     p.degradationBanner.onRetry = null;
                     p.degradationBanner.clear(DegradationBanner.Kind.DEGRADED);
+                    // T-DegradedPreviewUx P1：主路径成功 = 降级已恢复——取消宽限定时器，到点不再弹过期横幅
+                    cancelDegradedGraceTimer(p);
                     // T-PrewarmLateRecover F1：主路径装配 → 当前文档不再属于降级态
                     p.degradedPreviewDocument = null;
                     p.previewTempFile = vFile;
@@ -672,11 +674,18 @@ public final class SqlPreviewPanelEditorLifecycleKt {
                     }
                     doc = d;
                 } catch (Throwable t) {
-                    doc = fallbackPreviewDocument(p, sql,
+                    // T-DegradedPreviewUx P0：主路径产物在途失败——真实原因是 PSI 侧
+                    doc = fallbackPreviewDocument(p, sql, PreviewDegradationReason.PSI_UNAVAILABLE,
                             t.getMessage() != null ? t.getMessage() : t.getClass().getSimpleName());
                 }
             } else {
-                doc = fallbackPreviewDocument(p, sql, "prewarmed product unavailable (timeout/failed/consumed)");
+                // T-DegradedPreviewUx P1：产物不在位——超时取 TIMEOUT（走宽限期，横幅延迟披露），
+                // 否则按 await 终态分型（硬失败/已消费）。
+                PreviewDegradationReason reason = p.prewarmAwait != null
+                        ? PreviewDegradationReasonKt.degradationReasonOrNull(p.prewarmAwait) : null;
+                if (reason == null) reason = PreviewDegradationReason.TIMEOUT;
+                doc = fallbackPreviewDocument(p, sql, reason,
+                        "prewarmed product unavailable (timeout/failed/consumed)");
             }
         } else {
             doc = null;
@@ -733,10 +742,21 @@ public final class SqlPreviewPanelEditorLifecycleKt {
     @NotNull
     public static Document fallbackPreviewDocument(@NotNull SqlPreviewPanel p, @NotNull String sql,
                                                    @NotNull String msg) {
+        return fallbackPreviewDocument(p, sql, PreviewDegradationReason.PSI_UNAVAILABLE, msg);
+    }
+
+    /**
+     * T-DegradedPreviewUx P0/P1：按原因分级的降级文档装配——超时走宽限期（期内不挂横幅），
+     * 其余原因立即显示分档文案。
+     */
+    @NotNull
+    public static Document fallbackPreviewDocument(@NotNull SqlPreviewPanel p, @NotNull String sql,
+                                                   @NotNull PreviewDegradationReason reason,
+                                                   @NotNull String msg) {
         // 第二级：内存 PSI（保留补全上下文载体）
         Document memoryPsiDoc = createInMemoryPreviewPsi(p, sql);
         if (memoryPsiDoc != null) {
-            showDegradedBanner(p, "panel.banner.degradedPsi");
+            showDegradedBanner(p, reason);
             p.degradedPreviewDocument = memoryPsiDoc;
             return memoryPsiDoc;
         }
@@ -744,7 +764,7 @@ public final class SqlPreviewPanelEditorLifecycleKt {
         Logger.getInstance(SqlPreviewPanel.class)
                 .warn("[M36] preview temp file unavailable, fall back to bare in-memory editor: " + msg);
         p.psiFile = null;
-        showDegradedBanner(p, "panel.banner.degradedPlain");
+        showDegradedBanner(p, PreviewDegradationReason.MEMORY_PSI_FAILED);
         Document doc = EditorFactory.getInstance().createDocument(sql);
         p.degradedPreviewDocument = doc;
         return doc;
@@ -761,6 +781,55 @@ public final class SqlPreviewPanelEditorLifecycleKt {
         p.degradationBanner.show(
                 DegradationBanner.Kind.DEGRADED,
                 MpSqlVisualizerBundle.message(messageKey));
+    }
+
+    /**
+     * T-DegradedPreviewUx P1：按原因挂降级横幅——TIMEOUT 是瞬时态，先清旧横幅、挂 3s 宽限定时器，
+     * 期内主路径装配成功会取消定时器并清横幅，横幅一次都不出现；其它原因立即显示。
+     */
+    public static void showDegradedBanner(@NotNull SqlPreviewPanel p, @NotNull PreviewDegradationReason reason) {
+        cancelDegradedGraceTimer(p);
+        p.degradationBanner.onRetry = () -> retryPrewarm(p);
+        if (reason == PreviewDegradationReason.TIMEOUT) {
+            p.degradationBanner.clear(DegradationBanner.Kind.DEGRADED);
+            p.degradedGraceReason = reason;
+            javax.swing.Timer timer = new javax.swing.Timer(
+                    (int) SqlPreviewPanel.DEGRADED_GRACE_MS, e -> flushDegradedGrace(p));
+            timer.setRepeats(false);
+            p.degradedGraceTimer = timer;
+            timer.start();
+            return;
+        }
+        showDegradedBannerNow(p, reason);
+    }
+
+    /** 立即显示降级横幅（硬失败与宽限到点的共同收口）。 */
+    public static void showDegradedBannerNow(@NotNull SqlPreviewPanel p, @NotNull PreviewDegradationReason reason) {
+        String cause = reason.causeKey() != null ? MpSqlVisualizerBundle.message(reason.causeKey()) : null;
+        String text = cause == null
+                ? MpSqlVisualizerBundle.message(reason.bannerKey())
+                : MpSqlVisualizerBundle.message(reason.bannerKey(), cause);
+        p.degradationBanner.show(DegradationBanner.Kind.DEGRADED, text);
+    }
+
+    /** 宽限到点：停表并按重取的终态显示降级横幅（幂等）。 */
+    public static void flushDegradedGrace(@NotNull SqlPreviewPanel p) {
+        PreviewDegradationReason pending = p.degradedGraceReason;
+        if (pending == null) return;
+        cancelDegradedGraceTimer(p);
+        if (p.previewDisposed) return;
+        PreviewDegradationReason effective = p.prewarmAwait != null
+                ? PreviewDegradationReasonKt.degradationReasonOrNull(p.prewarmAwait) : null;
+        showDegradedBannerNow(p, effective != null ? effective : pending);
+    }
+
+    /** 停止并丢弃宽限定时器（幂等）。 */
+    public static void cancelDegradedGraceTimer(@NotNull SqlPreviewPanel p) {
+        if (p.degradedGraceTimer != null) {
+            p.degradedGraceTimer.stop();
+            p.degradedGraceTimer = null;
+        }
+        p.degradedGraceReason = null;
     }
 
     /**

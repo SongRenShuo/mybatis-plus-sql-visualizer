@@ -168,19 +168,13 @@ public final class PreviewDialectResolver {
         return copyWith(result, DialectRegistry.INSTANCE.byName(name), decision);
     }
 
-    /** Kotlin {@code copy(renderedDialect = …, dialectDecision = …)} 的手工重建（其余构造参数保持当前值）。 */
+    /**
+     * Kotlin {@code copy(renderedDialect = …, dialectDecision = …)} 的等价重建——
+     * 走全量保留的 {@link PreviewResult#copyWithDialect}，避免短参构造丢掉 rerender /
+     * ibatisParamModel / informationalWarning / 判型字段 / 源语言等后加字段。
+     */
     private static PreviewResult copyWith(PreviewResult r, Dialect renderedDialect,
                                           DialectDecisionEngine.Decision dialectDecision) {
-        return new PreviewResult(
-                r.getSql(), r.getCompactSql(), r.getUnresolvedParams(), r.getParamTable(),
-                r.getWrapperType(), r.getTableName(), r.getWarning(), r.getColumns(),
-                r.getColumnComments(), r.getTableComment(), r.getPreviewModel(), r.getParamHints(),
-                r.getCandidateTables(), r.getBatchModel(), r.getXmlModel(), r.getInitialParamValues(),
-                r.getPerfWarnings(), r.getFillClauses(), r.getPreviousSql(), r.getPagesColumns(),
-                r.getNamedParamHints(), r.getStackDigest(), r.getThreadName(), r.isHasDollarRawSegments(),
-                r.getCountSql(), r.getPaginationLimitLine(), r.getPlaceholderParamNames(),
-                r.getDuplicateParamNames(), r.getDiagramStatement(), r.getHistoryFingerprintSeed(),
-                r.getPaginationParamSources(), renderedDialect, dialectDecision,
-                r.getHistoryEntryId(), r.getActualSql());
+        return r.copyWithDialect(renderedDialect, dialectDecision);
     }
 }

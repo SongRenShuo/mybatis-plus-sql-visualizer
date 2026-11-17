@@ -44,8 +44,10 @@ public record IbatisRenderResult(
 
     public IbatisRenderResult {
         paramNames = List.copyOf(paramNames);
-        paramJdbcTypes = List.copyOf(paramJdbcTypes);
-        paramNullValues = List.copyOf(paramNullValues);
+        // master 为 List<String?>：jdbcType/nullValue 允许 null（参数未声明类型/空值时），
+        // 必须用允许 null 元素的不可变拷贝，List.copyOf 会对 null 元素抛 NPE。
+        paramJdbcTypes = java.util.Collections.unmodifiableList(new java.util.ArrayList<>(paramJdbcTypes));
+        paramNullValues = java.util.Collections.unmodifiableList(new java.util.ArrayList<>(paramNullValues));
         nullBindFlags = List.copyOf(nullBindFlags);
         warnings = List.copyOf(warnings);
         dollarRenderedValues = List.copyOf(dollarRenderedValues);

@@ -266,15 +266,17 @@ public final class SqlPreviewPanelResultViewKt {
         // T-M24-04：XML 预览状态初始化（条件开关走 enabledIds，按启发式默认勾选；foreach/bind 独立状态）
         if (result.getXmlModel() != null) {
             cn.song.mybatisplus.visualizer.xml.XmlPreviewModel model = result.getXmlModel();
-            for (cn.song.mybatisplus.visualizer.xml.XmlConditionView view : model.getConditionViews()) {
-                if (view.defaultEnabled()) p.enabledIds.add(view.id());
-            }
+            // T-MbgPreviewParityAndOpenPerf P7：初始勾选与渲染同源——走 defaultState()（含 choose 组
+            // 互斥归并 / profile 抑制），不再用朴素 defaultEnabled 造成四个互斥分支全勾。
+            p.enabledIds.clear();
+            p.enabledIds.addAll(model.defaultState().enabledIds());
             p.xmlForEachCounts.clear();
             p.xmlForEachCounts.putAll(model.defaultState().forEachCounts());
             p.xmlForEachValues.clear();
             p.xmlForEachNulls.clear();
             p.xmlErrors = List.of();
             p.xmlDollarSubstitutions = 0;
+            p.writeRiskWarning = null; // T-FullTableWriteRisk：风险态随新预览清场，渲染帧内重算
             // T-M25.5：预渲染提取 bind 自动求值结果（参数行初始显示求值后的值，用户可覆盖）
             cn.song.mybatisplus.visualizer.xml.RenderedXmlSql initial = model.renderSql(new XmlPreviewState(
                     new LinkedHashSet<>(p.enabledIds),
@@ -288,6 +290,21 @@ public final class SqlPreviewPanelResultViewKt {
                     p.paramValues.put(name, value);
                 }
             }
+        }
+        // T-Ibatis2Gap 券 A：iBatis 交互态随新预览清场（iterate 供值 + 本轮重渲染告警）；
+        // 参数行/条件值输入按行清单播种（基线 SQL 没有 `?` 也要建行，参数识别的正解）。
+        if (result.getIbatisParamModel() != null) {
+            cn.song.mybatisplus.visualizer.xml.ibatis.IbatisParamModel ibatisModel = result.getIbatisParamModel();
+            for (var row : ibatisModel.getPlaceholderRows()) p.paramValues.putIfAbsent(row.name(), "");
+            for (var row : ibatisModel.getConditionRows()) {
+                if (row.property() != null) {
+                    p.paramValues.putIfAbsent(row.property(),
+                            row.compareValue() != null ? row.compareValue() : "");
+                }
+            }
+            for (var row : ibatisModel.getDollarRows()) p.paramValues.putIfAbsent(row.name(), "");
+            p.ibatisIterateValues.clear();
+            p.ibatisRenderWarnings = List.of();
         }
         // P-05：历史召回（在 initialParamValues 之后，用户输入之前）
         SqlPreviewPanelParamPanelKt.recallFromHistory(p);
@@ -702,6 +719,15 @@ public final class SqlPreviewPanelResultViewKt {
      * M34 回归修复：原生 SQL 高亮迁移后 Editor/PSI 对象在预览切换间复用（文档不变），
      * 三级回退的 Document→Context 映射需随上下文刷新同步更新，否则落入旧预览的过期表/列。
      */
+    /** 合并基线告警与本轮告警，逐条去重、跳过空白，空则返回 null（同 master mergePreviewWarnings）。 */
+    @Nullable
+    public static String mergePreviewWarnings(@Nullable String initial, @NotNull List<String> current) {
+        List<String> parts = new ArrayList<>();
+        if (initial != null && !initial.isBlank()) parts.add(initial);
+        for (String c : current) if (c != null && !c.isBlank() && !parts.contains(c)) parts.add(c);
+        return parts.isEmpty() ? null : String.join("；", parts);
+    }
+
     public static void updateMeta(@NotNull SqlPreviewPanel p, PreviewResult result) {
         List<String> metaParts = new ArrayList<>();
         if (result.getWrapperType() != null) {
@@ -721,14 +747,16 @@ public final class SqlPreviewPanelResultViewKt {
             if (xml.getParameterType() != null) metaParts.add("parameterType: " + xml.getParameterType());
         }
         String meta = String.join("   ", metaParts);
-        // T-M24-04：XML 渲染期错误并入警示（解析期错误在 PreviewResult.warning）
-        String xmlWarning = null;
-        if (result.getXmlModel() != null) {
-            String joined = String.join("；", p.xmlErrors);
-            xmlWarning = joined.isEmpty() ? null : joined;
-        }
-        p.currentWarning = xmlWarning != null ? xmlWarning : result.getWarning();
-        String warningLine = p.currentWarning != null ? "   ⚠ " + p.currentWarning : "";
+        // UI-001：告警唯一事实源分档——iBatis rerender 链以本轮重渲染结果为唯一事实源（供值后
+        // 基线告警消失）；其余链维持「基线告警 + 本轮 xmlErrors」合并。
+        boolean rerender = result.getRerender() != null;
+        p.currentWarningIsNote = rerender
+                ? p.ibatisRenderWarningIsNote : result.isInformationalWarning();
+        p.currentWarning = rerender
+                ? mergePreviewWarnings(null, p.ibatisRenderWarnings)
+                : mergePreviewWarnings(result.getWarning(),
+                        result.getXmlModel() != null ? p.xmlErrors : List.of());
+        String warningLine = p.currentWarning == null ? "" : "   " + (p.currentWarningIsNote ? "ℹ " : "⚠ ") + p.currentWarning;
         // T-SourceJumpFunnel P2-2：调用栈快照并入 meta 提示行（截断展示；T-StackHoverUi 起
         // 完整链归悬停弹层）。
         // 文案组装抽为纯函数 buildStackDigestInlineLine（SqlPreviewPanelTextKt）——§3.3 验收项
@@ -762,12 +790,21 @@ public final class SqlPreviewPanelResultViewKt {
         // T-PreviewUx-Pack #2：渲染警示横幅（三要素：哪段没还原=渲染产物，为什么=warning 原文，
         // 能做什么=指引）；警示存在即显示，恢复即清除（降级链横幅 DEGRADED 不受本清除影响）
         if (p.currentWarning != null) {
-            p.degradationBanner.show(
-                    DegradationBanner.Kind.RENDER_WARNING,
-                    MpSqlVisualizerBundle.message("panel.banner.renderFailed",
-                            p.currentWarning != null ? p.currentWarning : ""));
+            String bannerText = p.currentWarningIsNote
+                    ? MpSqlVisualizerBundle.message("panel.banner.renderNote", p.currentWarning)
+                    : MpSqlVisualizerBundle.message("panel.banner.renderFailed", p.currentWarning);
+            p.degradationBanner.show(DegradationBanner.Kind.RENDER_WARNING, bannerText);
         } else {
             p.degradationBanner.clear(DegradationBanner.Kind.RENDER_WARNING);
+        }
+        // T-FullTableWriteRisk：无 WHERE 的 DELETE/UPDATE（XML 链产物随勾选实时变化）。
+        // 优先级高于渲染警示——用独立横幅类别与不带「未完整还原」前缀的文案。
+        if (result.getXmlModel() != null && p.writeRiskWarning != null) {
+            p.degradationBanner.show(
+                    DegradationBanner.Kind.WRITE_RISK,
+                    MpSqlVisualizerBundle.message(p.writeRiskWarning.getBundleKey()));
+        } else {
+            p.degradationBanner.clear(DegradationBanner.Kind.WRITE_RISK);
         }
         // T-DollarInjectMark：`${}` 直替信息提示（最低优先——警示/降级挂起时让位，
         // 清除后下次 updateMeta 回位；✕ 关闭后会话级记忆不再弹）。只加元数据不改渲染文本。
