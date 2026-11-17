@@ -3,6 +3,8 @@ package cn.song.mybatisplus.visualizer.mcp
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.util.indexing.FileBasedIndex
 import cn.song.mybatisplus.visualizer.xml.ibatis.SqlMapNamespaceIndex
+import com.intellij.openapi.project.DumbService
+import com.intellij.util.ui.UIUtil
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import java.io.File
@@ -37,6 +39,14 @@ class McpSourceLocatorRenderAtLineTest : BasePlatformTestCase() {
 
     override fun setUp() {
         super.setUp()
+        // 长分片 CI 里本用例自己 addFileToProject/writeMapper 触发的 VFS 属性更新会让工程短暂进 dumb，
+        // 紧随其后的 iBatis 索引查询抛 IndexNotReady → 空锚 SOURCE_NOT_FOUND。
+        // 不能 waitForSmartMode（在 EDT 上会与 dumb 任务互锁）；改为边 pump EDT 事件边等，有界兜底。
+        var spins = 0
+        while (DumbService.isDumb(project) && spins++ < 600) {
+            UIUtil.dispatchAllInvocationEvents()
+            Thread.sleep(10)
+        }
         // iBatis 定位链共用 JVM 级静态测试缝：同分片前序用例若无复位会漏到这里，
         // 令 iBatis 调用行拿到空锚（SOURCE_NOT_FOUND）。本类自清，保证顺序无关。
         cn.song.mybatisplus.visualizer.ui.nav.IbatisXmlStatementTargets.lookupOverrideForTest = null
@@ -163,13 +173,7 @@ class McpSourceLocatorRenderAtLineTest : BasePlatformTestCase() {
 
         // 调用行（`return client.queryForObject("User.selectById", id);`）
         val callOutcome = render("cn/demo/UserDaoImpl.java", 5)
-        // CI 诊断：若仍 SOURCE_NOT_FOUND，把索引候选与 dumb 态打进断言消息，一轮定位真因
-        val diagFiles = SqlMapNamespaceIndex.getSqlMapFilesByStatementId(project, "selectById")
-        val diagAll = SqlMapNamespaceIndex.getAllSqlMapFiles(project)
-        assertNull(
-            "iBatis 调用行应命中: ${callOutcome.error}; [DIAG idxStmt=$diagFiles idxAll=$diagAll]",
-            callOutcome.error,
-        )
+        assertNull("iBatis 调用行应命中: ${callOutcome.error}", callOutcome.error)
         assertEquals("iBatis (User.selectById)", callOutcome.sourceType)
         assertTrue("应渲染出 iBatis SQL: ${callOutcome.sql}", callOutcome.sql.orEmpty().contains("FROM T_USER"))
 
