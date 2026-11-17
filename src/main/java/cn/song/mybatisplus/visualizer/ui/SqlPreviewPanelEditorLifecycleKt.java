@@ -683,7 +683,10 @@ public final class SqlPreviewPanelEditorLifecycleKt {
                 // 否则按 await 终态分型（硬失败/已消费）。
                 PreviewDegradationReason reason = p.prewarmAwait != null
                         ? PreviewDegradationReasonKt.degradationReasonOrNull(p.prewarmAwait) : null;
-                if (reason == null) reason = PreviewDegradationReason.TIMEOUT;
+                // master 默认 PRODUCT_CONSUMED（产物已消费）：此处 await 多已成功、非超时非失败，
+                // degradationReasonOrNull 返回 null。若默认成 TIMEOUT 会走宽限期、横幅被 clear →
+                // 稳定降级态永远不挂 DEGRADED 横幅（PrewarmLateRecover 的 degradePanel 前置必红）。
+                if (reason == null) reason = PreviewDegradationReason.PRODUCT_CONSUMED;
                 doc = fallbackPreviewDocument(p, sql, reason,
                         "prewarmed product unavailable (timeout/failed/consumed)");
             }

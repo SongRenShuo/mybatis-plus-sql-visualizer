@@ -51,17 +51,19 @@ class PreviewConsoleEagerTest : com.intellij.testFramework.fixtures.BasePlatform
      * （仓内 W12 定案：不自建换源 UI）——没有这个链接，用户就没有「先看控制台/先换源」的入口。
      */
     fun test显示控制台入口仍在且受惰性口径控制() {
+        // k2j 端口生产树是 src/main/java（.java），master 的 .kt 路径在此不存在。
+        // SqlPreviewPanelParamPanel.kt 在 k2j 侧被翻译成同包 SqlPreviewPanelParamPanelKt.java。
         val candidates = listOf(
-            java.io.File("src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelParamPanel.kt"),
-            java.io.File("../src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelParamPanel.kt"),
+            java.io.File("src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelParamPanelKt.java"),
+            java.io.File("../src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelParamPanelKt.java"),
         )
         val source = candidates.firstOrNull { it.isFile }?.readText(Charsets.UTF_8)
-            ?: error("找不到 SqlPreviewPanelParamPanel.kt")
+            ?: error("找不到 SqlPreviewPanelParamPanelKt.java（SqlPreviewPanelParamPanel.kt 的 Java 端口）")
         val codeOnly = source
             .replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), "")
             .replace(Regex("//[^\n]*"), "")
         assertTrue("bind-state 行必须有「显示执行控制台」链接", codeOnly.contains("panel.console.show"))
-        assertTrue("链接点击必须触发 prepareDefaultConsole", codeOnly.contains("prepareDefaultConsole()"))
+        assertTrue("链接点击必须触发 prepareDefaultConsole", codeOnly.contains("prepareDefaultConsole("))
         assertTrue(
             "链接可见性必须受三档口径控制（否则 eager/SILENT 下会多出一个没用的入口）",
             codeOnly.contains("PreviewConsoleEager.showShowConsoleEntry()"),

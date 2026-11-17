@@ -131,12 +131,13 @@ class PreviewAssemblyWarmTest : BasePlatformTestCase() {
      * 而所有 holder 用例照样绿。故此条按源码扫（仓内同款口径见 `XmlSqlCompletionContextResolverIndexKeySourceScanTest`）。
      */
     fun test接线点仍在gutter的文件打开预热处() {
+        // k2j 端口生产树是 src/main/java（.java），master 的 .kt 路径在此不存在。
         val candidates = listOf(
-            File("src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/XmlSqlGutterLineMarkerProvider.kt"),
-            File("../src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/XmlSqlGutterLineMarkerProvider.kt"),
+            File("src/main/java/cn/song/mybatisplus/visualizer/ui/gutter/XmlSqlGutterLineMarkerProvider.java"),
+            File("../src/main/java/cn/song/mybatisplus/visualizer/ui/gutter/XmlSqlGutterLineMarkerProvider.java"),
         )
         val source = candidates.firstOrNull { it.isFile }?.readText(Charsets.UTF_8)
-            ?: error("找不到 XmlSqlGutterLineMarkerProvider.kt（工作目录=${File(".").absolutePath}）")
+            ?: error("找不到 XmlSqlGutterLineMarkerProvider.java（工作目录=${File(".").absolutePath}）")
         val codeOnly = source
             .replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), "")
             .replace(Regex("//[^\n]*"), "")
@@ -146,7 +147,8 @@ class PreviewAssemblyWarmTest : BasePlatformTestCase() {
         )
         assertTrue(
             "preview 装配入口必须仍是纯装配（XmlPreviewService.preview），别接成建面板那条",
-            codeOnly.contains("XmlPreviewService.preview("),
+            // k2j：单例为 Kotlin object → Java 侧需 INSTANCE 限定，仍是同一 preview 装配入口。
+            codeOnly.contains("XmlPreviewService.INSTANCE.preview(") || codeOnly.contains("XmlPreviewService.preview("),
         )
     }
 }

@@ -115,8 +115,12 @@ public final class SqlPreviewPanelParamPanelKt {
                 && (!xmlModelForSchemeRow.getConditionViews().isEmpty()
                         || !xmlModelForSchemeRow.getForEachViews().isEmpty());
 
+        // T-IbatisSelectAll：iBatis 参数模型有控件时同样不能早退——否则条件复选框/清除按钮全不建，
+        // 前置「四个 iBatis 条件行必须建成复选框」与「清除按钮应存在」当场失败。
+        boolean ibatisHasControls = result.getIbatisParamModel() != null
+                && result.getIbatisParamModel().hasControls();
         if (views.isEmpty() && result.getUnresolvedParams().isEmpty() && batchModel == null && !xmlHasControls
-                && result.getRuntimeSlots().isEmpty()) {
+                && result.getRuntimeSlots().isEmpty() && !ibatisHasControls) {
             // T-DevAcceptFix ①：绑定指示行已迁顶部常驻行——无参数早退不再重复建行
             JBLabel none = new JBLabel(MpSqlVisualizerBundle.message("panel.param.none"));
             none.setBorder(JBUI.Borders.empty(6, 8));
@@ -186,6 +190,66 @@ public final class SqlPreviewPanelParamPanelKt {
                     p.paramPanel.add(sectionHeaderRow(p, MpSqlVisualizerBundle.message("panel.param.section")));
                 }
                 for (String s : ordinarySources) p.paramPanel.add(buildParamRow(p, s, labelWidth));
+            }
+            p.paramPanel.revalidate();
+            p.paramPanel.repaint();
+            return;
+        }
+
+        // T-Ibatis2Gap 券 A：iBatis 预览左栏——条件开关行 + iterate 值行 + 占位符/$ 直替行。
+        // 行清单来自 IbatisParamModel（基线 SQL 没有 `?` 也照建——让用户输入需要的参数）。
+        if (result.getIbatisParamModel() != null) {
+            cn.song.mybatisplus.visualizer.xml.ibatis.IbatisParamModel ibatisModel = result.getIbatisParamModel();
+            if (!ibatisModel.hasControls() && result.getUnresolvedParams().isEmpty()) {
+                JBLabel none = new JBLabel(MpSqlVisualizerBundle.message("panel.param.none"));
+                none.setBorder(JBUI.Borders.empty(6, 8));
+                p.paramPanel.add(none);
+                p.paramPanel.revalidate();
+                p.paramPanel.repaint();
+                return;
+            }
+            List<String> ibatisLabelTexts = new ArrayList<>();
+            for (var row : ibatisModel.getPlaceholderRows()) ibatisLabelTexts.add("#" + row.name());
+            for (var row : ibatisModel.getDollarRows()) ibatisLabelTexts.add("$" + row.name() + "$");
+            for (var row : ibatisModel.getIterateRows()) ibatisLabelTexts.add("iterate: " + row.property());
+            for (var row : ibatisModel.getConditionRows()) ibatisLabelTexts.add(ibatisModel.labelOf(row));
+            int ibatisLabelWidth = labelColumnWidth(p, ibatisLabelTexts);
+            boolean hasIbatisControls = ibatisModel.hasControls();
+            if (!ibatisModel.getConditionRows().isEmpty()) {
+                p.paramPanel.add(conditionSectionHeader(p));
+                for (var row : ibatisModel.getConditionRows()) {
+                    p.paramPanel.add(buildIbatisConditionRow(p, row, ibatisModel));
+                }
+            }
+            if (!ibatisModel.getIterateRows().isEmpty()) {
+                p.paramPanel.add(sectionHeaderRow(p, MpSqlVisualizerBundle.message("panel.ibatis.iterate.section")));
+                for (var row : ibatisModel.getIterateRows()) {
+                    p.paramPanel.add(buildIbatisIterateRow(p, row, ibatisLabelWidth));
+                }
+            }
+            java.util.Set<String> coveredSources = new java.util.HashSet<>();
+            for (var row : ibatisModel.getPlaceholderRows()) coveredSources.add(row.name());
+            for (var row : ibatisModel.getDollarRows()) coveredSources.add(row.name());
+            if (!ibatisModel.getPlaceholderRows().isEmpty() || !ibatisModel.getDollarRows().isEmpty()) {
+                if (hasIbatisControls) {
+                    p.paramPanel.add(sectionHeaderRow(p, MpSqlVisualizerBundle.message("panel.param.section")));
+                }
+                for (var row : ibatisModel.getPlaceholderRows()) {
+                    p.paramPanel.add(buildIbatisPlaceholderRow(p, row, ibatisLabelWidth));
+                }
+                for (var row : ibatisModel.getDollarRows()) {
+                    p.paramPanel.add(buildIbatisDollarRow(p, row, ibatisLabelWidth));
+                }
+            }
+            List<String> fallbackSources = new ArrayList<>();
+            for (String s : result.getUnresolvedParams()) {
+                if (!coveredSources.contains(s) && !fallbackSources.contains(s)) fallbackSources.add(s);
+            }
+            if (!fallbackSources.isEmpty()) {
+                if (hasIbatisControls) {
+                    p.paramPanel.add(sectionHeaderRow(p, MpSqlVisualizerBundle.message("panel.param.section")));
+                }
+                for (String s : fallbackSources) p.paramPanel.add(buildParamRow(p, s, ibatisLabelWidth));
             }
             p.paramPanel.revalidate();
             p.paramPanel.repaint();
@@ -434,9 +498,23 @@ public final class SqlPreviewPanelParamPanelKt {
         label.setName(SqlPreviewPanel.BIND_STATE_LABEL_NAME);
         label.setForeground(UIUtil.getContextHelpForeground());
         p.bindStateLabel = label;
+        // T-PreviewExecWriteDefer：惰性口径（默认）下预览打开不准备控制台（那一步会写带方言映射的
+        // mpsql-exec.sql ⇒ 工程短暂进 dumb）。给一个**只准备控制台、不执行**的链接作为「先看控制台 /
+        // 先换数据源」入口；换源仍走控制台自带 Data Sources 菜单（不自建换源 UI）。
+        com.intellij.ui.components.labels.LinkLabel<Object> showConsoleLink =
+                new com.intellij.ui.components.labels.LinkLabel<>(
+                        MpSqlVisualizerBundle.message("panel.console.show"), null,
+                        (source, linkData) -> {
+                            SqlPreviewPanelExecutionKt.prepareDefaultConsole(p);
+                            refreshBindStateRow(p);
+                        });
+        showConsoleLink.setName(SqlPreviewPanel.BIND_STATE_SHOW_CONSOLE_NAME);
+        showConsoleLink.setToolTipText(MpSqlVisualizerBundle.message("panel.console.show.tip"));
+        p.bindStateShowConsoleLink = showConsoleLink;
         JBPanel<JBPanel<?>> row = new JBPanel<JBPanel<?>>(new FlowLayout(FlowLayout.RIGHT, 8, 2));
         row.setName(SqlPreviewPanel.BIND_STATE_ROW_NAME);
         row.add(label);
+        row.add(showConsoleLink);
         // T-ExplainSwitchNative W12（2026-10-24 用户实测三图）：
         // 图三证明<b>平台原生工具栏自带 {@code Data Sources} 菜单</b>（含 Detach Data Source + 全部源），
         // 那才是「切换数据源」的正确形态。插件侧自建入口（W2 下拉 / W5 链接）已被用户否决；
@@ -455,6 +533,12 @@ public final class SqlPreviewPanelParamPanelKt {
         JBLabel label = p.bindStateLabel;
         if (label == null) return;
         label.setText(bindStateText(p));
+        // 惰性口径下、控制台还没挂上时给「显示执行控制台」入口；挂上后（或 eager/SILENT 口径）隐藏。
+        if (p.bindStateShowConsoleLink != null) {
+            p.bindStateShowConsoleLink.setVisible(
+                    PreviewConsoleEager.showShowConsoleEntry()
+                            && !SqlPreviewPanelExecutionKt.consoleAttachedToMe(p));
+        }
     }
 
     /**
@@ -705,11 +789,21 @@ public final class SqlPreviewPanelParamPanelKt {
         List<XmlConditionView> xmlViews = p.current != null && p.current.getXmlModel() != null
                 ? p.current.getXmlModel().getConditionViews() : null;
         if (xmlViews == null) xmlViews = List.of();
+        // T-IbatisSelectAll：iBatis 条件行 id（`ibatis-cond-N`）在 ibatisParamModel 里，
+        // Wrapper/XML 两份皆空 ⇒ 漏译会让「全选」对 iBatis 预览毫无反应。
+        List<cn.song.mybatisplus.visualizer.xml.ibatis.IbatisConditionRow> ibatisRows =
+                p.current != null && p.current.getIbatisParamModel() != null
+                        ? p.current.getIbatisParamModel().getConditionRows() : null;
+        if (ibatisRows == null) ibatisRows = List.of();
         for (ConditionView v : views) {
             if (enabled) p.enabledIds.add(v.getId());
             else p.enabledIds.remove(v.getId());
         }
         for (XmlConditionView v : xmlViews) {
+            if (enabled) p.enabledIds.add(v.id());
+            else p.enabledIds.remove(v.id());
+        }
+        for (cn.song.mybatisplus.visualizer.xml.ibatis.IbatisConditionRow v : ibatisRows) {
             if (enabled) p.enabledIds.add(v.id());
             else p.enabledIds.remove(v.id());
         }
@@ -796,8 +890,25 @@ public final class SqlPreviewPanelParamPanelKt {
                 if (!s.startsWith("__frch_") && !ordinarySources.contains(s)) ordinarySources.add(s);
             }
         }
+        // T-IbatisSelectAll：iBatis 链参数输入同语义清空——条件行 property、占位符/`$` 直替行、iterate 行。
+        // 此前只枚举 previewModel.conditionViews 与 unresolvedParams（iBatis 基线两者皆空），点清除无反应。
+        cn.song.mybatisplus.visualizer.xml.ibatis.IbatisParamModel ibatisModel =
+                p.current != null ? p.current.getIbatisParamModel() : null;
+        List<String> ibatisSources = new ArrayList<>();
+        if (ibatisModel != null) {
+            for (cn.song.mybatisplus.visualizer.xml.ibatis.IbatisConditionRow row : ibatisModel.getConditionRows()) {
+                if (row.property() != null) ibatisSources.add(row.property());
+            }
+            for (cn.song.mybatisplus.visualizer.xml.ibatis.IbatisPlaceholderRow row : ibatisModel.getPlaceholderRows()) {
+                ibatisSources.add(row.name());
+            }
+            for (cn.song.mybatisplus.visualizer.xml.ibatis.IbatisDollarRow row : ibatisModel.getDollarRows()) {
+                ibatisSources.add(row.name());
+            }
+        }
         List<String> all = new ArrayList<>(conditionSources);
         all.addAll(ordinarySources);
+        all.addAll(ibatisSources);
         for (String source : all) {
             p.paramValues.put(source, "");
             syncParamFieldText(p, source, "");
@@ -805,6 +916,21 @@ public final class SqlPreviewPanelParamPanelKt {
         // foreach 权威值（可见字段文本）；监听链同步权威 map，权威 map 再显式清一遍兜底
         for (Pair<String, JBTextField> pair : p.xmlForEachValueFields) pair.getSecond().setText("");
         p.xmlForEachValues.clear();
+        // D10（真机 2026-11-12）：展开项键必须一起清——syncForEachItemValues 以 map 非空为前提，
+        // 上一步 clear 后那条路径直接 return，值会永久残留（点清除后产物仍是 `BETWEEN '11' AND ?`）。
+        for (String source : new ArrayList<>(p.paramValues.keySet())) {
+            if (source.startsWith("__frch_")) {
+                p.paramValues.remove(source);
+                syncParamFieldText(p, source, "");
+            }
+        }
+        // iBatis iterate 值（可见字段文本 + 权威 map）——与 foreach 同语义（留空 = 该段不展开）
+        if (ibatisModel != null) {
+            for (cn.song.mybatisplus.visualizer.xml.ibatis.IbatisIterateRow row : ibatisModel.getIterateRows()) {
+                syncParamFieldText(p, row.property(), "");
+            }
+        }
+        p.ibatisIterateValues.clear();
         SqlPreviewPanelSqlViewKt.renderSql(p);
         saveToHistory(p);
     }
@@ -1284,7 +1410,155 @@ public final class SqlPreviewPanelParamPanelKt {
         return viewport <= 0 ? 280 : Math.max(100, Math.min(viewport - 56, 280));
     }
 
-    /** 复选框字体（与渲染一致，截断度量用——UIUtil.getLabelFont 与复选框字体在 headless 下可能不一致）。 */
+    // ------------------------------------------------------------------
+    // T-Ibatis2Gap 券 A：iBatis 预览左栏行构造器（master SqlPreviewPanelParamPanel.kt 同款端口）
+    // ------------------------------------------------------------------
+
+    /** iBatis 条件开关行：label = isNotNull: id 摘要 + 值输入框 + （空串条件）语义注记。 */
+    @NotNull
+    public static JBPanel<JBPanel<?>> buildIbatisConditionRow(@NotNull SqlPreviewPanel p,
+                                                              cn.song.mybatisplus.visualizer.xml.ibatis.IbatisConditionRow row,
+                                                              cn.song.mybatisplus.visualizer.xml.ibatis.IbatisParamModel model) {
+        String rawLabel = model.labelOf(row);
+        String displayLabel = checkBoxText(p, rawLabel);
+        JCheckBox checkBox = new JCheckBox(displayLabel, p.enabledIds.contains(row.id()));
+        checkBox.setToolTipText(rawLabel);
+        checkBox.putClientProperty(SqlPreviewPanel.PROP_TOGGLE_ID, row.id());
+        checkBox.addActionListener(e -> {
+            if (checkBox.isSelected()) p.enabledIds.add(row.id());
+            else p.enabledIds.remove(row.id());
+            SqlPreviewPanelSqlViewKt.renderSql(p);
+        });
+        p.conditionCheckBoxes.add(checkBox);
+        JBPanel<JBPanel<?>> panel = new JBPanel<JBPanel<?>>(new FlowLayout(FlowLayout.LEFT, 4, 2));
+        panel.add(checkBox);
+        if (row.property() != null) {
+            String prop = row.property();
+            boolean coveredByPlaceholder = false;
+            for (var ph : model.getPlaceholderRows()) {
+                if (ph.name().equals(prop)) { coveredByPlaceholder = true; break; }
+            }
+            if (!coveredByPlaceholder) panel.add(ibatisValueField(p, prop));
+        }
+        if ("isNotEmpty".equals(row.kindTagName()) || "isEmpty".equals(row.kindTagName())) {
+            JBLabel note = new JBLabel(MpSqlVisualizerBundle.message("panel.ibatis.condition.emptyString.note"));
+            note.setForeground(com.intellij.util.ui.UIUtil.getContextHelpForeground());
+            note.setToolTipText(MpSqlVisualizerBundle.message("panel.ibatis.condition.emptyString.tooltip"));
+            panel.add(note);
+        }
+        panel.setBorder(JBUI.Borders.empty(0, 8, 2, 8));
+        return panel;
+    }
+
+    /** iBatis iterate 行：iterate: prop 标签 + 值列表输入（逗号/换行分隔）。 */
+    @NotNull
+    public static JBPanel<JBPanel<?>> buildIbatisIterateRow(@NotNull SqlPreviewPanel p,
+                                                            cn.song.mybatisplus.visualizer.xml.ibatis.IbatisIterateRow row,
+                                                            int labelWidth) {
+        JBPanel<JBPanel<?>> panel = new JBPanel<JBPanel<?>>(new FlowLayout(FlowLayout.LEFT, 8, 6));
+        JBLabel label = columnLabel(p, "iterate: " + row.property(), labelWidth);
+        label.setBorder(indentedLabelBorder());
+        panel.add(label);
+        JBTextField field = new JBTextField(16);
+        field.setText(p.ibatisIterateValues.getOrDefault(row.property(), ""));
+        field.setToolTipText(MpSqlVisualizerBundle.message("panel.ibatis.iterate.tooltip"));
+        field.putClientProperty(SqlPreviewPanel.PROP_FIELD_SOURCE, row.property());
+        DocumentListener listener = new DocumentListener() {
+            @Override public void insertUpdate(DocumentEvent e) { onIbatisIterateValuesChanged(p, row, field.getText()); }
+            @Override public void removeUpdate(DocumentEvent e) { onIbatisIterateValuesChanged(p, row, field.getText()); }
+            @Override public void changedUpdate(DocumentEvent e) { onIbatisIterateValuesChanged(p, row, field.getText()); }
+        };
+        field.getDocument().addDocumentListener(listener);
+        p.paramFields.add(field);
+        panel.add(field);
+        panel.setBorder(JBUI.Borders.empty(0, 8, 2, 8));
+        return panel;
+    }
+
+    /** iterate 值变更：即时写状态，渲染走防抖。 */
+    public static void onIbatisIterateValuesChanged(@NotNull SqlPreviewPanel p,
+                                                     cn.song.mybatisplus.visualizer.xml.ibatis.IbatisIterateRow row,
+                                                     String text) {
+        p.ibatisIterateValues.put(row.property(), text);
+        p.scheduleRender(() -> SqlPreviewPanelSqlViewKt.renderSql(p));
+    }
+
+    /** iBatis 占位符行：#name 标签 + jdbcType 提示 + 值输入框。 */
+    @NotNull
+    public static JBPanel<JBPanel<?>> buildIbatisPlaceholderRow(@NotNull SqlPreviewPanel p,
+                                                                cn.song.mybatisplus.visualizer.xml.ibatis.IbatisPlaceholderRow row,
+                                                                int labelWidth) {
+        JBPanel<JBPanel<?>> panel = new JBPanel<JBPanel<?>>(new FlowLayout(FlowLayout.LEFT, 8, 6));
+        panel.add(paramLabel(p, row.name(), labelWidth));
+        JBTextField field = new JBTextField(16);
+        field.setText(p.paramValues.getOrDefault(row.name(), ""));
+        field.putClientProperty(SqlPreviewPanel.PROP_FIELD_SOURCE, row.name());
+        String hint = row.jdbcType() != null ? "#" + row.name() + ":" + row.jdbcType() : "#" + row.name();
+        field.getEmptyText().setText(hint);
+        field.setToolTipText(hint);
+        if (!field.getText().isEmpty()) field.setCaretPosition(0);
+        DocumentListener listener = new DocumentListener() {
+            @Override public void insertUpdate(DocumentEvent e) { onParamFieldText(p, row.name(), field); }
+            @Override public void removeUpdate(DocumentEvent e) { onParamFieldText(p, row.name(), field); }
+            @Override public void changedUpdate(DocumentEvent e) { onParamFieldText(p, row.name(), field); }
+        };
+        field.getDocument().addDocumentListener(listener);
+        p.paramFields.add(field);
+        panel.add(field);
+        panel.setBorder(JBUI.Borders.empty(0, 8, 2, 8));
+        return panel;
+    }
+
+    /** $x$ 直替行：$name$ 标签 + 值输入框 + 注入面标注。 */
+    @NotNull
+    public static JBPanel<JBPanel<?>> buildIbatisDollarRow(@NotNull SqlPreviewPanel p,
+                                                           cn.song.mybatisplus.visualizer.xml.ibatis.IbatisDollarRow row,
+                                                           int labelWidth) {
+        JBPanel<JBPanel<?>> panel = new JBPanel<JBPanel<?>>(new FlowLayout(FlowLayout.LEFT, 8, 6));
+        JBLabel label = columnLabel(p, "$" + row.name() + "$", labelWidth);
+        label.setBorder(indentedLabelBorder());
+        panel.add(label);
+        JBTextField field = new JBTextField(16);
+        field.setText(p.paramValues.getOrDefault(row.name(), ""));
+        field.putClientProperty(SqlPreviewPanel.PROP_FIELD_SOURCE, row.name());
+        field.setToolTipText(MpSqlVisualizerBundle.message("panel.ibatis.dollar.tooltip"));
+        DocumentListener listener = new DocumentListener() {
+            @Override public void insertUpdate(DocumentEvent e) { onParamFieldText(p, row.name(), field); }
+            @Override public void removeUpdate(DocumentEvent e) { onParamFieldText(p, row.name(), field); }
+            @Override public void changedUpdate(DocumentEvent e) { onParamFieldText(p, row.name(), field); }
+        };
+        field.getDocument().addDocumentListener(listener);
+        p.paramFields.add(field);
+        panel.add(field);
+        JBLabel note = new JBLabel(MpSqlVisualizerBundle.message("panel.ibatis.dollar.note"));
+        note.setForeground(SqlPreviewPanel.PARAM_WARN_FOREGROUND);
+        panel.add(note);
+        panel.setBorder(JBUI.Borders.empty(0, 8, 2, 8));
+        return panel;
+    }
+
+    /** 条件行内联值输入框（property 未被占位符行覆盖时用；与普通参数共享 paramValues 同键）。 */
+    @NotNull
+    public static JBTextField ibatisValueField(@NotNull SqlPreviewPanel p, String source) {
+        JBTextField field = new JBTextField(12);
+        field.setText(p.paramValues.getOrDefault(source, ""));
+        field.putClientProperty(SqlPreviewPanel.PROP_FIELD_SOURCE, source);
+        DocumentListener listener = new DocumentListener() {
+            @Override public void insertUpdate(DocumentEvent e) { onParamFieldText(p, source, field); }
+            @Override public void removeUpdate(DocumentEvent e) { onParamFieldText(p, source, field); }
+            @Override public void changedUpdate(DocumentEvent e) { onParamFieldText(p, source, field); }
+        };
+        field.getDocument().addDocumentListener(listener);
+        return field;
+    }
+
+    /** T-LabelInset：iterate / $ 直替行标签的左缩进边框。 */
+    @NotNull
+    public static Border indentedLabelBorder() {
+        return JBUI.Borders.emptyLeft(12);
+    }
+
+    /** 复选框字体（与渲染一致，截断度量用）。 */
     @NotNull
     public static String checkBoxText(@NotNull SqlPreviewPanel p, String raw) {
         return checkBoxText(p, raw, checkBoxMaxWidth(p));

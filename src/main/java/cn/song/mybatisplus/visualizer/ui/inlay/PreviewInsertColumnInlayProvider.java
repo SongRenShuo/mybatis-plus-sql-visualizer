@@ -60,6 +60,9 @@ public final class PreviewInsertColumnInlayProvider implements InlayHintsProvide
             @NotNull Editor editor,
             @NotNull NoSettings settings,
             @NotNull InlayHintsSink sink) {
+        // 第 0 道（T-PreviewInlayNativeYield）：IDEA 自带 SQL 列名 inlay 在位即整体让位。
+        // 放在最前——它是「这条功能还要不要」的开关，作用域/类型/可判三道只决定「画哪些」。
+        if (NativeColumnInlayYieldGate.shouldYield()) return null;
         if (PreviewInlayScope.previewStatementKind(file, editor) != XmlStatementKind.INSERT) return null;
         return new InsertColumnInlayCollector(new PresentationFactory(editor));
     }

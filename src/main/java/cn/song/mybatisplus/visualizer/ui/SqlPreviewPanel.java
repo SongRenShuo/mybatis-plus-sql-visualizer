@@ -130,6 +130,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     /** O-95 S3：绑定数据源指示行/标签 panel.name 锚点（测试定位 + paramRowLabelForTest 排除同口径）。 */
     public static final String BIND_STATE_ROW_NAME = "mpsv.bindStateRow";
     public static final String BIND_STATE_LABEL_NAME = "mpsv.bindStateLabel";
+    /** T-PreviewExecWriteDefer：「显示执行控制台」惰性入口组件 name 锚点。 */
+    public static final String BIND_STATE_SHOW_CONSOLE_NAME = "mpsv.showConsoleLink";
 
     /** R22 T-02/T-03：参数历史快照特殊键前缀（勾选态/foreach null/foreach 权威值；普通参数键
      *  不以 `__` 开头——键空间约定，ParamHistoryCache 对值透明）。 */
@@ -858,6 +860,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     public JComboBox<String> schemeCombo = null;
     // O-95 S3：绑定数据源指示行标签（rebuildLeftPanel 重建；renderSql 尾部单点刷新）
     public JBLabel bindStateLabel = null;
+    /** T-PreviewExecWriteDefer：惰性口径下「显示执行控制台」入口（buildBindStateRow 构建、refreshBindStateRow 控显隐）。 */
+    public com.intellij.ui.components.labels.LinkLabel<Object> bindStateShowConsoleLink = null;
     /** 程序化填 combo 模型时置位（抑制 addActionListener 的用户切换语义）。 */
     public boolean schemeSyncingCombo = false;
     /** 上次已同步到下拉的激活方案名——对话框回调时比对判定「激活方案被对话框切走」。 */
@@ -1092,6 +1096,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         // T-Perf-04：防抖/历史 Timer 随面板停止（防晚到 flush 触碰已销毁面板状态）
         renderDebounceTimer.stop();
         pendingRender = null;
+        // T-DegradedPreviewUx P1：降级宽限定时器同样随面板停止（到点不得再弹横幅）
+        SqlPreviewPanelEditorLifecycleKt.cancelDegradedGraceTimer(this);
         historyAlarm.stop();
         // T-Perf-16：释放 DataSourceSelector 单例滞留引用（弹窗关闭此前不走 clear 按钮路径——
         // prepared/shared/pendingOnConsole 强引用已关闭面板与原生控制台，堆转储滞留整棵面板树）
@@ -1106,6 +1112,20 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         } catch (Throwable ignored) {
         }
         // messageBus 连接经 connect(this) 绑定本 Disposable，Disposer.dispose 时自动取消订阅
+        // T-PreviewEditorLeak（2026-11-13 真机 SEVERE 驱动）：**兜底释放预览编辑器与 autopopup
+        // listener**。常规路径是 `removeNotify → releaseEditor`，而 IDE 退出/窗口已隐藏时
+        // removeNotify 不必然到达；此时残留的编辑器（含平台 CaretModelImpl/EditorView 子件）与
+        // `SqlPreviewPanel.autoPopup`（`Disposer.newDisposable` 的 ROOT 级子件）都会被平台
+        // ObjectTree 报 "Memory leak detected … Plugin to blame: SQL Visualizer"。两个调用都幂等。
+        try {
+            SqlPreviewPanelEditorLifecycleKt.disposeCurrentEditorOnly(this);
+        } catch (Throwable ignored) {
+        }
+        try {
+            if (autoPopupDisposable != null) Disposer.dispose(autoPopupDisposable);
+            autoPopupDisposable = null;
+        } catch (Throwable ignored) {
+        }
         Disposer.dispose(this);
     }
 
