@@ -428,4 +428,35 @@ public final class XmlSynHiGate {
         XmlTag root = containingFile instanceof XmlFile ? ((XmlFile) containingFile).getRootTag() : null;
         return root != null && root.getName().toLowerCase(Locale.ROOT).contains("mapper");
     }
+
+    // ==================================================================
+    // T-SyncK2JMaster179 生产补漏：master XmlSynHiGate.kt 的语句宿主根判定（本轮测试直接调用）。
+    // ==================================================================
+
+    /** MyBatis 语句映射文件根元素名。 */
+    public static final String MYBATIS_MAPPER_ROOT_TAG = "mapper";
+
+    /** iBatis 语句映射文件根元素名（不含 sqlMapConfig 全局配置）。 */
+    public static final String IBATIS_SQL_MAP_ROOT_TAG = "sqlMap";
+
+    private static boolean isSqlMapRootName(String name) {
+        return name != null && name.equalsIgnoreCase(IBATIS_SQL_MAP_ROOT_TAG);
+    }
+
+    private static XmlTag rootTagOf(XmlTag tag) {
+        PsiFile file = tag.getContainingFile();
+        return file instanceof XmlFile ? ((XmlFile) file).getRootTag() : null;
+    }
+
+    /** 语句宿主的根标签名判定：MyBatis mapper 或 iBatis sqlMap（大小写不敏感）。 */
+    public static boolean isStatementHostRootName(String rootTagName) {
+        return (rootTagName != null && rootTagName.equals(MYBATIS_MAPPER_ROOT_TAG))
+                || isSqlMapRootName(rootTagName);
+    }
+
+    /** iBatis 语句映射文件判定（根名 sqlMap），供 MyBatis 形态能力显式排除 iBatis。 */
+    public static boolean isIbatisSqlMapRoot(XmlTag tag) {
+        XmlTag root = rootTagOf(tag);
+        return isSqlMapRootName(root == null ? null : root.getName());
+    }
 }

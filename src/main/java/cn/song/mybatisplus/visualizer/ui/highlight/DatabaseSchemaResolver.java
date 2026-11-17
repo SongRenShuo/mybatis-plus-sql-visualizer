@@ -1407,6 +1407,25 @@ public final class DatabaseSchemaResolver {
         throw (E) t;
     }
 
+    // ==================================================================
+    // T-SyncK2JMaster179 生产补漏：master DatabaseSchemaResolver.kt 的 internal 纯判定函数/常量。
+    // ==================================================================
+
+    /** 预热去重窗口默认值（60s）：窗口内重复尝试跳过，窗口外放行保持自愈语义。 */
+    public static final long PREWARM_WINDOW_MS = 60_000L;
+
+    /** 测试缝：上次尝试在窗口内 → 跳过；window &lt;= 0 等价关闭。 */
+    public static boolean prewarmWindowHitAt(Long last, long now, long window) {
+        if (window <= 0L || last == null) return false;
+        long elapsed = now - last;
+        return elapsed >= 0 && elapsed < window;
+    }
+
+    /** 测试缝：模型冷窗口（window 内视为冷）；window &lt;= 0 等价关闭。 */
+    public static boolean modelsColdNowAt(Long lastAt, long now, long window) {
+        return lastAt != null && window > 0L && (now - lastAt) >= 0 && (now - lastAt) < window;
+    }
+
     private DatabaseSchemaResolver() {
     }
 }

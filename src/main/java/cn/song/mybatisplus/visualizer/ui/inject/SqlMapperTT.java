@@ -67,5 +67,11 @@ public final class SqlMapperTT {
     /** W3：OGNL 静态引用 {@code @com.Foo@bar}（类引用 + 成员）整体一个 token。 */
     public static final IElementType STATIC_REF = new IElementType("MPSQL_STATIC_REF", SqlMapperLanguage.INSTANCE);
 
+    /**
+     * T-SyncK2JMaster179 补漏：iBatis 转义字面量 {@code ##} / {@code $$}（产出字面 {@code #}/{@code $}），
+     * 无色＝普通文本。master SqlMapperTT.kt 的 {@code IBATIS_ESCAPE} 端口阶段漏翻。
+     */
+    public static final IElementType IBATIS_ESCAPE = new IElementType("MPSQL_IBATIS_ESCAPE", SqlMapperLanguage.INSTANCE);
+
     public static final IElementType WHITE_SPACE = new IElementType("MPSQL_WHITE_SPACE", SqlMapperLanguage.INSTANCE);
 }
