@@ -1,6 +1,6 @@
 {
-  "version": "2026.11.17-beta.1",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.17-beta.1/mybatis-plus-sql-visualizer-2026.11.17-beta.1.zip",
+  "version": "2026.11.17",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.17/mybatis-plus-sql-visualizer-2026.11.17.zip",
   "changeNotes": "iBatis 自研语句名里的 @ 不再让快捷键预览误报未找到\nJDBC 通道认领却渲染为空时, 自动再按 iBatis 语句解析一次",
   "publishDate": "2026-11-17",
   "sinceBuild": "243"
