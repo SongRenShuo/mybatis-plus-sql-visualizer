@@ -70,9 +70,10 @@ public class PlatformSignatureChecker {
         Class<?> dp = Class.forName("com.intellij.ide.plugins.DynamicPlugins", true, loader);
         Class<?> desc = Class.forName("com.intellij.ide.plugins.IdeaPluginDescriptorImpl", true, loader);
 
-        // 1. allowLoadUnloadWithoutRestart：首参弹性（262/243 首参可能漂移），优先最少参数
-        missing += check(byFirstParam(dp, "allowLoadUnloadWithoutRestart", desc),
-                "allowLoadUnloadWithoutRestart(<descriptor>)");
+        // 1. 卸载可行性预检：能力族任一可解析（T-DynUpdate263——263 移除 allowLoadUnloadWithoutRestart，
+        //    改 validateCanUnloadWithoutRestart(String?)/checkCanUnloadWithoutRestart(boolean)；
+        //    243 的 checkCanUnloadWithoutRestart 同名但返回 String，故必须连返回类型一起判）
+        missing += checkUnloadGateApis(dp, desc);
 
         // 2. unloadPlugin：首参弹性（262=PluginMainDescriptor 子类，243=IdeaPluginDescriptorImpl）
         Method unload = byFirstParam(dp, "unloadPlugin", desc);
@@ -740,6 +741,63 @@ public class PlatformSignatureChecker {
         Method best = null;
         for (Method m : clazz.getMethods()) {
             if (!m.getName().equals(name) || m.getParameterTypes().length == 0) {
+                continue;
+            }
+            Class<?> first = m.getParameterTypes()[0];
+            if (!firstParamBase.isAssignableFrom(first) && !first.isAssignableFrom(firstParamBase)) {
+                continue;
+            }
+            if (best == null || m.getParameterTypes().length < best.getParameterTypes().length) {
+                best = m;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * 卸载预检入口：三族任一可解析即通过，并打印命中的族名（T-DynUpdate263）。
+     *
+     * 263 删掉了 `allowLoadUnloadWithoutRestart`，改用
+     * `validateCanUnloadWithoutRestart(descriptor): String?` / `checkCanUnloadWithoutRestart(descriptor): boolean`。
+     * 判定必须**连返回类型一起看**：243 的 `checkCanUnloadWithoutRestart` 同名但返回 String（原因串）。
+     *
+     * @return 0=命中某族（已打印族名）；1=三族全缺（平台失去动态卸载能力，或签名再次漂移）
+     */
+    public static int checkUnloadGateApis(Class<?> dp, Class<?> desc) {
+        String family = resolveUnloadGateFamily(dp, desc);
+        if (family == null) {
+            System.out.println("MISS unload gate: none of validateCanUnloadWithoutRestart/"
+                    + "checkCanUnloadWithoutRestart/allowLoadUnloadWithoutRestart");
+            return 1;
+        }
+        System.out.println("OK   unload gate family=" + family);
+        return 0;
+    }
+
+    /** 与生产 DynamicInstallSupport.resolveUnloadGate 同款优先级：legacy > validate > check。 */
+    public static String resolveUnloadGateFamily(Class<?> dp, Class<?> desc) {
+        if (byFirstParamAndReturn(dp, "allowLoadUnloadWithoutRestart", desc, boolean.class) != null) {
+            return "legacy";
+        }
+        if (byFirstParamAndReturn(dp, "validateCanUnloadWithoutRestart", desc, String.class) != null) {
+            return "validate";
+        }
+        if (byFirstParamAndReturn(dp, "checkCanUnloadWithoutRestart", desc, String.class) != null) {
+            return "validate(243-name)";
+        }
+        if (byFirstParamAndReturn(dp, "checkCanUnloadWithoutRestart", desc, boolean.class) != null) {
+            return "check";
+        }
+        return null;
+    }
+
+    /** 首参弹性 + 返回类型精确匹配（同名不同返回类型的跨版本陷阱）。 */
+    private static Method byFirstParamAndReturn(Class<?> clazz, String name, Class<?> firstParamBase,
+                                                Class<?> returnType) {
+        Method best = null;
+        for (Method m : clazz.getMethods()) {
+            if (!m.getName().equals(name) || m.getParameterTypes().length == 0
+                    || m.getReturnType() != returnType) {
                 continue;
             }
             Class<?> first = m.getParameterTypes()[0];
