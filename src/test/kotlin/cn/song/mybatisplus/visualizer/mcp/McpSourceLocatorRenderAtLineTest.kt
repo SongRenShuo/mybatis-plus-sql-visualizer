@@ -1,7 +1,10 @@
 package cn.song.mybatisplus.visualizer.mcp
 
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.psi.util.PsiTreeUtil
+import com.intellij.psi.xml.XmlAttribute
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import cn.song.mybatisplus.visualizer.ui.nav.IbatisXmlStatementTargets
 import java.io.File
 
 /**
@@ -132,7 +135,33 @@ class McpSourceLocatorRenderAtLineTest : BasePlatformTestCase() {
      * 磁盘 `writeMapper` 造的文件不保证进 **FileTypeIndex**（既有 mapper 用例只走「路径 → PSI」，
      * 不查索引，所以没暴露）。Java DAO 仍写磁盘（`McpFilePathResolver` 按 basePath 解析绝对路径）。
      */
-    private fun addSqlMap(): com.intellij.psi.PsiFile = myFixture.addFileToProject("sqlmap/User.xml", sqlMap)
+    private fun addSqlMap(): com.intellij.psi.PsiFile {
+        val psi = myFixture.addFileToProject("sqlmap/User.xml", sqlMap)
+        // 本测试测的是 MCP 行号语义 + iBatis 调用行识别，不是 FileBasedIndex 的异步可见性
+        // （后者有 SqlMapNamespaceIndexTest 专测）。长分片 CI 里写文件触发的 dumb 会让索引查询抛
+        // IndexNotReady→空锚 SOURCE_NOT_FOUND，属环境时序依赖。用该链自带的测试缝直接从刚建的
+        // PSI 提供锚点，令本测试对 dumb/索引时序免疫；tearDown 复位，不污染同 JVM 后续用例。
+        IbatisXmlStatementTargets.lookupOverrideForTest = IbatisXmlStatementTargets.TestLookup { _, statementId, _ ->
+            // 调用点传的是 `namespace.id`（如 User.selectById），XML 里的 id 属性是裸 id
+            val bareId = statementId.substringAfterLast('.')
+            val attr = PsiTreeUtil.findChildrenOfType(psi, XmlAttribute::class.java)
+                .firstOrNull { it.name == "id" && it.value == bareId }
+            if (attr?.valueElement != null) {
+                IbatisXmlStatementTargets.Found(listOf(attr.valueElement!!))
+            } else {
+                IbatisXmlStatementTargets.Absent.ABSENT
+            }
+        }
+        return psi
+    }
+
+    override fun tearDown() {
+        try {
+            IbatisXmlStatementTargets.lookupOverrideForTest = null
+        } finally {
+            super.tearDown()
+        }
+    }
 
     fun testiBatis_sqlMap语句行走iBatis渲染() {
         // 本用例只走「路径 → PSI → 标签直渲」，不查 FileTypeIndex，写磁盘即可
