@@ -6,7 +6,9 @@ package cn.song.mybatisplus.visualizer.ui;
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import cn.song.mybatisplus.visualizer.model.BatchColumn;
 import cn.song.mybatisplus.visualizer.model.ConditionView;
+import cn.song.mybatisplus.visualizer.model.ConsumptionKind;
 import cn.song.mybatisplus.visualizer.model.PreviewResult;
+import cn.song.mybatisplus.visualizer.model.WrapperConsumption;
 import cn.song.mybatisplus.visualizer.model.SelectStatement;
 import cn.song.mybatisplus.visualizer.model.SqlPreviewModel;
 import cn.song.mybatisplus.visualizer.sql.JoinDiagramGenerator;
@@ -898,5 +900,46 @@ public final class SqlPreviewPanelResultViewKt {
         if (warning == null) return false;
         UiTextClipboard.copy(warning);
         return true;
+    }
+
+    // ==================================================================
+    // T-SyncK2JMaster179 生产补漏：master SqlPreviewPanelResultView.kt 的 T-PreviewStmtTypeScope internal 函数。
+    // ==================================================================
+
+    /** 判型依据的可读文案（行号取不到时不显示「第 0 行」噪声）。 */
+    @NotNull
+    public static String stmtTypeSourceText(@NotNull WrapperConsumption evidence) {
+        if (evidence.line() > 0) {
+            return MpSqlVisualizerBundle.message("panel.meta.stmtTypeSource", evidence.methodName(), evidence.line());
+        }
+        return MpSqlVisualizerBundle.message("panel.meta.stmtTypeSourceNoLine", evidence.methodName());
+    }
+
+    /** 判型档位 → 产物语句形态标签（SQL 关键字，双语不译）。 */
+    @NotNull
+    public static String stmtTypeKindLabel(@NotNull ConsumptionKind kind) {
+        return switch (kind) {
+            case DELETE -> "DELETE";
+            case COUNT -> "SELECT COUNT(*)";
+            case EXISTS -> "SELECT EXISTS";
+            case UPDATE_ENTITY -> "UPDATE";
+            case PAGE -> "LIMIT";
+        };
+    }
+
+    /** 判型依据的悬停段：列出该 wrapper 上识别到的全部消费调用（> 1 才产出）。 */
+    @NotNull
+    public static String stmtTypeCandidatesSection(@NotNull PreviewResult result) {
+        List<WrapperConsumption> others = result.getOtherConsumptions();
+        if (others == null || others.isEmpty()) return "";
+        StringBuilder lines = new StringBuilder();
+        for (int i = 0; i < others.size(); i++) {
+            if (i > 0) lines.append('\n');
+            WrapperConsumption c = others.get(i);
+            String where = c.line() > 0 ? c.fileName() + ":" + c.line() : c.fileName();
+            lines.append("  ").append(where).append("  ").append(c.methodName())
+                    .append("() → ").append(stmtTypeKindLabel(c.kind()));
+        }
+        return "\n\n" + MpSqlVisualizerBundle.message("panel.meta.stmtTypeCandidates", lines.toString());
     }
 }

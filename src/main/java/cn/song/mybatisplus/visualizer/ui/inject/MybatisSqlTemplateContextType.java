@@ -49,6 +49,18 @@ public class MybatisSqlTemplateContextType extends TemplateContextType {
     /** 上下文 id（模板 XML 的 {@code <option name>} 必须与之一致）。 */
     public static final String ID = "MYBATIS_SQL";
 
+    /**
+     * T-SyncK2JMaster179 补漏：master 的语句宿主根判定定义在 XmlSynHiGate.kt（MybatisSqlTemplateContextType
+     * 是其调用方）。这里转发，方便按本类名检索的调用方使用；权威实现见 {@link XmlSynHiGate}。
+     */
+    public static boolean isStatementHostRootName(String rootTagName) {
+        return XmlSynHiGate.isStatementHostRootName(rootTagName);
+    }
+
+    public static boolean isIbatisSqlMapRoot(XmlTag tag) {
+        return XmlSynHiGate.isIbatisSqlMapRoot(tag);
+    }
+
     private static final Set<String> STATEMENT_TAGS = Set.of("select", "insert", "update", "delete", "sql");
 
     private static final int MAX_ANCESTOR_DEPTH = 24;

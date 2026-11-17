@@ -63,6 +63,12 @@ import java.util.Set;
  */
 public class SqlMapperHighlightingLexer extends LexerBase implements RestartableLexer {
 
+    /**
+     * T-SyncK2JMaster179 补漏：iBatis 转义 token 别名。master 定义在 SqlMapperTT.kt，
+     * lexer 仅为兼容按类名检索的调用方转发（真实 token 常量以 {@link SqlMapperTT#IBATIS_ESCAPE} 为准）。
+     */
+    public static final IElementType IBATIS_ESCAPE = SqlMapperTT.IBATIS_ESCAPE;
+
     private CharSequence buffer = "";
     private int endOffset = 0;
     private int tokenStart = 0;

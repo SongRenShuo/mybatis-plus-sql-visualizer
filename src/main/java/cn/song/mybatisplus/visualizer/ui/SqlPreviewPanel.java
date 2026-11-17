@@ -683,6 +683,17 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     public JButton errorCopyButton = null;
     public String currentWarning = null;
 
+    // T-SyncK2JMaster179 生产补漏：master SqlPreviewPanel.kt 的 internal 字段（新移植测试直接读写）。
+    /** T-FullTableWriteRisk：本轮 XML 预览的全表写风险（null = 无风险）。 */
+    public FullTableWriteRisk writeRiskWarning = null;
+    /** 当前警示是否为信息级（ℹ）——iBatis 待填值等说明性提示。 */
+    public boolean currentWarningIsNote = false;
+    /** iBatis iterate 本轮供值（property → 逗号分隔值列表）。 */
+    public final Map<String, String> ibatisIterateValues = new LinkedHashMap<>();
+
+    /** 别名常量：写风险横幅类别，便于按 SqlPreviewPanel 检索（权威枚举为 DegradationBanner.Kind）。 */
+    public static final DegradationBanner.Kind WRITE_RISK = DegradationBanner.Kind.WRITE_RISK;
+
     /**
      * T-PSG-04（N-33）：最近一次参数回填的「`?` 位点数 vs 参数条数」对账标注——不等时非 null。
      *
@@ -1559,6 +1570,12 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
 
     public Set<String> enabledIdsForTest() {
         return new LinkedHashSet<>(enabledIds);
+    }
+
+    /** T-SyncK2JMaster179 补漏：seed 默认勾选集（测试缝，master seedEnabledIdsForTest）。 */
+    public void seedEnabledIdsForTest(Set<String> ids) {
+        enabledIds.clear();
+        enabledIds.addAll(ids);
     }
 
     public JButton toggleSelectButtonForTest() {
