@@ -104,6 +104,39 @@
 - 与另一条活跃任务 `T-IbatisAtShapeGate`（master `164e6a884`）的冲突：本轮冻结在 `906039f29`，不纳该修复，留下轮。
 - 本地旧 178 支线备份在 `backup/k2j-178-local-stale-20261117`，如需考古从中取，不合并。
 
-## §八 实施记录
+## §八 实施记录（收官）
 
-（本轮进行中，收官回填）
+### 8.1 范围与结论
+
+- 冻结目标 `906039f29`（master tip 现为 `a4ad7a5bc`，多出 16 提交含 T-IbatisAtShapeGate——另一活跃任务车道，本轮不追）。
+- 真实增量 `183c98b3d..906039f29`：209 提交 / 257 文件（121 A + 136 M）。
+- 提交链 **38 笔**：`6ced8d044`（W0 立项）→ `9fce1f920`（MCP 诊断脚手架清理），双仓已 push。
+- 本地旧 178 支线备份在 `backup/k2j-178-local-stale-20261117`（49 笔、未完成），本地分支重置到 origin 178 收官版（`1b46c290a`）。
+
+### 8.2 各波次产出
+
+| 波次 | 内容 | 关键提交 |
+|---|---|---|
+| W0 | 立项（本文件） | `6ced8d044` |
+| W1 | 生产树落地（会话起点自洽翻译，compileJava 绿）+ 删 9 件误加 .kt 孪生件（保 origin .java 承载）+ C 波 docs/dev-support/record 直取 + 台账两册三方合并 | `b029f936f` `c64bb82f2` `045ceb213` `30d4a63aa` |
+| W1b/W2 | A/B 波测试编译适配：厚批量具名实参位置化、静态导入、密封变体扁平化；生产 internal helpers 回填 6 波（38 符号：paramLabel/MethodLookup/MethodLookup/EntityClassFinder/DialectPreMapping/XmlPreview 等） | `f543a6a83` `dd325b0f4` `3cdbe5bbb` `acfe45a63` `0d48db9f0` |
+| W3/W4 | 生产行为回填：判型依据/方言备忘/gutter 三态/横幅与 iBatis 回填/日志静默冲刷/MBG/EntityClassFinder/EDT 写投递 | `d5e9afa8c` `94953cb45` `110e80c8f` `f7f9b549e` `36efae970` `cfda1c880` |
+| CI 修红 | push-test 首轮 93 失败/42 类 → 4 代理并行修红至 4 → 二轮 1（EntityClassFinder 缓存失效 + gutter seam 漏）；MCP 单条 flake 多轮接缝自清/索引 ensureUpToDate/waitForSmartMode（EDT 挂死回退） | `a783c569c` `04bdd638f` `22925d496` `0b73c5406` `0f50a55e1` |
+
+### 8.3 门禁读数
+
+- **本地 sanity**：`compileJava` + `compileTestKotlin --rerun-tasks` **BUILD SUCCESSFUL / 0 错**；45 个曾在 CI 红的测试类本地全绿。
+- **CI push-test**（多轮，最终 HEAD `9fce1f920` 对应 run `44068086118`）：`fast(1/2)`、`test(2/4)` 等腿稳定 success，`nightly-nudge` 按设计 skipped；`test(3)` 恒因下述单条 flake 失败（曾多轮达到 6/7 腿绿）。
+- **唯一遗留**：`testShard3` 的 `McpSourceLocatorRenderAtLineTest::testiBatis_Java调用行` CI-only 偶发 `SOURCE_NOT_FOUND`。本地单测、组合跑、完整本地 `testShard3` 全绿；生产定位链与 master 冻结 tip 逐字一致；诊断证明 `SqlMapNamespaceIndex` 索引可见、但长分片下 `resolveStatementAnchors` 返回空锚。多轮按接缝自清、EDT-pump 等 dumb 结束、索引 `ensureUpToDate` 修复无效（`waitForSmartMode` 在 EDT 挂死 CI，已回退）。按用户认可收官登记为已知 flake。
+- **gate 未派发**（因 push-test 未全绿）。
+
+### 8.4 事故与坑沉淀
+
+1. **本地旧 178 支线与 origin 178 分叉**（同任务号两条线）：本地 49 笔未完成，origin 207 笔全绿收官。处置=备份本地支线 + 重置到 origin，只同步其后真实新增部分，避免重复劳动与强推覆盖。
+2. **会话起点生产树是自洽翻译，后续会话中编辑引入不一致**：W1 直接采用会话起点生产树（compileJava 绿），而非从 stale 支线末态取（已坏）。
+3. **`.kt`/`.java` 孪生件 Redeclaration**：W1b 从 stale 支线带回 9 件 .kt 测试，与 origin 的 .java 承载同名 → 删 .kt 保 .java（k2j-port-sync 结构铁律）。
+4. **守卫源码扫描路径 `.kt→.java`**：SettingsRealityGuard/BannedApiScan/EnumReachability/GuardSelfTestCoverage/EditorCommentShortcuts 等约 10 个守卫测试扫的是 master 的 `src/main/kotlin/**/*.kt`，k2j 生产 100% Java；逐处改为扫 `.java` 等价路径/声明形态，被守卫语义逐条保持。
+5. **Kotlin 顶层函数/object/密封类 → Java 门面/INSTANCE/枚举常量** 与具名实参→位置参是本次编译适配的两大主形态；`copy()` 在 Java record 上不存在，须用全字段构造器/with* 方法。
+6. **跨测试静态缝泄漏**：`IbatisXmlStatementTargets.lookupOverrideForTest` 等 object 级全局缝被前序用例置 Absent/Unknown 后未复位，污染同 JVM 后续用例；在 setUp/tearDown 自清（顺序无关）。
+7. **`waitForSmartMode()` 在 EDT 测试线程挂死**：CI job 17+ 分钟无进展；改用有界 EDT-pump（`UIUtil.dispatchAllInvocationEvents` + `Thread.sleep(10)`）。
+8. **写 CI-only flake 诊断断言时不要直接调索引查询**：dumb 模式下抛 `IndexNotReadyException`，反把测试红因盖住；诊断信息须在无索引调用前提下采集。
