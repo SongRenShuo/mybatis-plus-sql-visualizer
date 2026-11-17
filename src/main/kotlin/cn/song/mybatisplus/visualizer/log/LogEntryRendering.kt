@@ -256,14 +256,25 @@ internal fun formatTemplateCountFragment(
  * （Registry 可调）判嫌疑，落点与「×N 同模板」相邻（元信息行尾），红色加粗作行动信号。
  * Registry `sqlvis.log.nplusOneSuspect` 关闭即不显示（回退通道）；与展示徽章并存
  * （阈值 5 > 3，嫌疑条目两枚徽章都可见，语义分层：计数提示 vs 行动建议）。
+ *
+ * 第二刀（D216 收口）：[nplusOneSuspects] 非 null 时走**窗口判定**——嫌疑集由
+ * `SqlLogEntryBuffer.windowSuspectKeys` 按刷新拍产出（同线程滑动窗分桶 + null 线程会话级回落），
+ * 本函数只查键在场；null（历史页/未接线调用方）保持第一刀会话级计数判定，逐字不变。
  */
 internal fun formatNplusOneSuspectFragment(
     entry: LogSqlEntry,
     counts: Map<String, Int>,
     isSelected: Boolean,
+    nplusOneSuspects: Set<String>? = null,
 ): Pair<String, SimpleTextAttributes>? {
     val n = counts[entry.structureKey] ?: return null
-    if (!NplusOneSuspect.isSuspect(n)) return null
+    if (!NplusOneSuspect.enabledProvider()) return null
+    val suspect = if (nplusOneSuspects != null) {
+        entry.structureKey in nplusOneSuspects
+    } else {
+        NplusOneSuspect.isSuspect(n)
+    }
+    if (!suspect) return null
     val color = if (isSelected) Color(0xFFFFFF) else MpvsUiColors.NPLUS_ONE_SUSPECT
     return MpSqlVisualizerBundle.message("log.panel.nplusOneBadge", n) + " " to
         SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, color)
@@ -399,6 +410,15 @@ internal class LogEntryListCellRenderer : RailCellRendererBase() {
 
     /** O-90：同模板计数快照（「×N 同结构」徽章渲染数据源；refreshList 随 dedupeCounts 一并更新）。 */
     var templateCounts: Map<String, Int> = emptyMap()
+
+    /**
+     * T-HdAbsorb D216 第二刀：N+1 窗口嫌疑键集（buffer.windowSuspectKeys 每刷新拍产出；
+     * refreshCountMaps 更新）。null/空集语义见 formatNplusOneSuspectFragment——日志页恒非 null
+     * （空集=无嫌疑），历史页渲染器不设此字段走第一刀会话级判定。
+     */
+    var nplusOneSuspects: Set<String>? = null
+
+    override fun nplusOneSuspectsSnapshot(): Set<String>? = nplusOneSuspects
 
     /** 当前列表可见条目的最大耗时（refreshList 更新；进度条已退役，仍留作诊断读数与测试断言）。 */
     var maxDurationMs: Long? = null

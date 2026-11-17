@@ -78,6 +78,27 @@ class SqlLogEntryBuffer(
      */
     private val countFullRebuildPending = AtomicBoolean(false)
 
+    // ---------- T-HdAbsorb D216 第二刀：同线程滑动窗嫌疑戳 ----------
+
+    /**
+     * D216 第二刀（吸收 Hibernate Debugger `RepeatedParameterizedSelectCriterion` 事务分组思路，
+     * 本仓退化口径＝线程+滑动窗）：structureKey → 窗内 (timestamp, threadName) 戳队列（FIFO，
+     * 读取时按窗修剪）。与 presence 计数链**独立**维护：
+     *  - 入队埋戳只在「去重开启 + 可去重」成功路径（与 presence 同条件），structureKey 经
+     *    [structureKeyByDedupe] 每 dedupeKey 只算一次（热路径零指纹重付——presence 链的
+     *    structureKey 惰性缓存挂在保留实例上，逐实例加戳不能直接复用）；
+     *  - **逐条出队不做摘戳**：头部淘汰/融合换实例留下的陈旧戳靠窗龄自愈（窗 60s 上限），
+     *    「刚被淘汰的条目让键多嫌疑 ≤ 一个窗」为如实登记的近似；[clear] 全量复位；
+     *  - 读取见 [windowSuspectKeys]（修剪 + 同线程分桶 + 阈值判定，null 线程单桶参与——
+     *    控制台回落通道条目无线程名，按会话级同窗计数回落口径）。
+     */
+    private class WindowStamp(val tsMs: Long, val thread: String?)
+
+    private val windowStamps = HashMap<String, ArrayDeque<WindowStamp>>()
+
+    /** dedupeKey → structureKey（每键一次指纹计算；与窗口戳同生命周期，[clear] 一并清）。 */
+    private val structureKeyByDedupe = HashMap<String, String>()
+
     @Volatile
     var paused: Boolean = false
         internal set
@@ -579,6 +600,9 @@ class SqlLogEntryBuffer(
                         // 券B：在队计数 +1，登记变更键供面板按 presence 净差增量（同键入队与后续淘汰的
                         // 增减在 drain 间折叠为一次净变化，无悬挂余量）。
                         markCountKeyLocked(added.dedupeKey)
+                        // T-HdAbsorb D216 第二刀：窗口嫌疑戳（与 presence 同条件维护；O(1) 追加，
+                        // structureKey 经 byDedupe 缓存每键只算一次——热路径零指纹重付）。
+                        markWindowStampLocked(added)
                     } else {
                         // 券B：去重关闭期间 presence 不维护 / 不可去重条目（ShardingSphere）不在
                         // presence 口径内——增量键集无法表达，面板回退全量重算（与全量重算的现状同价）。
@@ -858,6 +882,52 @@ class SqlLogEntryBuffer(
     }
 
     /**
+     * T-HdAbsorb D216 第二刀：窗口嫌疑戳登记（调用方须已持 `synchronized(entries)`，与 presence
+     * 维护同条件同锁）。structureKey 经 [structureKeyByDedupe] 每 dedupeKey 只算一次。
+     */
+    private fun markWindowStampLocked(entry: LogSqlEntry) {
+        val sk = structureKeyByDedupe.getOrPut(entry.dedupeKey) { entry.structureKey }
+        windowStamps.getOrPut(sk) { ArrayDeque() }.addLast(WindowStamp(entry.timestamp, entry.threadName))
+    }
+
+    /**
+     * T-HdAbsorb D216 第二刀：窗口嫌疑键集（面板每刷新拍调一次，替代逐格重算）。
+     *
+     * 判定口径：structureKey 的窗内戳按线程分桶，**任一线程桶**计数 ≥ [threshold] 即嫌疑；
+     * 线程名 null（控制台回落通道）单独一桶参与判定——按计划「推断不到就退化」的会话级回落，
+     * 使无线程名条目仍有嫌疑检出能力。读取时顺带修剪窗外戳（含被淘汰条目残留的陈旧戳，
+     * 窗龄自愈口径见字段 KDoc）。
+     *
+     * 与 [NplusOneSuspect.isSuspect] 的关系：本出口产出**数据**（键集），总开关与阈值语义由
+     * 调用方（徽章层）判定——本函数只按传入阈值做分桶计数，不读 Registry（buffer 不进 UI 门）。
+     */
+    internal fun windowSuspectKeys(
+        nowMs: Long,
+        windowMs: Long,
+        threshold: Int,
+    ): Set<String> = synchronized(entries) {
+        if (windowStamps.isEmpty() || threshold < 2) return emptySet()
+        val lo = nowMs - windowMs
+        val out = HashSet<String>()
+        val it = windowStamps.entries.iterator()
+        for (e in it) {
+            val q = e.value
+            while (q.isNotEmpty() && q.first().tsMs < lo) q.removeFirst()
+            if (q.isEmpty()) {
+                it.remove()
+                continue
+            }
+            val byThread = HashMap<String, Int>()
+            for (s in q) {
+                val k = s.thread ?: "\u0000"
+                byThread[k] = (byThread[k] ?: 0) + 1
+            }
+            if (byThread.values.any { it >= threshold }) out.add(e.key)
+        }
+        out
+    }
+
+    /**
      * 清空全部（去重计数一并归零——徽章与列表内容同生命周期；
      * T-LogRowNumber：捕获序号一并归零——清空后下一条从 #1 起计数）。
      */
@@ -867,6 +937,8 @@ class SqlLogEntryBuffer(
             dedupeIndex.clear() // T-SqlLogPerf P6：索引随队清空
             dedupeKeyPresence.clear() // F83：键级在队计数随队清空
             crossChannelIndex.clear() // T-CrossChannelDedupe：跨通道索引同生命周期清空
+            windowStamps.clear() // T-HdAbsorb D216 第二刀：窗口嫌疑戳同生命周期清空
+            structureKeyByDedupe.clear()
             // 券B：清空后悬挂的变更键作废（面板全量重建不消费键集），集合一并清空保持有界口径。
             synchronized(changedCountKeys) { changedCountKeys.clear() }
         }

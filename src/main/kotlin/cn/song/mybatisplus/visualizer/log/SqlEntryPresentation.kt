@@ -108,11 +108,15 @@ internal object SqlEntryPresentation {
     /**
      * 动态徽章段（券01 每次算，不可缓存）：⨉去重 + ×N 同结构 + 疑似 N+1（D216）。
      * 三个徽章的输入是面板级快照 map，随流式灌入每拍变化——进缓存会吞更新。
+     *
+     * T-HdAbsorb D216 第二刀：[nplusOneSuspects] 由日志页渲染器从 buffer 窗口判定集取
+     * （刷新拍一次产出）；null = 历史页/未接线调用方，回落第一刀会话级计数判定。
      */
     fun headerBadgeFragments(
         entry: LogSqlEntry,
         templateCounts: Map<String, Int>,
         dedupeCounts: Map<String, Int> = emptyMap(),
+        nplusOneSuspects: Set<String>? = null,
     ): List<SqlTextFragment> = buildList {
         // UI013：同键的其他来源可能有丢弃计数，不能把徽章借给未参与去重的 Sharding 执行。
         dedupeCounts[entry.dedupeKey]?.takeIf { it > 0 && entry.source != SqlSource.SHARDINGSPHERE }?.let {
@@ -122,7 +126,7 @@ internal object SqlEntryPresentation {
             add(SqlTextFragment(it.first, it.second))
         }
         // T-HdAbsorb D216：N+1 嫌疑徽章（阈值 ≥5 Registry 可调；与同模板计数徽章分层）
-        formatNplusOneSuspectFragment(entry, templateCounts, false)?.let {
+        formatNplusOneSuspectFragment(entry, templateCounts, false, nplusOneSuspects)?.let {
             add(SqlTextFragment(it.first, it.second))
         }
     }

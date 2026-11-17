@@ -1901,6 +1901,13 @@ class SqlLogPanel(
         entryCellRenderer.dedupeCounts = dedupeCounts
         templateCounts = countAccumulator.currentTemplateCounts
         entryCellRenderer.templateCounts = templateCounts
+        // T-HdAbsorb D216 第二刀：窗口嫌疑键集每拍产出（buffer 侧修剪+分桶 O(窗内戳数)，有界）；
+        // 总开关/阈值语义仍在徽章层（NplusOneSuspect），buffer 只产数据。
+        entryCellRenderer.nplusOneSuspects = manager.entries.windowSuspectKeys(
+            nowMs = System.currentTimeMillis(),
+            windowMs = NplusOneSuspect.DEFAULT_WINDOW_MS,
+            threshold = NplusOneSuspect.thresholdProvider(),
+        )
     }
 
     private fun refreshList() {
