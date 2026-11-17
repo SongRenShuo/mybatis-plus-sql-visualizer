@@ -200,8 +200,9 @@ class WorkspaceJsonPropertyRepairTest {
      */
     @Test
     fun test生产侧键前缀与修复器前缀一致() {
+        // k2j 生产 100% Java：master 的 DataSourceSelector.kt 对应本仓 DataSourceSelector.java
         val source = File(
-            "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt",
+            "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.java",
         ).readText()
         listOf(
             "\"mpsql.visualizer.last.runner\"",
