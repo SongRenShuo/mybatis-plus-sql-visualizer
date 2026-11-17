@@ -177,15 +177,24 @@ class SqlMapConfigAliasIndexTest : BasePlatformTestCase() {
 
     fun test消费方_fqnOf按别名与模块收窄出FQN() {
         addXml("src/main/resources/sqlmap-config.xml", sqlMapConfig("User" to "p.User", "Broken" to ""))
+        // 「另一模块形态」的 config 必须用**不同别名**：addFileToProject 不建新模块，两文件同属
+        // 测试模块、模块收窄拦不住，同名别名会让 fqnOf 结果随索引候选顺序漂移
+        // （CI 分片实证：expected p.User 但 was q.OtherModuleUser，本地顺序恰好相反）；
+        // 真正的跨模块收窄语义由 test消费方_fqnOf的模块收窄按文件归属模块过滤 钉。
         addXml(
             "src/main/resources/other/sqlmap-config.xml",
-            sqlMapConfig("User" to "q.OtherModuleUser"),
+            sqlMapConfig("OtherUser" to "q.OtherModuleUser"),
         )
         val moduleName = currentModuleName()
         assertEquals(
             "别名直接给出 FQN（索引多收面由 PSI alias 精确匹配闸住）",
             "p.User",
             IbatisTypeAliasResolver.fqnOf(project, moduleName, "User"),
+        )
+        assertEquals(
+            "另一 config 的别名照常可查（不因路径不同被吞）",
+            "q.OtherModuleUser",
+            IbatisTypeAliasResolver.fqnOf(project, moduleName, "OtherUser"),
         )
         assertEquals(
             "模块名不符 → null（与 v1 只扫本模块语义一致）",
