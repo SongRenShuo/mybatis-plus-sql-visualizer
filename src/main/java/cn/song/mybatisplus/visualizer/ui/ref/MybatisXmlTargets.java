@@ -22,6 +22,7 @@ import com.intellij.psi.xml.XmlAttribute;
 import com.intellij.psi.xml.XmlAttributeValue;
 import com.intellij.psi.xml.XmlFile;
 import com.intellij.psi.xml.XmlTag;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.lang.ref.WeakReference;
@@ -262,6 +263,60 @@ public final class MybatisXmlTargets {
         if (iface == null) return null;
         PsiMethod[] methods = iface.findMethodsByName(name, true);
         return methods.length > 0 ? methods[0] : null;
+    }
+
+    // ==================================================================
+    // T-SyncK2JMaster179 生产补漏：master MybatisXmlTargets.kt 的三态定位（T-MapperGutterEvict P2.1）。
+    // ==================================================================
+
+    /** 接口方法定位三态：区分「找到 / 确定没有 / 暂时查不了」。 */
+    public sealed interface MethodLookup permits Found, Absent, Unknown {
+    }
+
+    /** 找到接口方法。 */
+    public record Found(@NotNull PsiMethod method) implements MethodLookup {
+    }
+
+    /** 确定没有（接口不存在 / 无同名方法 / 入参不全）。 */
+    public enum Absent implements MethodLookup {
+        ABSENT
+    }
+
+    /** 暂时查不了（Java 索引重建中 IndexNotReadyException）——调用方保留缓存命中。 */
+    public enum Unknown implements MethodLookup {
+        UNKNOWN
+    }
+
+    /** 测试缝：替换三态定位（生产＝null）。矩阵用例驱动 Unknown / Absent 分支。 */
+    @Nullable
+    public static volatile TriLookup methodLookupOverrideForTest = null;
+
+    /** 三态定位的可替换形态（测试缝专用）。 */
+    @FunctionalInterface
+    public interface TriLookup {
+        MethodLookup apply(@NotNull Project project, @NotNull String namespace, @NotNull String methodName);
+    }
+
+    /**
+     * 三态定位：gutter 用它区分「暂时查不了」与「确定没有」；IndexNotReadyException 归 Unknown，
+     * ProcessCanceledException 仍上抛（平台契约禁吞）。
+     */
+    @NotNull
+    public static MethodLookup lookupInterfaceMethod(@Nullable Project project, @Nullable String namespace,
+                                                     @NotNull String methodName) {
+        String name = methodName.trim();
+        if (project == null || namespace == null || namespace.isEmpty() || name.isEmpty()) return Absent.ABSENT;
+        TriLookup override = methodLookupOverrideForTest;
+        if (override != null) return override.apply(project, namespace, name);
+        PsiClass iface;
+        try {
+            iface = JavaPsiFacade.getInstance(project).findClass(namespace, GlobalSearchScope.allScope(project));
+        } catch (com.intellij.openapi.project.IndexNotReadyException e) {
+            return Unknown.UNKNOWN;
+        }
+        if (iface == null) return Absent.ABSENT;
+        PsiMethod[] methods = iface.findMethodsByName(name, true);
+        return methods.length > 0 ? new Found(methods[0]) : Absent.ABSENT;
     }
 
     /** {@code property="a.b"} / {@code <arg property>} 的<b>首段</b>字段解析（深层链后续可扩展）。 */

@@ -676,6 +676,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     // R22 T-02/T-03：勾选态与 foreach 行的组件登记（快照枚举 + 召回视觉同步；随 rebuild 清场）
     public final List<JCheckBox> xmlForEachNullBoxes = new ArrayList<>();
     public final List<Pair<String, JBTextField>> xmlForEachValueFields = new ArrayList<>();
+    // T-SyncK2JMaster179 补漏：foreach「本轮未展开」提示标签（collectionExpr → 提示 JBLabel），随 rebuild 清场。
+    public final List<Pair<String, JBLabel>> xmlForEachInertLabels = new ArrayList<>();
     public List<String> xmlErrors = List.of();
     /** T-M25.4：最近一次 XML 渲染的参数映射（集合值输入按当前渲染键回填）。 */
     public List<cn.song.mybatisplus.visualizer.xml.ParameterMapping> xmlMappings = List.of();
