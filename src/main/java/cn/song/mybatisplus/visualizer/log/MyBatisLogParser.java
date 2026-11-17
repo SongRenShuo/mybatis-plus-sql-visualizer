@@ -193,14 +193,8 @@ public class MyBatisLogParser {
         boolean continuing = false;
     }
 
-    private final LogThreadRouter<Bucket> router = new LogThreadRouter<>(
-            Bucket::new,
-            // 无线程 token 的裸行（续行 / 「前缀独占一行」的下一行）要落到**正在等待它**的桶——
-            // 否则带前缀的 `Preparing:`（token=main）与其下一行裸 SQL 会分属两个桶，等待态永远完不成
-            b -> b.continuing || b.prefixMatched || b.paramPrefixMatched,
-            b -> b.pendingSql == null && !b.prefixMatched && !b.paramPrefixMatched);
-
-    /** 时钟同源形态（master 的 router clock 注入；k2j 侧 router 构造器见 LogThreadRouter）。 */
+    /** master 的 router 在主构造器里用与 settle 同源的 [clock] 构造（测试注入可控件）；此处同款。 */
+    private final LogThreadRouter<Bucket> router;
 
     public MyBatisLogParser() {
         this(new LogSqlRestorer());
@@ -225,13 +219,24 @@ public class MyBatisLogParser {
     public MyBatisLogParser(LogSqlRestorer restorer, String sqlPrefix, String paramPrefix,
                             boolean mixedPrefix, int maxParseLength,
                             long settleMs, java.util.function.LongSupplier clock) {
-        this.restorer = restorer;
+        // master 的 restorer 是带默认值的构造参数；k2j 翻译成 Java 后测试透传 null（省略默认实参），
+        // 这里 coalesce 回默认实例，复刻 Kotlin 默认参数语义（否则 emitEntry 每条必 NPE）。
+        this.restorer = restorer != null ? restorer : new LogSqlRestorer();
         this.sqlPrefix = sqlPrefix;
         this.paramPrefix = paramPrefix;
         this.mixedPrefix = mixedPrefix;
         this.maxParseLength = maxParseLength;
         this.settleMs = settleMs;
         this.clock = clock;
+        // 桶活动时间必须与 settle 判定同源（master 主构造器 clock = clock）：否则注入时钟的测试里
+        // 桶记的是真实毫秒、flushSettled(假时钟) 永不判静默 → 无参语句 0 产出。
+        this.router = new LogThreadRouter<>(
+                Bucket::new,
+                // 无线程 token 的裸行（续行 / 「前缀独占一行」的下一行）要落到**正在等待它**的桶——
+                // 否则带前缀的 `Preparing:`（token=main）与其下一行裸 SQL 会分属两个桶，等待态永远完不成
+                b -> b.continuing || b.prefixMatched || b.paramPrefixMatched,
+                b -> b.pendingSql == null && !b.prefixMatched && !b.paramPrefixMatched,
+                LogThreadRouter.DEFAULT_MAX_BUCKETS, false, () -> clock.getAsLong());
     }
 
     public LogSqlRestorer getRestorer() {

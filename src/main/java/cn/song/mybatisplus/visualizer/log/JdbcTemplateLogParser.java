@@ -163,7 +163,8 @@ public class JdbcTemplateLogParser {
     /** master 主构造全参形态（T-ConsolePendingFlush：settleMs/clock 注入入口，测试用）。 */
     public JdbcTemplateLogParser(LogSqlRestorer restorer, boolean enabled, int maxParseLength,
                                  long settleMs, kotlin.jvm.functions.Function0<Long> clock) {
-        this.restorer = restorer;
+        // master 的 restorer 是带默认值的构造参数；k2j 测试透传 null（省略默认实参），coalesce 回默认实例。
+        this.restorer = restorer != null ? restorer : new LogSqlRestorer();
         this.enabled = enabled;
         this.maxParseLength = maxParseLength;
         this.settleMs = settleMs;
