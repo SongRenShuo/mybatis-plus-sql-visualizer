@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.mcp
 
+import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import java.io.File
@@ -50,8 +51,12 @@ class McpSourceLocatorRenderAtLineTest : BasePlatformTestCase() {
         LocalFileSystem.getInstance().refreshAndFindFileByIoFile(file)
     }
 
-    private fun renderAtLine(line: Int?): McpSourceLocator.Outcome =
-        McpSourceLocator.renderAtLine(project, "mapper/UserMapper.xml", line)
+    private fun renderAtLine(line: Int?): McpSourceLocator.Outcome {
+        // 长分片 CI 里本用例可能排在上千个用例之后，工程仍在 dumb / 索引未就绪时
+        // iBatis 语句定位会拿到空锚（SOURCE_NOT_FOUND）。等 smart 再解析，保证顺序无关。
+        DumbService.getInstance(project).waitForSmartMode()
+        return McpSourceLocator.renderAtLine(project, "mapper/UserMapper.xml", line)
+    }
 
     fun test标签行命中_修复主场景() {
         val outcome = renderAtLine(2)
@@ -124,8 +129,10 @@ class McpSourceLocatorRenderAtLineTest : BasePlatformTestCase() {
         }
     """.trimIndent()
 
-    private fun render(relPath: String, line: Int?): McpSourceLocator.Outcome =
-        McpSourceLocator.renderAtLine(project, relPath, line)
+    private fun render(relPath: String, line: Int?): McpSourceLocator.Outcome {
+        DumbService.getInstance(project).waitForSmartMode()
+        return McpSourceLocator.renderAtLine(project, relPath, line)
+    }
 
     /**
      * sqlMap 用 `addFileToProject` 进项目索引（namespace → 文件解析走 `FileTypeIndex`）；
