@@ -1,0 +1,109 @@
+# T-SyncK2JMaster179 主分支功能同步 开发计划
+
+> 分支：`feature/kotlin-to-java`（worktree `mybatis-plus-sql-visualizer-kotlin-to-java`）
+> 约束：**同步功能，绝不合并分支**——master 的 .kt 一行不进 k2j 生产树（生产 100% Java）。
+> 作业法：`.agents/skills/k2j-port-sync`。
+
+## §〇 立项背景（分叉订正，必读）
+
+原 `20261117-…T-SyncK2JMaster178` 计划把整段 `95e107b1..906039f29`（523 提交）当作未同步增量，
+但 `origin/feature/kotlin-to-java` 已于 2026-11-14 独立完成 178 轮（计划 `20261113-0007-…`），
+把 `95e107b1..183c98b3d`（314 提交）全量移植并全绿收官（锚点已推进到 `183c98b3d`）。
+本地那条「178」是与 origin 分叉的旧支线（efd3f9e0a 起，49 笔、未完成），已整体备份到
+`backup/k2j-178-local-stale-20261117`，本地分支已硬重置到 `origin/feature/kotlin-to-java`（`1b46c290a`）。
+**本轮只同步真正新增的 `183c98b3d..906039f29`（209 提交）**，不重复 origin 已完成的工作。
+
+## §一 范围冻结（开工实测）
+
+- 锚点：`.port-sync` `synced_master = 183c98b3d`（origin 178 收官，2026-11-14）。
+- 冻结目标：master `906039f29`（原计划冻结 tip）。**master 现已在 `a4ad7a5bc`（2026.11.17-beta.1），
+  多出的 16 提交（多为发行/文档，含 T-IbatisAtShapeGate 修复——另一条活跃任务车道）本轮不追，留下轮**。
+- 增量规模：`git rev-list --count 183c98b3d..906039f29` = **209 提交**；
+  `git diff --name-status` = 257 文件（121 A + 136 M，零 D/零 R）。
+- 开工基线：`compileJava + compileTestKotlin` **BUILD SUCCESSFUL / 0 错**（fresh base，见 §五）。
+- 按目录分布：
+  - `src/main/kotlin`：58 件（14 A 新类 + 44 M 增量翻译）。
+  - `src/test`：57 件（24 A 新测试 + 33 M 增量合并）。
+  - `src/main/resources`：3 件（plugin.xml + bundle 双语册）。
+  - 构建链：`build.gradle.kts`、`buildSrc/mpv-testing.gradle.kts`、`.github/workflows/build-plugin.yml`、`gradle.properties`。
+  - agent 子项目：**无变更**（本轮零增量）。
+  - docs / dev-support / record / .agents：大量文档件，直取 + 台账三方合并。
+
+### 功能主题（按提交归组）
+
+1. **索引化与首开提速**（T-IndexScanSweep2 P1 / T-MechanismSweep / T-GutterFirstOpenDelay F1~F2 / T-IbatisGutterPerf P0~P5）：`MapperNamespaceIndex`、`XmlSymbolNameIndexCache`、`SqlMapNamespaceIndex` 三新索引件；`MapperXmlLocator`/`WrapperLocator`/`GutterWarmScheduler` 增量；补全候选名清单项目级服务一次构建；mapper 定位全面索引化删旧扫描回退。
+2. **工作区自愈**（T-WorkspaceHeal）：`WorkspaceJsonPropertyRepair`、`WorkspacePropertiesRepairActivity` 两新件。
+3. **execute 面**：`DocWriteContext`/`DataSourceSelector`/`DataSourceSelectorResults` 增量、`ExecPsiFailureHint` 形状门、`ExecutionScriptScope`、`NewDataSourceEntry`。
+4. **onboarding/方言**：`DialectGapTip` 新件（方言死路提示）。
+5. **预览装配/控制台**：`PreviewAssemblyWarm`、`PreviewConsoleEager` 两新件 + `SqlPreviewPanel*` 族增量（T-ParamNameTruncation 标签列宽、T-PreviewOpenPerfM2）。
+6. **本地更新通道**：`HotUpdateSettingsGuard` 新件 + `StartupUpdateCheck`/`UpdateSection` 增量。
+7. **psi/xml**：`TableNameAnnotations`、`ActionReplaceSilently`、`SqlMapNamespaceIndex` 新件 + `EntityClassFinder`/`WrapperLocator`/`XmlCrossNsFragmentResolver` 增量（T-BindStaticRefCrossNs 跨命名空间 bind 静态常量）。
+8. **inlay 让位**：`NativeColumnInlayYieldGate` 新件（原生 SQL 列名 inlay 让位）。
+9. **log 面**：`MapperNamespaceIndex` 索引化、`MapperXmlLocator`/`SqlLogManager`/`SqlLogPanel`/`FirstCaptureGuide` 增量。
+10. **测试/资源/构建链/CI/文档**：如上分布。
+
+### 排除项（明示）
+
+- `update/update.json` / `update/preview.update.json`：AGENTS.md 规则 7，只有用户本人能改。本轮不动。
+- 版本号 `gradle.properties`：随构建链直取（C 波版本面直取）。
+- master `906039f29..a4ad7a5bc` 的 16 提交：本轮冻结不追。
+
+## §二 写集划分与波次（主控 solo，串行批次，批内逐件提交）
+
+| 波次 | 写集 | 形态 |
+|---|---|---|
+| W0 | 本计划立项笔；`.port-sync` 不动（收官才推锚） | 提交 |
+| W1 | 生产翻译 A：索引化三新件 + gutter/nav/ref 增量（T-IbatisGutterPerf/IndexScanSweep2/MechanismSweep） | master → Java 手工翻译，逐件提交 |
+| W2 | 生产翻译 B：工作区自愈两新件 + execute 面增量 + onboarding DialectGapTip + update 通道 | 逐件提交 |
+| W3 | 生产翻译 C：预览装配/控制台两新件 + SqlPreviewPanel 族增量 + psi/xml 新件增量 | 逐件提交 |
+| W4 | 生产翻译 D：inlay 让位 + log 面 + model/config/util 余量增量 | 逐件提交 |
+| W5 | 中央编译收口：`classes` + `testClasses` + `compileTestKotlin --rerun-tasks` 三目标绿 | 修红提交 |
+| W6 | 测试移植：24 A（.kt 直取+签名适配）+ 33 M（增量三方合并） | 分族提交 |
+| W7 | 资源与共享面：plugin.xml（新 EP/registryKey 按 k2j 形态插）、bundle 双册键集 union、构建链、CI 按 k2j 分支形态 hunk 移植、docs 直取 + 台账两册三方合并 | 直取 + 选择性合并 |
+| W8 | 推送 → CI（push-test → gate）→ 按 CI 读数修红 | CI 车道 |
+| W9 | 收官：`.port-sync` 锚点 `183c98b3d→906039f29`、计划 §八回填、台账双行、工作树复核 | — |
+
+## §三 门禁标准
+
+1. **本地 sanity（W5/W6 收口，非门禁）**：`classes` / `testClasses` / `compileTestKotlin --rerun-tasks` 三目标 BUILD SUCCESSFUL（判绿双证：SUCCESSFUL 行 + `echo EXIT=${PIPESTATUS[0]}`）。
+2. **CI 门禁（权威）**：push-test 7 腿全绿；gate（build + test×5 + verifyplugin + verify×3〔243/253/262〕+ marketplace + 聚合）全 success。
+3. 跑本地 gradle 前 `python parallel_tasks.py check/register/done`（禁裸 done）。
+4. testDatabase（Docker 腿）不本地跑；CI 若带 DB 腿按其读数。
+
+## §四 待验证前提（实施者先证伪再动手）
+
+1. **前提**：origin 178 已完成 `95e107b1..183c98b3d`，本轮范围才从 `183c98b3d` 起——已 `git rev-parse .port-sync` 与 fresh 编译双证。
+2. **前提**：14 个 master 新类在 k2j 均无同款（已 find 实证全 MISSING），需新建 Java 翻译件。
+3. **前提**：44 个 M 件在 k2j 有对应 Java 承载（13 个是 `XxxKt` 门面命名差异），翻译前逐件 `git show <tip>:<path>` 读 master 终态，禁用主仓工作树。
+4. **前提**：test A 件直取后需按 k2j Java API 适配（具名实参/默认参/object→INSTANCE/嵌套类），编译期暴露逐个修。
+5. **前提**：CI workflow 是 k2j 分支专属形态（verify 243/253/262、无 263、marketplace 聚合 job），master 的 CI 改动按 hunk 移植不整件覆盖。
+6. **前提**：bundle 双册键集 union——k2j 若有专属键须保留，先比对再合。
+
+## §五 已知坑预案（沿用历轮沉淀）
+
+1. API 面改动必须 `compileTestKotlin --rerun-tasks` 验真（UP-TO-DATE 增量态掩盖 CI 红）。
+2. 提交信息一律 UTF-8 文件 `git commit -F`（反引号陷阱）；pathspec 限定提交（共享工作树 index）。
+3. Kotlin→Java 互操作：具名实参→位置、object→INSTANCE、顶层函数→`XxxKt` 门面、record 访问器无 get 前缀、函数类型字段落 `Function0/1`、默认参→双重载、when→switch 表达式 yield。
+4. 守卫基线三处联动以实测读数登记，禁行计数预判；新守卫类登记 `GuardSelfTestCoverageMetaGuardTest`；守卫扫描根在 k2j 为 `src/main/java`+`.java`。
+5. 直取后全量对账 `git diff 906039f29 --name-only` 逐件判向，抓回被直取误冲的 k2j 专属行。
+6. 中文错误乱码 `| iconv -f GBK -t UTF-8`；判绿带 `echo EXIT=${PIPESTATUS[0]}`。
+7. **严禁把 master .kt 整件搬进 k2j 生产树**（本轮原始 stale 支线曾因此产生大量翻译缺口，已备份废弃）。
+
+## §六 结构性决策保护清单
+
+1. k2j 生产 100% Java——master .kt 只翻译不搬运。
+2. k2j CI workflow 分支专属形态，按 hunk 移植不整件覆盖。
+3. `.port-sync` 只在收官笔推进。
+4. update 双册不动。
+5. k2j 测试面 Kotlin 承载合法，不把存量 .kt 测试翻译成 Java。
+6. origin 178 已移植的 `95e107b1..183c98b3d` 属既成事实，本轮不重做、不回退。
+
+## §七 风险与回退
+
+- 单件翻译卡死 >30 分钟：记录证据跳过，先保批次推进，收口统一回补。
+- 与另一条活跃任务 `T-IbatisAtShapeGate`（master `164e6a884`）的冲突：本轮冻结在 `906039f29`，不纳该修复，留下轮。
+- 本地旧 178 支线备份在 `backup/k2j-178-local-stale-20261117`，如需考古从中取，不合并。
+
+## §八 实施记录
+
+（本轮进行中，收官回填）
