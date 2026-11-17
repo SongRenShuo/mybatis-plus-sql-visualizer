@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.mcp
 
+import cn.song.mybatisplus.visualizer.mcp.McpSettingsNavigationKt.MCP_SETTINGS_CONFIGURABLE_CLASSES
+import cn.song.mybatisplus.visualizer.mcp.McpSettingsNavigationKt.MCP_SETTINGS_PAGE_ID
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

@@ -9,6 +9,7 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import javax.swing.Icon
 import cn.song.mybatisplus.visualizer.execute.ChooseDataSourceTakeover.ChooseDataSourceTakeoverGroup
+import cn.song.mybatisplus.visualizer.execute.ChooseDataSourceTakeover.ChooseDataSourceTakeoverGroup.mergeLocalDataSources
 
 /**
  * T-DsListAddSource（20261111）：数据源列表条目口径收口与末尾「添加数据源…」。
@@ -55,11 +56,11 @@ class DsListAddSourceTest : BasePlatformTestCase() {
     fun test投影成功路_delegate被解成Local() {
         val dbDs = DelegateStub(delegateTarget)
         val merged = mergeLocalDataSources(
-            registered = emptyList(),
-            native = listOf(dbDs),
-            resolve = resolveStub,
-            uniqueIdOf = idOf,
-            nameOf = nameOf,
+            emptyList<Any>(),
+            listOf<Any>(dbDs),
+            java.util.function.Function { resolveStub(it) },
+            java.util.function.Function { idOf(it) },
+            java.util.function.Function { nameOf(it) },
         )
         assertEquals("投影失败：应解出内层 LocalDataSource", listOf(delegateTarget), merged)
     }
@@ -85,11 +86,11 @@ class DsListAddSourceTest : BasePlatformTestCase() {
         val bTwin = LocalStub("b", "dsB") // native 集合里的重复源（同 id）
         val d = LocalStub("d", "dsD")
         val merged = mergeLocalDataSources(
-            registered = listOf(a, b, c),
-            native = listOf(bTwin, d),
-            resolve = resolveStub,
-            uniqueIdOf = idOf,
-            nameOf = nameOf,
+            listOf<Any>(a, b, c),
+            listOf<Any>(bTwin, d),
+            java.util.function.Function { resolveStub(it) },
+            java.util.function.Function { idOf(it) },
+            java.util.function.Function { nameOf(it) },
         )
         assertEquals(listOf(a, b, c, d), merged)
     }
@@ -98,11 +99,11 @@ class DsListAddSourceTest : BasePlatformTestCase() {
         val named = LocalStub("a", "dsA")
         val nameless = LocalStub("x", "") // 名字解析失败（空名）
         val merged = mergeLocalDataSources(
-            registered = listOf(named, nameless),
-            native = listOf(Bogus),
-            resolve = resolveStub,
-            uniqueIdOf = idOf,
-            nameOf = nameOf,
+            listOf<Any>(named, nameless),
+            listOf<Any>(Bogus),
+            java.util.function.Function { resolveStub(it) },
+            java.util.function.Function { idOf(it) },
+            java.util.function.Function { nameOf(it) },
         )
         assertEquals("名字取不出的条目必须丢弃（这是 unknown 死项的根因）", listOf(named), merged)
     }
@@ -111,11 +112,11 @@ class DsListAddSourceTest : BasePlatformTestCase() {
         val prod = LocalStub("id-1", "mpj_demo@localhost")
         val replica = LocalStub("id-2", "mpj_demo@localhost")
         val merged = mergeLocalDataSources(
-            registered = listOf(prod),
-            native = listOf(replica),
-            resolve = resolveStub,
-            uniqueIdOf = idOf,
-            nameOf = nameOf,
+            listOf<Any>(prod),
+            listOf<Any>(replica),
+            java.util.function.Function { resolveStub(it) },
+            java.util.function.Function { idOf(it) },
+            java.util.function.Function { nameOf(it) },
         )
         assertEquals("同名不同 id 是两个源，uniqueId 去重不得吞掉", listOf(prod, replica), merged)
     }

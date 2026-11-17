@@ -127,7 +127,7 @@ class PluginPackageOwnershipTest {
         buildIpgpZip(zip, xml = pluginXml(id = "com.example.other-plugin"))
         val result = PluginPackageOwnershipKt.verify(zip)
         assertTrue("别的插件应 NotOurs：$result", !result.isOurs && !result.isTainted)
-        assertTrue(result.reason.contains("com.example.other-plugin"))
+        assertTrue(result.reason!!.contains("com.example.other-plugin"))
     }
 
     @Test
@@ -162,7 +162,7 @@ class PluginPackageOwnershipTest {
         )
         val result = PluginPackageOwnershipKt.verify(zip)
         assertTrue("夹带插件应 Tainted：$result", result.isTainted)
-        assertTrue(result.reason.contains("多个顶层目录"))
+        assertTrue(result.reason!!.contains("多个顶层目录"))
     }
 
     @Test
@@ -172,7 +172,7 @@ class PluginPackageOwnershipTest {
         buildIpgpZip(zip, topDir = "evil-plugin")
         val result = PluginPackageOwnershipKt.verify(zip)
         assertTrue(result.isTainted)
-        assertTrue(result.reason.contains("evil-plugin"))
+        assertTrue(result.reason!!.contains("evil-plugin"))
     }
 
     @Test
@@ -191,7 +191,7 @@ class PluginPackageOwnershipTest {
         buildIpgpZip(zip, extraTopEntries = listOf("readme.txt"))
         val result = PluginPackageOwnershipKt.verify(zip)
         assertTrue("顶层外来文件应 Tainted：$result", result.isTainted)
-        assertTrue(result.reason.contains("readme.txt"))
+        assertTrue(result.reason!!.contains("readme.txt"))
     }
 
     // ---------- since-build 解析与 D-5 判定（纯函数） ----------

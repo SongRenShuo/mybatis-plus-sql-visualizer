@@ -169,10 +169,10 @@ class ExecPsiGateTest : BasePlatformTestCase() {
 
         val applied = DataSourceSelector.applyExecDialectMapping(
             project, vf, LOG,
-            targetLanguage = NoParserForTest,
-            targetId = NoParserForTest.id,
-            renderedDialectName = NoParserForTest.id,
-            targetDs = null,
+            NoParserForTest,
+            NoParserForTest.id,
+            NoParserForTest.id,
+            null,
         )
         assertEquals(
             "目标语言建不出 PSI 时，闸门必须拒绝映射（APPLIED = 没拦住）",
@@ -199,10 +199,10 @@ class ExecPsiGateTest : BasePlatformTestCase() {
 
         val applied = DataSourceSelector.applyExecDialectMapping(
             project, vf, LOG,
-            targetLanguage = mysql,
-            targetId = "MySQL",
-            renderedDialectName = "MySQL",
-            targetDs = null,
+            mysql,
+            "MySQL",
+            "MySQL",
+            null,
         )
         assertEquals(
             "能建 PSI 的语言必须照常映射（闸门误伤会让所有正常执行退化）",
@@ -241,7 +241,7 @@ class ExecPsiGateTest : BasePlatformTestCase() {
             runCatching { findExecPsi(project, vf) }.getOrNull(),
         )
 
-        val healed = DataSourceSelector.healExecPsi(project, vf, LOG)
+        val healed = healExecPsi(project, vf, LOG)
         assertNotNull("清映射后必须能拿回 PSI（自愈失败等于用户仍然点不动执行）", healed)
         assertFalse(
             "自愈必须把坏映射清掉（否则下次 findFile 又是 null）",
@@ -391,7 +391,7 @@ class ExecPsiGateTest : BasePlatformTestCase() {
                 runCatching { findExecPsi(project, vf) }.getOrNull(),
             )
 
-            val healed = DataSourceSelector.healExecPsi(project, vf, LOG, ioFile)
+            val healed = healExecPsi(project, vf, LOG, ioFile)
             assertNotNull("继承方言是毒源时必须靠「钉住可用方言」救回来（清映射救不了）", healed)
             val pinned = DialectPreMapping.configuredLanguageId(project, vf)
             println("[ExecPsiGate] pinned dialect after inherited-poison heal = $pinned")
@@ -423,8 +423,8 @@ class ExecPsiGateTest : BasePlatformTestCase() {
         repeat(3) { i ->
             val dialect = if (i % 2 == 0) "MySQL" else "PostgreSQL"
             val pair = com.intellij.openapi.application.ApplicationManager.getApplication()
-                .executeOnPooledThread<Pair<VirtualFile, PsiFile>?> {
-                    DataSourceSelector.createTempPsiFile(project, "select $i", dialect)
+                .executeOnPooledThread<DataSourceSelector.TempPsiFile?> {
+                    createTempPsiFile(project, "select $i", dialect)
                 }.get(30, java.util.concurrent.TimeUnit.SECONDS)
             if (pair == null) {
                 failures += "#$i($dialect): ${DataSourceSelector.lastTempFileFailure}"
@@ -503,12 +503,12 @@ class ExecPsiGateTest : BasePlatformTestCase() {
         // 生产里文件一直在（写盘成功），只是 vf 条目失效——把内容写回盘上，vf 对象仍然失效
         ioFile.writeText("select 5")
 
-        val healed = DataSourceSelector.healExecPsi(project, vf, LOG, ioFile)
+        val healed = healExecPsi(project, vf, LOG, ioFile)
         assertNotNull("文件在盘上、vf 失效时必须靠重定位拿回 PSI（这正是用户那一形态的自愈面）", healed)
-        val healedVf = healed!!.virtualFile
+        val healedVf = healed!!.getVirtualFile()
         assertNotNull("重定位后的 PSI 必须挂在具体 vf 上", healedVf)
         assertNotSame("必须换到新 vf（沿用失效 vf 等于没修）", vf, healedVf)
-        assertTrue("重定位出来的 vf 必须有效", healedVf!!.isValid)
+        assertTrue("重定位出来的 vf 必须有效", healedVf!!.isValid())
     }
 
     /** 失败文案的五元组：三项静态事实 + 映射语言 + 该语言能否建 PSI。 */

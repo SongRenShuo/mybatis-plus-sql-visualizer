@@ -11,6 +11,7 @@ import java.nio.file.Path
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import cn.song.mybatisplus.visualizer.update.PluginPackageOwnershipKt.Ownership
+import cn.song.mybatisplus.visualizer.update.LocalPackageScannerKt.LocalPackage
 
 /**
  * 本地包安装编排单测（T-LocalUpdateDir M3，计划 T3）：installFromLocal 全分支——
@@ -68,12 +69,12 @@ class PluginUpdateRunnerLocalTest {
     private fun localPkg(zip: Path, version: String = "2026.11.12", sinceBuild: Int? = 243): LocalPackage {
         val attrs = Files.readAttributes(zip, java.nio.file.attribute.BasicFileAttributes::class.java)
         return LocalPackage(
-            version = version,
-            path = zip,
-            fileName = zip.fileName.toString(),
-            sizeBytes = attrs.size(),
-            modifiedMs = attrs.lastModifiedTime().toMillis(),
-            sinceBuildBaseline = sinceBuild,
+            version,
+            zip,
+            zip.fileName.toString(),
+            attrs.size(),
+            attrs.lastModifiedTime().toMillis(),
+            sinceBuild,
         )
     }
 
@@ -166,12 +167,12 @@ class PluginUpdateRunnerLocalTest {
         // verify seam 放行，但文件在复制前消失（共享盘掉线形态）；包元数据手工构造（源不存在，无法 stat）
         val zip = tmp.root.toPath().resolve("ghost.zip")
         val pkg = LocalPackage(
-            version = "2026.11.12",
-            path = zip,
-            fileName = "ghost.zip",
-            sizeBytes = 1,
-            modifiedMs = 1,
-            sinceBuildBaseline = 243,
+            "2026.11.12",
+            zip,
+            "ghost.zip",
+            1,
+            1,
+            243,
         )
         val install = RecordingInstall()
         val result = PluginUpdateRunner.installFromLocal(pkg, null, { Ownership.ours("2026.11.12", 243, UpdateSource.INSTALL_DIR_NAME) }, { currentBaseline }, install)
@@ -207,8 +208,8 @@ class PluginUpdateRunnerLocalTest {
     @Test
     fun installFromLocal_restartRequired_transparent() {
         val zip = writeIpgpZip(tmp.root.toPath().resolve("new.zip"), pluginXml("2026.11.12"))
-        val result = PluginUpdateRunner.installFromLocal(localPkg(zip), null, PluginPackageOwnershipKt::verify, { currentBaseline }, { PluginUpdateRunner.InstallResult.InstalledRestartRequired })
-        assertEquals(PluginUpdateRunner.InstallResult.InstalledRestartRequired, result)
+        val result = PluginUpdateRunner.installFromLocal(localPkg(zip), null, PluginPackageOwnershipKt::verify, { currentBaseline }, { PluginUpdateRunner.InstallResult.InstalledRestartRequired.INSTANCE })
+        assertEquals(PluginUpdateRunner.InstallResult.InstalledRestartRequired.INSTANCE, result)
     }
 
     @Test

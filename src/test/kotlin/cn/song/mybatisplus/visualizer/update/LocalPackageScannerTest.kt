@@ -67,7 +67,7 @@ class LocalPackageScannerTest {
         val missing = tmp.root.toPath().resolve("no-such-dir")
         val result = scan(missing)
         assertTrue(result.isDirInvalid)
-        assertEquals(LocalUpdateDirKt.DirCheck.NotFound, result.check)
+        assertEquals(LocalUpdateDirKt.DirCheck.NOT_FOUND, result.check)
     }
 
     @Test
@@ -75,7 +75,7 @@ class LocalPackageScannerTest {
         val file = tmp.newFile("plain.txt")
         val result = scan(file.toPath())
         assertEquals(
-            LocalUpdateDirKt.DirCheck.NotDirectory,
+            LocalUpdateDirKt.DirCheck.NOT_DIRECTORY,
             result.check,
         )
     }
@@ -105,7 +105,7 @@ class LocalPackageScannerTest {
         writeZip(dir, "mybatis-plus-sql-visualizer-2026.11.12.zip", "2026.11.12")
         val result = scan(dir)
         assertTrue(result.isAvailable)
-        assertEquals("2026.11.12", result.latest.version())
+        assertEquals("2026.11.12", result.latest!!.version())
         assertEquals(3, result.total)
     }
 
@@ -116,7 +116,7 @@ class LocalPackageScannerTest {
         writeZip(dir, "b-2026.11.12.zip", "2026.11.12")
         val result = scan(dir)
         assertTrue(result.isAvailable)
-        assertEquals("同日 beta 应输给正式版（平台比较器语义）", "2026.11.12", result.latest.version())
+        assertEquals("同日 beta 应输给正式版（平台比较器语义）", "2026.11.12", result.latest!!.version())
     }
 
     @Test
@@ -127,8 +127,8 @@ class LocalPackageScannerTest {
         writeZip(dir, "mybatis-plus-sql-visualizer-2026.11.9.zip", "2026.11.9")
         val result = scan(dir)
         assertTrue(result.isAvailable)
-        assertEquals("2026.11.14", result.latest.version())
-        assertEquals("最新.zip", result.latest.fileName())
+        assertEquals("2026.11.14", result.latest!!.version())
+        assertEquals("最新.zip", result.latest!!.fileName())
     }
 
     @Test
@@ -140,7 +140,7 @@ class LocalPackageScannerTest {
         Files.setLastModifiedTime(newer, FileTime.fromMillis(2_000_000L))
         val result = scan(dir)
         assertTrue(result.isAvailable)
-        assertEquals("同版本取 mtime 更晚者", newer, result.latest.path())
+        assertEquals("同版本取 mtime 更晚者", newer, result.latest!!.path())
     }
 
     // ---------- 归属闸门过滤（G1/G2 在扫描期的表现） ----------
@@ -153,7 +153,7 @@ class LocalPackageScannerTest {
         val result = scan(dir)
         assertTrue(result.isAvailable)
         assertEquals(1, result.skipped)
-        assertEquals("2026.11.12", result.latest.version())
+        assertEquals("2026.11.12", result.latest!!.version())
     }
 
     @Test
@@ -188,7 +188,7 @@ class LocalPackageScannerTest {
         }
         val result = scan(dir)
         assertTrue("夹带包不得成为候选：$result", result.isAvailable)
-        assertEquals("2026.11.12", result.latest.version())
+        assertEquals("2026.11.12", result.latest!!.version())
         assertEquals(1, result.skipped)
     }
 
@@ -211,7 +211,7 @@ class LocalPackageScannerTest {
         writeZip(dir, "old-2026.11.10.zip", "2026.11.10")
         val result = scan(dir)
         assertTrue("旧版本不得提示更新：$result", result.isUpToDate)
-        assertEquals("2026.11.10", result.latest.version())
+        assertEquals("2026.11.10", result.latest!!.version())
     }
 
     @Test
@@ -233,7 +233,7 @@ class LocalPackageScannerTest {
         val result = scan(dir)
         assertTrue(result.isUpToDate)
         assertEquals("超出上限按 mtime 降序截断", LocalPackageScannerKt.MAX_CANDIDATES, result.total)
-        assertTrue(result.truncated)
+        assertTrue(result.isTruncated)
     }
 
     // ---------- 当前版本不可读 ----------
@@ -258,7 +258,7 @@ class LocalPackageScannerTest {
         cache.put(zip, Files.size(zip), Files.getLastModifiedTime(zip).toMillis(), PackageVerificationCache.Outcome.valid("2026.11.12", null))
         val result = scan(dir, cache)
         assertTrue("缓存命中应免真校验：$result", result.isAvailable)
-        assertEquals("2026.11.12", result.latest.version())
+        assertEquals("2026.11.12", result.latest!!.version())
     }
 
     @Test
@@ -294,7 +294,7 @@ class LocalPackageScannerTest {
         writeZip(dir, "mybatis-plus-sql-visualizer-2026.11.12.zip", "2026.11.12")
         val result = scan(dir)
         assertTrue("中文与空格目录应可用：$result", result.isAvailable)
-        assertEquals("2026.11.12", result.latest.version())
+        assertEquals("2026.11.12", result.latest!!.version())
     }
 
     @Test

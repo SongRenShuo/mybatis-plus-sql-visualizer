@@ -100,7 +100,7 @@ class TableNameAnnotationsTest : BasePlatformTestCase() {
         assertEquals(
             "注解索引要查的简单名集合：MP + JPA 两代",
             setOf("TableName", "Table"),
-            TableNameAnnotations.simpleNames,
+            TableNameAnnotations.SIMPLE_NAMES,
         )
     }
 }

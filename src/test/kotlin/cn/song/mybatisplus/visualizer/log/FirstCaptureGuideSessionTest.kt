@@ -25,7 +25,7 @@ class FirstCaptureGuideSessionTest : BasePlatformTestCase() {
         val buffer = SqlLogEntryBuffer()
         buffer.addEntry(LogSqlEntry("SELECT 1", "SELECT 1", emptyList()))
         // headless：入口应短路——不抛异常、会话记忆不置位（通知零发出）
-        FirstCaptureGuide.onEntryAccepted(project, buffer)
+        FirstCaptureGuide.onEntryAccepted(project, buffer, false)
         // Java 静态 getter 在 Kotlin 不合成属性（master 的 Kotlin 属性在此为 getter 调用）
         assertFalse("headless 下不应进入已指路态", FirstCaptureGuide.getAlreadyGuided())
     }

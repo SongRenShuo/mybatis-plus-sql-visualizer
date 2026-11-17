@@ -47,7 +47,7 @@ class ExecutionScriptScopeTest {
     @Test
     fun `调用方显式要求整批_直接透传`() {
         val two = "SET IDENTITY_INSERT t ON;\nINSERT INTO t VALUES (1);\nSET IDENTITY_INSERT t OFF;"
-        assertTrue(shouldExecWholeScript(two, requested = true))
+        assertTrue(shouldExecWholeScript(two, true))
     }
 
     @Test

@@ -77,7 +77,7 @@ class DocWriteDispatchSafetyTest : BasePlatformTestCase() {
         try {
             val before = DocWriteContext.deferredCount.get()
             val start = System.currentTimeMillis()
-            val accepted = DataSourceSelector.dispatchDocWriteOnEdt(project, vf, "SELECT 2")
+            val accepted = dispatchDocWriteOnEdt(project, vf, "SELECT 2")
             val elapsed = System.currentTimeMillis() - start
 
             assertEquals("必须投递一拍（不得就地写）", before + 1, DocWriteContext.deferredCount.get())
@@ -110,7 +110,7 @@ class DocWriteDispatchSafetyTest : BasePlatformTestCase() {
         try {
             val before = DocWriteContext.deferredCount.get()
             val start = System.currentTimeMillis()
-            val ok = DataSourceSelector.dispatchDocWriteOnEdt(project, vf, "SELECT 2")
+            val ok = dispatchDocWriteOnEdt(project, vf, "SELECT 2")
             val elapsed = System.currentTimeMillis() - start
 
             assertFalse("不可写：应立即交还 false（原语义）", ok)
