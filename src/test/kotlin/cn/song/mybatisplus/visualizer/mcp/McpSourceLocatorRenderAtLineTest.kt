@@ -1,10 +1,5 @@
 package cn.song.mybatisplus.visualizer.mcp
 
-import com.intellij.psi.search.GlobalSearchScope
-import com.intellij.util.indexing.FileBasedIndex
-import cn.song.mybatisplus.visualizer.xml.ibatis.SqlMapNamespaceIndex
-import com.intellij.openapi.project.DumbService
-import com.intellij.util.ui.UIUtil
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import java.io.File
@@ -39,14 +34,6 @@ class McpSourceLocatorRenderAtLineTest : BasePlatformTestCase() {
 
     override fun setUp() {
         super.setUp()
-        // 长分片 CI 里本用例自己 addFileToProject/writeMapper 触发的 VFS 属性更新会让工程短暂进 dumb，
-        // 紧随其后的 iBatis 索引查询抛 IndexNotReady → 空锚 SOURCE_NOT_FOUND。
-        // 不能 waitForSmartMode（在 EDT 上会与 dumb 任务互锁）；改为边 pump EDT 事件边等，有界兜底。
-        var spins = 0
-        while (DumbService.isDumb(project) && spins++ < 600) {
-            UIUtil.dispatchAllInvocationEvents()
-            Thread.sleep(10)
-        }
         // iBatis 定位链共用 JVM 级静态测试缝：同分片前序用例若无复位会漏到这里，
         // 令 iBatis 调用行拿到空锚（SOURCE_NOT_FOUND）。本类自清，保证顺序无关。
         cn.song.mybatisplus.visualizer.ui.nav.IbatisXmlStatementTargets.lookupOverrideForTest = null
@@ -141,26 +128,11 @@ class McpSourceLocatorRenderAtLineTest : BasePlatformTestCase() {
         McpSourceLocator.renderAtLine(project, relPath, line)
 
     /**
-     * sqlMap 走磁盘 `writeMapper`（与同文件里已通过的 `testiBatis_sqlMap语句行走iBatis渲染` 同款：
-     * 平台扫描 basePath 磁盘文件建索引，稳定进入 SqlMapNamespaceIndex）。
-     * `addFileToProject` 落在 VFS 虚根 `/src/`、不在 basePath 磁盘目录下，长生命周期 CI JVM 里
-     * 自定义索引对它的可见性不稳定 → iBatis 调用行拿到空锚（SOURCE_NOT_FOUND）。
+     * sqlMap 用 `addFileToProject` 进项目索引（namespace → 文件解析走 `FileTypeIndex`）；
+     * 磁盘 `writeMapper` 造的文件不保证进 **FileTypeIndex**（既有 mapper 用例只走「路径 → PSI」，
+     * 不查索引，所以没暴露）。Java DAO 仍写磁盘（`McpFilePathResolver` 按 basePath 解析绝对路径）。
      */
-    private fun addSqlMap(): com.intellij.psi.PsiFile {
-        val file = myFixture.addFileToProject("sqlmap/User.xml", sqlMap)
-        // 强制目标索引追平（长分片 CI 里索引可能还在异步建）
-        // 边 pump EDT 边等索引追平（dumb 已在上层 setUp 清过；这里再兜一次 write 触发的二次 dumb）
-        var spin = 0
-        while (DumbService.isDumb(project) && spin++ < 600) {
-            UIUtil.dispatchAllInvocationEvents()
-            Thread.sleep(10)
-        }
-        FileBasedIndex.getInstance().ensureUpToDate(
-            SqlMapNamespaceIndex.NAME, project, GlobalSearchScope.projectScope(project))
-        val seen = SqlMapNamespaceIndex.getAllSqlMapFiles(project)
-        assertTrue("sqlMap 必须进 SqlMapNamespaceIndex，实际候选=$seen", seen.isNotEmpty())
-        return file
-    }
+    private fun addSqlMap(): com.intellij.psi.PsiFile = myFixture.addFileToProject("sqlmap/User.xml", sqlMap)
 
     fun testiBatis_sqlMap语句行走iBatis渲染() {
         // 本用例只走「路径 → PSI → 标签直渲」，不查 FileTypeIndex，写磁盘即可
