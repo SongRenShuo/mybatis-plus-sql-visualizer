@@ -506,8 +506,9 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         // 超长名：截断显示（文本 != 全名）+ tooltip 全名（超过折行阈值走 HTML 折行，见下一条用例）
         assertEquals("超长标签 tooltip 应为全名", wrappedLabelTooltip("#$long"), longLabel.toolTipText)
         assertNotEquals("超长标签应截断显示", "#$long", longLabel.text)
-        assertNull("短参数不设 tooltip", shortLabel.toolTipText)
-        assertNull("中等长度参数不设 tooltip", mediumLabel.toolTipText)
+        // T-ParamNameTruncation（master 冻结 tip）：全名 tooltip 无条件设置（列宽事后变窄也要能看全名）
+        assertEquals("短参数 tooltip 恒为全名", "#$short", shortLabel.toolTipText)
+        assertEquals("中等长度参数 tooltip 恒为全名", "#$medium", mediumLabel.toolTipText)
         SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
