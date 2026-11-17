@@ -20,6 +20,7 @@ import com.intellij.psi.impl.java.stubs.index.JavaAnnotationIndex;
 import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.psi.search.PsiShortNamesCache;
+import com.intellij.psi.util.PsiModificationTracker;
 import com.intellij.util.concurrency.AppExecutorUtil;
 
 import java.util.ArrayList;
@@ -219,7 +220,7 @@ public class EntityClassFinder {
                     for (PsiClass clazz : namesCache.getClassesByName(shortName, scope)) {
                         if (clazz.isInterface() || clazz.isEnum() || clazz.isAnnotationType()) continue;
                         if (isVoDto(clazz)) continue;
-                        String table = TableNameAnnotations.tableNameOfClass(clazz);
+                        String table = tableNameAnnotation(clazz);
                         if (table == null || table.isBlank()) continue;
                         tables.computeIfAbsent(table.toLowerCase(Locale.ROOT), ignored -> new ArrayList<>())
                             .add(new MatchedClass(shortName, clazz.getQualifiedName()));
@@ -247,6 +248,14 @@ public class EntityClassFinder {
      */
     private List<PsiClass> findByTableNameAnnotationCached(String tableName) {
         ReverseLookupCache entry = reverseLookupCache();
+        // PSI 正文改动（如改实体上的 @TableName）不改项目结构版本，TTL 又要几分钟才到期——
+        // 这里用 PsiModificationTracker 只当「触发校验」的廉价计数器：计数变化时才逐个核对已索引类的
+        // 注解值指纹；确认某个 @TableName 真变了才作废重建。纯加字段/打字不改注解 → 指纹一致 → 不重建
+        // （保住「改源码正文不重扫全工程」的性能契约）。计数本身绝非失效基准，仅作门禁避免每次查询读 PSI。
+        if (entry.built && annotationFingerprintChanged(entry)) {
+            project.putUserData(REVERSE_LOOKUP_CACHE_KEY, null);
+            entry = reverseLookupCache();
+        }
         ensureIndexBuilt(entry);
         List<MatchedClass> hit = entry.index.get(tableName.toLowerCase(Locale.ROOT));
         // 跨 ORM 兜底：注解索引只覆盖带表名注解的实体；未命中时做一次「全项目推断」并合并进同一索引。
@@ -268,6 +277,52 @@ public class EntityClassFinder {
             if (clazz != null) result.add(clazz);
         }
         return result;
+    }
+
+    /**
+     * 校验已索引类的表名注解值是否仍与建索引时一致。
+     *
+     * <p>门禁：只有 PSI 修改计数相对建索引时递增才进校验（绝大多数查询直接跳过，零 PSI 开销）。
+     * 校验逐个按 qualifiedName 取回已索引类、重读其 {@code @TableName}/{@code @Table} 字面量，
+     * 与建索引时记下的值比对——任一变化即返回 true，调用方据此作废并重建索引。
+     * 这样「字段增删/方法体打字」不改注解值 → 不重建（保住性能），
+     * 而「把 old_table 改成 new_table」→ 立即重建（保住正确性）。</p>
+     *
+     * <p>注意：只校验「注解值变了」，不因类被删除而重建——文件增删本就由项目结构版本兜住。
+     * 取不到类（PSI 暂不可见）按「未变」处理，避免检索抖动引发无谓重扫。</p>
+     */
+    private boolean annotationFingerprintChanged(ReverseLookupCache entry) {
+        long nowMod = PsiModificationTracker.getInstance(project).getModificationCount();
+        if (nowMod <= entry.psiModAtBuild) return false;
+        // 校验前更新计数：确认未变时也要把门禁推进到当前，避免后续每次查询重复校验。
+        entry.psiModAtBuild = nowMod;
+        for (Map.Entry<String, List<MatchedClass>> tableEntry : entry.index.entrySet()) {
+            for (MatchedClass matched : tableEntry.getValue()) {
+                PsiClass clazz = findByQualifiedName(matched);
+                if (clazz == null) continue;
+                // 与建索引时读到的注解值比对（指纹已随 MatchedClass 落位，不依赖再次检索时序）。
+                if (!java.util.Objects.equals(tableNameAnnotation(clazz), matched.annotationValue)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** 建索引落地后把 PSI 修改计数推进到当前（注解指纹已在扫描时随 MatchedClass 落位）。 */
+    private void markFingerprintBaseline(ReverseLookupCache entry) {
+        entry.psiModAtBuild = PsiModificationTracker.getInstance(project).getModificationCount();
+    }
+
+    /** 按全限定名精确取回已索引类（allScope，跨项目类/库类都能取；qualifiedName 防同名误配）。 */
+    private PsiClass findByQualifiedName(MatchedClass matched) {
+        if (matched.qualifiedName == null) return null;
+        PsiClass[] classes = PsiShortNamesCache.getInstance(project)
+            .getClassesByName(matched.shortName, GlobalSearchScope.allScope(project));
+        for (PsiClass clazz : classes) {
+            if (matched.qualifiedName.equals(clazz.getQualifiedName())) return clazz;
+        }
+        return null;
     }
 
     /** 缓存条目按类名重取 PsiClass（shortName 索引查询 + qualifiedName 精确比对防同名误配）。 */
@@ -373,6 +428,7 @@ public class EntityClassFinder {
             }
             target.scans++;
             target.built = true;
+            markFingerprintBaseline(target);
             indexBuildCount(project).incrementAndGet();
         } finally {
             releaseBuild(entry);
@@ -470,6 +526,7 @@ public class EntityClassFinder {
             entry.inferredScanDone = true;
             entry.inferredScanCount++;
             project.putUserData(INFERRED_INDEX_KEY, new structuresVersionPair(projectStructureVersion(), built));
+            markFingerprintBaseline(entry);
         } finally {
             entry.inferredBuilding.set(false);
             entry.inferredLatch.countDown();
@@ -521,7 +578,7 @@ public class EntityClassFinder {
                 String className = clazz.getName();
                 if (className == null) continue;
                 index.computeIfAbsent(tableName.toLowerCase(Locale.ROOT), ignored -> new ArrayList<>())
-                    .add(new MatchedClass(className, clazz.getQualifiedName()));
+                    .add(new MatchedClass(className, clazz.getQualifiedName(), tableName));
             }
         }
         return index;
@@ -547,11 +604,23 @@ public class EntityClassFinder {
                     ? annotated
                     : EntityResolver.inferDecoratedTableName(className, clazz.getProject());
                 if (resolvedTable == null || resolvedTable.isBlank()) continue;
+                // 推断命中（无注解）记 null 指纹：校验时也算「注解值未变」（current=null 与 recorded=null 相等）。
                 index.computeIfAbsent(resolvedTable.toLowerCase(Locale.ROOT), ignored -> new ArrayList<>())
-                    .add(new MatchedClass(className, clazz.getQualifiedName()));
+                    .add(new MatchedClass(className, clazz.getQualifiedName(), annotated));
             }
         }
         return index;
+    }
+
+    /**
+     * 类级表名注解值（MP {@code @TableName} / JPA {@code @Table(name=…)}）；无注解或值非字面量返回 null。
+     *
+     * <p>库扫描（[[#runLibrarySweepNow]]）与全项目推断回补都走这里，统一由
+     * {@link TableNameAnnotations} 判源与取值；保留本命名形态是源码守卫的钉子
+     * （FullScanCancelGuardTest：库扫描必须读「注解值」，不得退化成按类名推断表名）。</p>
+     */
+    private static String tableNameAnnotation(PsiClass clazz) {
+        return TableNameAnnotations.tableNameOfClass(clazz);
     }
 
     private static boolean isVoDto(PsiClass clazz) {
@@ -589,21 +658,31 @@ public class EntityClassFinder {
         final CountDownLatch inferredLatch = new CountDownLatch(1);
         int inferredScanCount = 0;
         int scans = 0;
+        /** 建索引时的 PSI 修改计数（仅作「是否要做注解指纹校验」的廉价门禁，非失效基准）。 */
+        volatile long psiModAtBuild;
 
-        ReverseLookupCache(long structureVersion, long createdAt) {
+        ReverseLookupCache(long structureVersion, long createdAt, long psiModAtBuild) {
             this.structureVersion = structureVersion;
             this.createdAt = createdAt;
+            this.psiModAtBuild = psiModAtBuild;
         }
     }
 
-    /** 缓存条目：短名（索引查询键）+ 全限定名（精确比对防同名误配）。 */
+    /** 缓存条目：短名（索引查询键）+ 全限定名（精确比对防同名误配）+ 建索引时的注解值指纹。 */
     private static final class MatchedClass {
         final String shortName;
         final String qualifiedName;
+        /** 建索引时读到的表名注解字面量；推断命中（无注解）为 null。仅反查索引使用。 */
+        final String annotationValue;
 
         MatchedClass(String shortName, String qualifiedName) {
+            this(shortName, qualifiedName, null);
+        }
+
+        MatchedClass(String shortName, String qualifiedName, String annotationValue) {
             this.shortName = shortName;
             this.qualifiedName = qualifiedName;
+            this.annotationValue = annotationValue;
         }
     }
 
@@ -692,7 +771,8 @@ public class EntityClassFinder {
             && now - existing.createdAt >= 0 && now - existing.createdAt < reverseLookupTtlMs) {
             return existing;
         }
-        ReverseLookupCache fresh = new ReverseLookupCache(current, now);
+        long psiMod = PsiModificationTracker.getInstance(project).getModificationCount();
+        ReverseLookupCache fresh = new ReverseLookupCache(current, now, psiMod);
         project.putUserData(REVERSE_LOOKUP_CACHE_KEY, fresh);
         return fresh;
     }
