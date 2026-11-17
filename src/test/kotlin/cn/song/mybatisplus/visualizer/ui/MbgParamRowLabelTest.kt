@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelParamPanelKt.mbgParamRowsOf
 import org.junit.Assert.assertEquals
 import org.junit.Test
 

@@ -1,5 +1,11 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelParamPanelKt.paramLabelColumnWidth
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelParamPanelKt.wrappedLabelTooltip
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelParamPanelKt.LABEL_COLUMN_MIN_PX
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelParamPanelKt.LABEL_COLUMN_MAX_PX
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelParamPanelKt.LABEL_COLUMN_FALLBACK_VIEWPORT_PX
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelParamPanelKt.LABEL_COLUMN_VIEWPORT_RATIO
 import cn.song.mybatisplus.visualizer.model.BatchColumn
 import cn.song.mybatisplus.visualizer.model.BatchKind
 import cn.song.mybatisplus.visualizer.model.BatchModel

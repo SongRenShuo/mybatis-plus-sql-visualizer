@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui.inject
 
+import cn.song.mybatisplus.visualizer.ui.inject.XmlSynHiGate.isStatementHostRootName
+import cn.song.mybatisplus.visualizer.ui.inject.XmlSynHiGate.isIbatisSqlMapRoot
 import com.intellij.lang.Language
 import com.intellij.lang.injection.MultiHostRegistrar
 import com.intellij.openapi.editor.Document

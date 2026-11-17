@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelParamPanelKt.paramLabelColumnWidth
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelParamPanelKt.paramLabelTextAvailPx
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
