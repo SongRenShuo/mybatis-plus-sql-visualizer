@@ -654,6 +654,14 @@ class GuardSelfTestCoverageMetaGuardTest {
          */
         val GUARD_CLASSES = listOf(
             GuardEntry(
+                "convention/ShareExportOffEdtGuardTest.kt",
+                listOf(DecisionFn("offendersOf", FnKind.VIOLATIONS)),
+                "T-PerfSweep30 04a 守卫（T-PerfSweep31 券03 自 dev 移植）：ShareDialog 的 HTML 落盘必须在 " +
+                    "Task.Backgroundable.run 内、BrowserUtil.open 必须在 onSuccess 后。判定内核 offendersOf " +
+                    "返回违规说明集合（saveHtmlReport 出现多次 / 不在 run 内 / 打开不在 onSuccess 内）。" +
+                    "自证语料=testGuardCatchesEdtDirectWrite 用「落盘挪回 EDT 回调」的合成源码直接断言内核报出该形态。",
+            ),
+            GuardEntry(
                 "update/HotUpdateSettingsGuardTest.kt",
                 emptyList(),
                 "T-HotUpdateSettingsGuard 守卫：热更新（动态装载）后设置页「确定」无反应的兜底判定——" +

@@ -128,7 +128,7 @@ class IbatisJavaToXmlLineMarkerProvider : LineMarkerProvider {
          * （A 工程确认过调用点，B 工程直接信 → Absent 也照样画）。跨项目撞键面消除；
          * 会话内增长仍以语句数为上界。
          */
-        private fun cacheKey(project: Project, statementId: String, ownerNamespace: String?): String =
+        internal fun cacheKey(project: Project, statementId: String, ownerNamespace: String?): String =
             "${project.locationHash}|" +
                 if (statementId.contains('.')) statementId else "$statementId@${ownerNamespace ?: ""}"
 

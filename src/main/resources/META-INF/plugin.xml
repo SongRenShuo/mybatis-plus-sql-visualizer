@@ -239,6 +239,13 @@
              只认根标签 sqlMap（与上面 MyBatis 侧 mapper 索引互斥、不扩面）；正确性闸门在 PSI 侧精确匹配。 -->
         <fileBasedIndex
                 implementation="cn.song.mybatisplus.visualizer.xml.ibatis.SqlMapNamespaceIndex"/>
+        <!-- T-PerfSweep31 券01（2026-11-17）：iBatis <sqlMapConfig> 的 <typeAlias> 自定义标量索引——
+             旧链 IbatisTypeAliasResolver 首次调用对语句所在模块内容根做 VFS 全走查 + 逐 XML 建 PSI
+             （性能分析第八期 §4.3 P2），且 config 改动要重启会话才生效；本索引在索引期摊平两类键
+             （cfg / ta:<alias>），运行时一次 getContainingFiles 出候选文件，失效交平台增量。
+             只认根标签 sqlMapConfig（与 sqlMap/mapper 两索引互斥）；正确性闸门在 PSI 侧精确匹配。 -->
+        <fileBasedIndex
+                implementation="cn.song.mybatisplus.visualizer.xml.ibatis.SqlMapConfigAliasIndex"/>
         <!-- M10 gutter 预览图标：Wrapper 锚点行显示预览 SQL 图标（快速路径单元素 O(1) 判定，见 M10 开发计划 §2.4） -->
         <codeInsight.lineMarkerProvider language="JAVA"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.SqlGutterLineMarkerProvider"/>

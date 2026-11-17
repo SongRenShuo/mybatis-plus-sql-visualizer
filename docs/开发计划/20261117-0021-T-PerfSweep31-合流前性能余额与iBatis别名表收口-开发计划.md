@@ -140,4 +140,26 @@
 - 第一轮 `compileKotlin compileTestKotlin`（in-process Kotlin 策略，3m46s）：主源**通过**；测试源 1 处编译错——SqlMapConfigAliasIndexTest 内核用例字符串跨行误用普通字面量（Kotlin 普通串不可跨行），改 raw string + trimIndent。
 - 第二轮 `compileTestKotlin`：**通过（exit 0）**。主源 + 测试源全量编译绿；测试执行按 6.4 交 CI。
 
+### 6.6 CI 门禁读数（run 43913507291，mode=gate，对准 `35d1aaf23`）
+
+**结论：failure——主门禁体全绿，测试分片 3 红引出 4 处缺陷，已全部修复（提交 `fix(ci)` 一笔，见 6.7）。**
+
+| Job | 结论 |
+|---|---|
+| build / verifyplugin / verify ×3（243/253/263）/ marketplace ×3 | **全 success**（三目标兼容性与构建门禁一次通过） |
+| test (2) / test (4) / test (5) | success |
+| test (1) | failure：SqlMapConfigAliasIndexTest 4 例 + IbatisParamClassQuoteHeavyTest 1 例 |
+| test (3) | failure：IbatisNavigationLineMarkerProvidersTest 7 例 |
+| test (fast) | failure：BrowserUtilConvergenceGuardTest 1 例 + GuardSelfTestCoverageMetaGuardTest 1 例（fast 全量 4994 例中仅 2 红） |
+
+**逐根因（4 类，全部修复）：**
+
+1. **plugin.xml 漏注册新索引 EP**（券01 实施缺陷，5 例红的根因）——`Index is not created for 'cn.song.mybatisplus.sqlMapConfigAlias'`：索引类写了、EP 没声明，平台不建索引；消费方 runCatching 捕 IllegalStateException 回落 null。修：plugin.xml 补 `<fileBasedIndex implementation="…SqlMapConfigAliasIndex"/>`（照两前置索引位次与注释形态）。**教训：新增 fileBasedIndex 类与 EP 声明必须同笔提交；两前置索引都是类+声明同笔，本刀拆散了。**
+2. **券04 键改造后测试断言未同步**（7 例）——测试裸拼 `contains("user.selectById")` 查已带 `locationHash|` 前缀的键。修：`cacheKey` 改 internal，测试加同源 helper（`cacheKey(project, statementId, ownerNamespace)`），7 处断言全部改缝构造。
+3. **BrowserUtil 调用面计数漂移**（1 例）——dev 移植的 04a 把 ShareDialog 两处 `BrowserUtil.open` 收敛进共享 onSuccess（2→1），守卫期望计数 5→4 未同步。修：`expectedTotalCallSites` 5→4，注释登记收敛来源。
+4. **守卫类未登记自证覆盖率扫描面**（1 例）——移植的 ShareExportOffEdtGuardTest（文件名含 Guard）未登记进 GuardSelfTestCoverageMetaGuardTest 的 GUARD_CLASSES。修：照 dev 同款 GuardEntry 登记（decisionFns=offendersOf/VIOLATIONS，自证=testGuardCatchesEdtDirectWrite）。
+
+**修复验证**：第三轮 `compileKotlin compileTestKotlin` exit 0；重跑测试分片交 CI 复验（见 6.7）。
+
+
 
