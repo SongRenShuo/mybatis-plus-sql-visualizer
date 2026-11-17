@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.mcp
 
-import com.intellij.openapi.project.DumbService
+import com.intellij.psi.search.GlobalSearchScope
+import com.intellij.util.indexing.FileBasedIndex
+import cn.song.mybatisplus.visualizer.xml.ibatis.SqlMapNamespaceIndex
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import java.io.File
@@ -51,12 +53,8 @@ class McpSourceLocatorRenderAtLineTest : BasePlatformTestCase() {
         LocalFileSystem.getInstance().refreshAndFindFileByIoFile(file)
     }
 
-    private fun renderAtLine(line: Int?): McpSourceLocator.Outcome {
-        // 长分片 CI 里本用例可能排在上千个用例之后，工程仍在 dumb / 索引未就绪时
-        // iBatis 语句定位会拿到空锚（SOURCE_NOT_FOUND）。等 smart 再解析，保证顺序无关。
-        DumbService.getInstance(project).waitForSmartMode()
-        return McpSourceLocator.renderAtLine(project, "mapper/UserMapper.xml", line)
-    }
+    private fun renderAtLine(line: Int?): McpSourceLocator.Outcome =
+        McpSourceLocator.renderAtLine(project, "mapper/UserMapper.xml", line)
 
     fun test标签行命中_修复主场景() {
         val outcome = renderAtLine(2)
@@ -129,17 +127,22 @@ class McpSourceLocatorRenderAtLineTest : BasePlatformTestCase() {
         }
     """.trimIndent()
 
-    private fun render(relPath: String, line: Int?): McpSourceLocator.Outcome {
-        DumbService.getInstance(project).waitForSmartMode()
-        return McpSourceLocator.renderAtLine(project, relPath, line)
-    }
+    private fun render(relPath: String, line: Int?): McpSourceLocator.Outcome =
+        McpSourceLocator.renderAtLine(project, relPath, line)
 
     /**
      * sqlMap 用 `addFileToProject` 进项目索引（namespace → 文件解析走 `FileTypeIndex`）；
      * 磁盘 `writeMapper` 造的文件不保证进 **FileTypeIndex**（既有 mapper 用例只走「路径 → PSI」，
      * 不查索引，所以没暴露）。Java DAO 仍写磁盘（`McpFilePathResolver` 按 basePath 解析绝对路径）。
      */
-    private fun addSqlMap(): com.intellij.psi.PsiFile = myFixture.addFileToProject("sqlmap/User.xml", sqlMap)
+    private fun addSqlMap(): com.intellij.psi.PsiFile {
+        val file = myFixture.addFileToProject("sqlmap/User.xml", sqlMap)
+        // FileBasedIndex 在长生命周期 CI JVM 里对刚 addFileToProject 的文件异步建索引；
+        // 强制目标索引追平，避免 iBatis 调用行解析拿到空锚（SOURCE_NOT_FOUND）。
+        FileBasedIndex.getInstance().ensureUpToDate(
+            SqlMapNamespaceIndex.NAME, project, GlobalSearchScope.allScope(project))
+        return file
+    }
 
     fun testiBatis_sqlMap语句行走iBatis渲染() {
         // 本用例只走「路径 → PSI → 标签直渲」，不查 FileTypeIndex，写磁盘即可
