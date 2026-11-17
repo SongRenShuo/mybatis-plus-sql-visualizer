@@ -57,7 +57,9 @@ public class SqlMapperFoldingBuilder extends FoldingBuilderEx {
         if (quick) return FoldingDescriptor.EMPTY;
         if (!(root.getContainingFile() instanceof XmlFile)) return FoldingDescriptor.EMPTY;
         XmlFile file = (XmlFile) root.getContainingFile();
-        if (file.getRootTag() == null || !file.getRootTag().getName().equals("mapper")) {
+        // T-Ibatis2Support 券 D：语句宿主根放宽到 iBatis `sqlMap`（廉价二次判据＝根名恰为 sqlMap）。
+        // MyBatis `mapper` 文件判定逐字节不变（mapper 根名分支原样保留）。
+        if (!XmlSynHiGate.isStatementHostRootName(file.getRootTag() == null ? null : file.getRootTag().getName())) {
             return FoldingDescriptor.EMPTY;
         }
         // T-PerfSweep26 F95：体量熔断——超万行级 mapper 不做子树遍历（与注入族 XmlSynHiGate 同阈值同防线）。

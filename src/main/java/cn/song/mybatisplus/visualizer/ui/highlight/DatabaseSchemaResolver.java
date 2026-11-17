@@ -52,6 +52,13 @@ public final class DatabaseSchemaResolver {
 
     private static final Logger LOG = Logger.getInstance(DatabaseSchemaResolver.class);
 
+    // T-StartupReadLockFreeze §14.10：模型冷窗口（所有数据源的内省都未完成时短路整批扫描）。
+    /** projectKey → 最近一次观测到「所有源都 bail（模型未加载）」的时刻。 */
+    private static final Map<String, Long> MODELS_COLD_AT = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 模型冷窗口：窗口内跳过 schema 扫描（省的是纯白付的遍历，不是功能性结果）。 */
+    public static volatile long modelsColdWindowMs = 20_000L;
+
     /** database 插件标记类（探测用，M17 同 ExecuteSqlSupport）。 */
     private static final String MANAGER_CLASS = "com.intellij.database.psi.DataSourceManager";
 
@@ -338,6 +345,11 @@ public final class DatabaseSchemaResolver {
     public static int prefetchTables(Project project, Collection<String> tableNames) {
         if (project == null) return 0;
         if (!isDatabaseAvailable()) return 0;
+        // §14.10：模型冷时整批跳过——每次都是「15 个源全 bail」，纯白付（真机 830 表 × 15 源 = 45s）
+        if (modelsColdNow(project)) {
+            LOG.info("[T-DbSchemaCompletion] prewarm skipped: models cold, tables=" + tableNames.size());
+            return 0;
+        }
         int resolved = 0;
         for (String name : tableNames) {
             if (name.isBlank()) continue;
@@ -688,6 +700,12 @@ public final class DatabaseSchemaResolver {
     // DasTypedObject）。收录条件放宽为「comment/typeSpec 非空 或 notNull==true」后，仅非空标记
     // 列（comment/typeSpec 双空）也会进 Map——只消费 comment 的调用点自行过滤 blank 保持放宽前语义。
     private static TableMeta tryCompute(Project project, String tableName) {
+        // T-StartupReadLockFreeze §14.10：数据源模型未加载时逐表逐源的完整扫描必然全部 bail，
+        // 一次「全部源都 bail」就是「模型冷」的充分证据：窗口内直接按 scanBailed 返回，
+        // 不再逐源遍历；窗口外自动重试，内省完成后自愈。
+        if (modelsColdNow(project)) {
+            return new TableMeta(null, Map.of(), true);
+        }
         List<Object> dataSources = dataSources(project);
         if (dataSources == null) {
             LOG.warn("DatabaseSchemaResolver: dataSources(project) reflection failed, table=" + tableName);
@@ -697,7 +715,11 @@ public final class DatabaseSchemaResolver {
             LOG.info("DatabaseSchemaResolver: no data sources configured, table=" + tableName);
             return TableMeta.EMPTY;
         }
-        return resolveFromSources(tableName, dataSources);
+        TableMeta resolved = resolveFromSources(tableName, dataSources);
+        if (resolved.scanBailed() && resolved.columns().isEmpty() && resolved.comment() == null) {
+            stampModelsCold(project);
+        }
+        return resolved;
     }
 
     /**
@@ -1424,6 +1446,37 @@ public final class DatabaseSchemaResolver {
     /** 测试缝：模型冷窗口（window 内视为冷）；window &lt;= 0 等价关闭。 */
     public static boolean modelsColdNowAt(Long lastAt, long now, long window) {
         return lastAt != null && window > 0L && (now - lastAt) >= 0 && (now - lastAt) < window;
+    }
+
+    /** 当前 project 是否处于模型冷窗口（供 tryCompute / prefetchTables 短路扫描）。 */
+    public static boolean modelsColdNow(Project project) {
+        String key = projectKeyOf(project);
+        return modelsColdNowAt(key == null ? null : MODELS_COLD_AT.get(key),
+                System.currentTimeMillis(), modelsColdWindowMs);
+    }
+
+    /** 观测到所有源都 bail 后记录模型冷（只记首次，避免刷日志）。 */
+    private static void stampModelsCold(Project project) {
+        String key = projectKeyOf(project);
+        if (key == null) return;
+        boolean first = MODELS_COLD_AT.put(key, System.currentTimeMillis()) == null;
+        if (first) {
+            LOG.info("DatabaseSchemaResolver: 模型冷（所有数据源的内省都未完成）——" + modelsColdWindowMs
+                    + "ms 内跳过 schema 扫描，窗口外自动重试");
+        }
+    }
+
+    private static String projectKeyOf(Project project) {
+        try {
+            return project != null ? project.getLocationHash() : null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 测试缝：清空模型冷观测（project 复用隔离）。 */
+    public static void resetModelsColdForTest() {
+        MODELS_COLD_AT.clear();
     }
 
     private DatabaseSchemaResolver() {

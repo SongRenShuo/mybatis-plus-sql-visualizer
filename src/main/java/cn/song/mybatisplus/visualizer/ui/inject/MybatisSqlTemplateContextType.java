@@ -33,7 +33,8 @@ public class MybatisSqlTemplateContextType extends TemplateContextType {
     public boolean isInContext(@NotNull PsiFile file, int offset) {
         if (!(file instanceof XmlFile)) return false;
         XmlFile xmlFile = (XmlFile) file;
-        if (xmlFile.getRootTag() == null || !xmlFile.getRootTag().getName().equals("mapper")) return false;
+        // T-Ibatis2Support 券 D：语句宿主根放宽到 iBatis `sqlMap`（同一个廉价判据）。
+        if (!XmlSynHiGate.isStatementHostRootName(xmlFile.getRootTag() == null ? null : xmlFile.getRootTag().getName())) return false;
         int safeOffset = Math.max(0, Math.min(offset, Math.max(0, file.getTextLength() - 1)));
         PsiElement element = file.findElementAt(safeOffset);
         if (element == null) return false;

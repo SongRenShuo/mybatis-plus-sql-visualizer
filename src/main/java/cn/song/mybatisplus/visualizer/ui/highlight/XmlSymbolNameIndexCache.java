@@ -67,7 +67,7 @@ import java.util.function.BooleanSupplier;
  * <b>不引</b> PsiTreeChangeListener / EditorFactoryListener（仓内红线族维持 0）。
  */
 @Service(Service.Level.PROJECT)
-public class XmlSymbolNameIndexCache {
+public final class XmlSymbolNameIndexCache {
 
     private static final Logger LOG = Logger.getInstance(XmlSymbolNameIndexCache.class);
 

@@ -166,10 +166,12 @@ public class SqlCompletionContributor extends CompletionContributor {
                 // 子句判定（T-M27-01：纯函数迁入 SqlTextAnalysis，语义与 M16.2 防御行为不变；异常/无文件回退 UNKNOWN）
                 SqlClause clause;
                 try {
-                    PsiFile cf = parameters.getPosition().getContainingFile();
-                    String fileText = cf != null ? cf.getText() : "";
-                    int off = parameters.getPosition().getTextRange().getStartOffset();
-                    clause = SqlTextAnalysis.detectClause(fileText, off);
+                    // T-StartupReadLockFreeze §二十三：子句判定必须读编辑器文档文本，不能读 PSI 文本。
+                    // 补全期文档刚被改、PSI 尚未 commit，读 PSI 得到的是改动前的 SQL（表名还能补、列名没了）。
+                    // 与 master 口径一致：parameters.editor.document.text + offset clamp。
+                    String docText = parameters.getEditor().getDocument().getText();
+                    int off = Math.max(0, Math.min(parameters.getOffset(), docText.length()));
+                    clause = SqlTextAnalysis.detectClause(docText, off);
                 } catch (Throwable e) {
                     clause = SqlClause.UNKNOWN;
                 }

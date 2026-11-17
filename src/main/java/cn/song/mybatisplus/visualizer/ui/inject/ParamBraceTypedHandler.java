@@ -125,6 +125,12 @@ public class ParamBraceTypedHandler extends TypedHandlerDelegate {
      * 修 20260928 的 A（标记区误接管）时引入 B（正文误放行）。</p>
      */
     private static boolean inStatementText(XmlTag tag, int offset) {
+        // T-Ibatis2Support 券 D：`inMapperFile` 已放宽到 iBatis `sqlMap`，但本类补的是 `{}`
+        // （MyBatis 语法）；iBatis 用 `#name#`/`$name$`，补 `{}` 是写入错误语法，必须排除。
+        // 放宽只给被动能力，主动改写文档的便利功能保持 MyBatis 专属。
+        if (XmlSynHiGate.isIbatisSqlMapRoot(tag)) {
+            return false;
+        }
         if (!XmlSynHiGate.inMapperFile(tag)) {
             return false;
         }

@@ -116,12 +116,16 @@ public class XmlSqlCompletionContributor extends CompletionContributor implement
                     offset = parameters.getOffset();
                 }
 
-                // 守卫：祖先链最近语句标签或 `<sql>` 片段 + 根 <mapper>（O(1) 语法判定）
+                // 守卫：祖先链最近语句标签或 `<sql>` 片段 + 语句宿主根（MyBatis `mapper` /
+                // iBatis `sqlMap`——T-Ibatis2Support 券 D 放宽；O(1) 语法判定）
                 XmlTag enclosingTag = findEnclosingStatementTag(position);
                 if (enclosingTag == null) {
                     return;
                 }
-                if (!rootTag(enclosingTag).getName().equals("mapper")) {
+                String rootName = rootTag(enclosingTag).getName();
+                boolean isIbatis = rootName.equalsIgnoreCase(
+                        cn.song.mybatisplus.visualizer.ui.inject.XmlSynHiGate.IBATIS_SQL_MAP_ROOT_TAG);
+                if (!"mapper".equals(rootName) && !isIbatis) {
                     return;
                 }
 
@@ -134,6 +138,18 @@ public class XmlSqlCompletionContributor extends CompletionContributor implement
                 String statementText = fileText.substring(statementStart, enclosingTag.getTextRange().getEndOffset());
                 int caretInStatement = Math.max(0, Math.min(offset - statementStart, statementText.length()));
                 String beforeCaret = statementText.substring(0, caretInStatement);
+
+                // T-Ibatis2Support 券 D：iBatis 文件只放宽**语句文本内的 SQL 补全**（关键字/函数/
+                // 表/列/别名）。其余分支语义属 MyBatis（动态标签 if/foreach、属性值 OGNL 分流、
+                // `${}`/`#{}`），对 iBatis 不成立——一律不接（「不做」优于「接错语义」）。
+                if (isIbatis) {
+                    // 属性值位连 SQL 分支也不进：属性值不是语句文本。
+                    if (PsiTreeUtil.getParentOfType(position, XmlAttributeValue.class, false) != null) {
+                        return;
+                    }
+                    addSqlCompletions(enclosingTag, statementText, caretInStatement, prefix, result);
+                    return;
+                }
 
                 // a. 动态标签：光标前非空白字符是 `<`（`1=1 <caret>` 等插入点）
                 if (SourceSqlSuggestionFactory.DYNAMIC_TAG_PATTERN.matcher(beforeCaret).find()) {
@@ -204,30 +220,35 @@ public class XmlSqlCompletionContributor extends CompletionContributor implement
                 }
 
                 // f. SQL 补全：语句文本等长剥离标签 → 纯文本分析 → prefixMatches 过滤
-                String stripped = SqlTextAnalysis.stripXmlTags(statementText);
-                SourceSqlContext sqlContext = resolveContext(enclosingTag);
-                List<String> projectionProperties = projectionProperties(enclosingTag, sqlContext);
-                List<String> quotedCandidates = quotedIdentifierCandidates(enclosingTag);
-                // 大小写口径（T-XmlGap 收口第三轮真机实测）：候选词表多为**大写**关键字/函数
-                // （SELECT/WHERE/CONCAT…），而编辑器给的前缀匹配器**区分大小写** ⇒ 小写键入
-                // `wh` 时 `WHERE` 一个都不出（沙盒对照读数：`wh` 无候选、`WH` 出 `WHEN`/`WHERE`），
-                // 用户观感就是「补全不灵」。SQL 关键字/函数与未加引号的标识符在语义上都大小写
-                // 不敏感（MySQL/PG/Oracle 的未引号标识符均折叠大小写），故本分支在平台匹配之外
-                // 再补一次**忽略大小写**的匹配；其余分支（参数名/实体字段等 Java 侧标识符）保持
-                // 平台原语义不变。
-                String typedPrefix = prefix.getPrefix();
-                for (LookupElementBuilder item : SourceSqlCompleter.sqlCompletions(
-                        stripped, caretInStatement, sqlContext, projectionProperties, quotedCandidates)) {
-                    boolean anyMatch = item.getAllLookupStrings().stream().anyMatch(candidate ->
-                            prefix.prefixMatches(candidate)
-                                    || (!typedPrefix.isEmpty()
-                                    && candidate.regionMatches(true, 0, typedPrefix, 0, typedPrefix.length())));
-                    if (anyMatch) {
-                        result.addElement(item);
-                    }
-                }
+                addSqlCompletions(enclosingTag, statementText, caretInStatement, prefix, result);
             }
         });
+    }
+
+    /**
+     * SQL 补全：语句文本等长剥离标签 → 纯文本分析 → prefixMatches 过滤。
+     *
+     * <p>MyBatis 路径与 iBatis 语句文本路径（券 D）共用此收集口径；大小写不敏感匹配与
+     * 原实现逐字等价——SQL 关键字/函数与未引号标识符大小写不敏感，故在平台匹配之外再补一次
+     * 忽略大小写匹配（其余分支即参数名/实体字段等 Java 侧标识符保持平台原语义）。</p>
+     */
+    private void addSqlCompletions(XmlTag enclosingTag, String statementText, int caretInStatement,
+                                   PrefixMatcher prefix, CompletionResultSet result) {
+        String stripped = SqlTextAnalysis.stripXmlTags(statementText);
+        SourceSqlContext sqlContext = resolveContext(enclosingTag);
+        List<String> projectionProperties = projectionProperties(enclosingTag, sqlContext);
+        List<String> quotedCandidates = quotedIdentifierCandidates(enclosingTag);
+        String typedPrefix = prefix.getPrefix();
+        for (LookupElementBuilder item : SourceSqlCompleter.sqlCompletions(
+                stripped, caretInStatement, sqlContext, projectionProperties, quotedCandidates)) {
+            boolean anyMatch = item.getAllLookupStrings().stream().anyMatch(candidate ->
+                    prefix.prefixMatches(candidate)
+                            || (!typedPrefix.isEmpty()
+                            && candidate.regionMatches(true, 0, typedPrefix, 0, typedPrefix.length())));
+            if (anyMatch) {
+                result.addElement(item);
+            }
+        }
     }
 
     // ------------------------------------------------------------------

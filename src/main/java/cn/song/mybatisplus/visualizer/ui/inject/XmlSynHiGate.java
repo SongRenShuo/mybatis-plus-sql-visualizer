@@ -417,16 +417,23 @@ public final class XmlSynHiGate {
             "test", "value", "collection", "item", "index",
             "open", "close", "separator", "prefix", "prefixOverrides", "suffixOverrides");
 
-    /** 祖先链是否 mapper（含根标签首元素 name 含 mapper 的宽松口径——友商/自研 mapper 形态）。 */
+    /**
+     * 祖先链是否语句宿主文件（MyBatis mapper 或 iBatis sqlMap）。
+     *
+     * <p>T-Ibatis2Support 券 D 放宽（原形态只认 mapper）：iBatis 语句映射文件根元素是 {@code <sqlMap>}
+     * （{@code <sqlMapConfig>} 是全局配置、不含语句，不在此列）。二次判据：根标签名恰为 sqlMap
+     * （大小写不敏感、O(1)），与 MyBatis mapper 根名不相交，故 MyBatis 文件判定逐字不变。
+     * 热路径约束：这里不得调 classpath 索引查询、不得读 DOCTYPE，只用已到手的根标签名。
+     */
     public static boolean inMapperFile(XmlTag tag) {
         XmlTag cur = tag;
         while (cur != null) {
             if (cur.getName().equalsIgnoreCase("mapper")) return true;
             cur = cur.getParentTag();
         }
-        PsiFile containingFile = tag.getContainingFile();
-        XmlTag root = containingFile instanceof XmlFile ? ((XmlFile) containingFile).getRootTag() : null;
-        return root != null && root.getName().toLowerCase(Locale.ROOT).contains("mapper");
+        XmlTag root = rootTagOf(tag);
+        if (root == null) return false;
+        return root.getName().toLowerCase(Locale.ROOT).contains("mapper") || isSqlMapRootName(root.getName());
     }
 
     // ==================================================================

@@ -28,7 +28,8 @@ public class SqlMapperChangeLocalityDetector implements ChangeLocalityDetector {
     public PsiElement getChangeHighlightingDirtyScopeFor(@NotNull PsiElement changedElement) {
         if (!(changedElement.getContainingFile() instanceof XmlFile)) return null;
         XmlFile file = (XmlFile) changedElement.getContainingFile();
-        if (file.getRootTag() == null || !file.getRootTag().getName().equals("mapper")) return null;
+        // T-Ibatis2Support 券 D：语句宿主根放宽到 iBatis `sqlMap`（同一个廉价判据）。
+        if (!XmlSynHiGate.isStatementHostRootName(file.getRootTag() == null ? null : file.getRootTag().getName())) return null;
         XmlText text;
         if (changedElement instanceof XmlText) {
             text = (XmlText) changedElement;

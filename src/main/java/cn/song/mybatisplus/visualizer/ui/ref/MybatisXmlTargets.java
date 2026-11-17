@@ -14,7 +14,6 @@ import com.intellij.psi.PsiImportStatementBase;
 import com.intellij.psi.PsiJavaFile;
 import com.intellij.psi.PsiManager;
 import com.intellij.psi.PsiMethod;
-import com.intellij.psi.search.FileTypeIndex;
 import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.psi.search.PsiShortNamesCache;
 import com.intellij.psi.util.PsiTreeUtil;
@@ -158,28 +157,32 @@ public final class MybatisXmlTargets {
     @Nullable
     public static XmlFile findMapperFileByNamespace(Project project, String namespace) {
         if (namespace.isEmpty()) return null;
-        Listing listing = mapperXmlListing(project);
-        NamespaceSlot slot = namespaceSlot;
-        if (slot != null
-                && slot.project.get() == project
-                && slot.listingGeneration == listing.generation
-                && slot.namespace.equals(namespace)) {
-            return slot.file != null && slot.file.isValid() ? slot.file : null;
+        // T-MapperXmlTargetsIndex（2026-11-16）：namespace→文件改走自定义索引 MapperNamespaceIndex，
+        // F96 的「文件清单单槽 TTL(5s) + namespace 结果级 memo」随 FileTypeIndex 全扫一起退役。
+        // 索引由平台增量维护，新增同 namespace 文件在同一会话内立即可见（旧链 5s TTL 内会漏）。
+        // 索引不可查（dumb / 重建中）：按「本次没有」返回——引用是 soft，不标红也不抛穿调用方。
+        try {
+            if (DumbService.isDumb(project)) return null;
+        } catch (Throwable t) {
+            return null;
+        }
+        List<VirtualFile> candidates;
+        try {
+            candidates = cn.song.mybatisplus.visualizer.log.MapperNamespaceIndex.getMapperXmlFiles(project, namespace);
+        } catch (com.intellij.openapi.project.IndexNotReadyException e) {
+            return null;
         }
         namespaceScanCount.incrementAndGet();
-        XmlFile found = null;
-        for (VirtualFile vf : listing.files) {
+        for (VirtualFile vf : candidates) {
             if (!vf.isValid()) continue;
             PsiFile pf = PsiManager.getInstance(project).findFile(vf);
             if (!(pf instanceof XmlFile)) continue;
             XmlFile xmlFile = (XmlFile) pf;
             if (xmlFile.getRootTag() != null && namespace.equals(xmlFile.getRootTag().getAttributeValue("namespace"))) {
-                found = xmlFile;
-                break;
+                return xmlFile;
             }
         }
-        namespaceSlot = new NamespaceSlot(new WeakReference<>(project), listing.generation, namespace, found);
-        return found;
+        return null;
     }
 
     /**
@@ -481,18 +484,8 @@ public final class MybatisXmlTargets {
         indexScanCount.incrementAndGet();
         List<VirtualFile> files;
         try {
-            com.intellij.openapi.fileTypes.FileType xmlFileType =
-                    com.intellij.openapi.fileTypes.FileTypeManager.getInstance().getStdFileType("XML");
-            List<VirtualFile> found = new ArrayList<>();
-            for (VirtualFile vf : FileTypeIndex.getFiles(xmlFileType, GlobalSearchScope.projectScope(project))) {
-                PsiFile pf = PsiManager.getInstance(project).findFile(vf);
-                if (!(pf instanceof XmlFile)) continue;
-                XmlFile xmlFile = (XmlFile) pf;
-                if (xmlFile.getRootTag() != null && xmlFile.getRootTag().getName().equals("mapper")) {
-                    found.add(vf);
-                }
-            }
-            files = found;
+            // T-MapperXmlTargetsIndex：清单来源改走自定义索引，不再 FileTypeIndex 全项目 XML 全扫。
+            files = cn.song.mybatisplus.visualizer.log.MapperNamespaceIndex.getMapperFiles(project);
         } catch (Throwable t) {
             files = List.of();
         }
