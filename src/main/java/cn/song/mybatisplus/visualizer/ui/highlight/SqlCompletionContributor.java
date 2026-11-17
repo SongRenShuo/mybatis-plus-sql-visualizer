@@ -17,8 +17,15 @@ import com.intellij.patterns.PlatformPatterns;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiFile;
 import com.intellij.util.ProcessingContext;
+import org.jetbrains.annotations.NotNull;
 
+import cn.song.mybatisplus.visualizer.util.CaseFormatUtil;
+
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.WeakHashMap;
 
 /**
@@ -59,6 +66,48 @@ public class SqlCompletionContributor extends CompletionContributor {
      * 预览编辑器创建时存入，补全时按 Document 查找。
      */
     private static final WeakHashMap<Document, SqlCompletionContext> documentContexts = new WeakHashMap<>();
+
+    // ==================================================================
+    // T-SyncK2JMaster179 生产补漏：master SqlCompletionContributor.kt companion 的列名别名纯函数。
+    // ==================================================================
+
+    /** 列名别名：原名 + 驼峰转蛇形 + 大写蛇形（去重、空白不产生）。 */
+    @NotNull
+    public static List<String> columnNameAliases(@NotNull String name) {
+        if (name.isBlank()) return List.of();
+        String snake = CaseFormatUtil.camelToSnake(name);
+        Set<String> linked = new LinkedHashSet<>();
+        linked.add(name);
+        linked.add(snake);
+        linked.add(snake.toUpperCase(Locale.ROOT));
+        List<String> out = new ArrayList<>();
+        for (String s : linked) if (!s.isBlank()) out.add(s);
+        return out;
+    }
+
+    /** 插入形态跟随输入风格：全大写 → UPPER_SNAKE，全小写 → snake，混合/空 → 原名。 */
+    @NotNull
+    public static String preferredColumnVariant(@NotNull String name, @NotNull String prefixText) {
+        List<String> aliases = columnNameAliases(name);
+        if (aliases.size() == 1) return name;
+        String upper = null;
+        String lower = null;
+        for (String a : aliases) {
+            if (a.equals(a.toUpperCase(Locale.ROOT)) && !a.equals(name)) upper = a;
+            if (lower == null && a.equals(a.toLowerCase(Locale.ROOT)) && !a.equals(name)) lower = a;
+        }
+        if (upper == null) return name;
+        boolean hasUpper = false;
+        boolean hasLower = false;
+        for (int i = 0; i < prefixText.length(); i++) {
+            char c = prefixText.charAt(i);
+            if (Character.isUpperCase(c)) hasUpper = true;
+            if (Character.isLowerCase(c)) hasLower = true;
+        }
+        if (hasUpper && !hasLower) return upper;
+        if (hasLower && !hasUpper) return lower != null ? lower : name;
+        return name;
+    }
 
     public static void registerContext(Document document, SqlCompletionContext ctx) {
         documentContexts.put(document, ctx);

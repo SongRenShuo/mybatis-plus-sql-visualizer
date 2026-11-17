@@ -25,6 +25,7 @@ import cn.song.mybatisplus.visualizer.xml.XmlMapperModel;
 import cn.song.mybatisplus.visualizer.xml.XmlMapperParser;
 import cn.song.mybatisplus.visualizer.xml.XmlParseException;
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel;
+import cn.song.mybatisplus.visualizer.xml.XmlPreviewProfile;
 import cn.song.mybatisplus.visualizer.xml.XmlScriptException;
 import cn.song.mybatisplus.visualizer.xml.XmlStatement;
 import cn.song.mybatisplus.visualizer.xml.XmlStatementKind;
@@ -437,18 +438,31 @@ public final class XmlPreviewService {
 
     /** 预览模型 → PreviewResult（T-M25-02 注解预览共用）：初始渲染 + 参数对照 + 错误合并。 */
     public PreviewResult toResult(XmlPreviewModel model) {
-        return toResult(model, java.util.Collections.emptyList(), null);
+        return toResult(model, java.util.Collections.emptyList(), null, true);
     }
 
     public PreviewResult toResult(XmlPreviewModel model, List<String> extraWarnings) {
-        return toResult(model, extraWarnings, null);
+        return toResult(model, extraWarnings, null, true);
     }
 
     public PreviewResult toResult(XmlPreviewModel model, List<String> extraWarnings, SqlCompletionContext entityContext) {
+        return toResult(model, extraWarnings, entityContext, true);
+    }
+
+    /**
+     * T-SyncK2JMaster179 补漏：静态入口，支持 {@code includeRenderErrors}——面板链传 false，
+     * 避免基线渲染错误与当前勾选态产物混装（master XmlPreviewService.toResult 的默认参数）。
+     */
+    public static PreviewResult toResult(XmlPreviewModel model, boolean includeRenderErrors) {
+        return INSTANCE.toResult(model, java.util.Collections.emptyList(), null, includeRenderErrors);
+    }
+
+    public PreviewResult toResult(XmlPreviewModel model, List<String> extraWarnings,
+                                  SqlCompletionContext entityContext, boolean includeRenderErrors) {
         RenderedXmlSql rendered = model.renderSql();
         List<String> errors = new ArrayList<>(model.getErrors());
         errors.addAll(extraWarnings);
-        errors.addAll(rendered.errors());
+        if (includeRenderErrors) errors.addAll(rendered.errors());
 
         String sql = rendered.sql();
         List<String> unresolvedParams = new ArrayList<>();
@@ -489,6 +503,42 @@ public final class XmlPreviewService {
                 List.of(),
                 Set.of()
         );
+    }
+
+    /**
+     * T-SyncK2JMaster179 补漏：MBG Example 形态判定（master XmlPreviewService.resolveExampleProfile）。
+     * parameterType 全限定名直接用；短名按 namespace 所在包补全；命中带 oredCriteria 字段 /
+     * createCriteria 方法的类判为 MBG_EXAMPLE。
+     */
+    @Nullable
+    public static XmlPreviewProfile resolveExampleProfile(@Nullable Project project,
+                                                          @Nullable String parameterType,
+                                                          @Nullable String namespace) {
+        if (project == null || parameterType == null || parameterType.isBlank()) return null;
+        String fqn;
+        if (parameterType.contains(".")) {
+            fqn = parameterType;
+        } else {
+            int lastDot = namespace == null ? -1 : namespace.lastIndexOf('.');
+            String pkg = lastDot < 0 ? "" : namespace.substring(0, lastDot);
+            if (pkg.isEmpty()) return null;
+            fqn = pkg + "." + parameterType;
+        }
+        PsiClass psiClass;
+        try {
+            psiClass = JavaPsiFacade.getInstance(project).findClass(fqn, GlobalSearchScope.allScope(project));
+        } catch (Throwable t) {
+            return null;
+        }
+        if (psiClass == null) return null;
+        boolean isExample;
+        try {
+            isExample = psiClass.findFieldByName("oredCriteria", true) != null
+                    || psiClass.findMethodsByName("createCriteria", true).length > 0;
+        } catch (Throwable t) {
+            isExample = false;
+        }
+        return isExample ? XmlPreviewProfile.MBG_EXAMPLE : null;
     }
 
     private PreviewResult emptyResult(String message) {
