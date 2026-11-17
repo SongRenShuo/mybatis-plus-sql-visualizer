@@ -30,6 +30,7 @@ import cn.song.mybatisplus.visualizer.xml.XmlScriptException;
 import cn.song.mybatisplus.visualizer.xml.XmlStatement;
 import cn.song.mybatisplus.visualizer.xml.XmlStatementKind;
 import com.intellij.openapi.application.ReadAction;
+import com.intellij.openapi.project.DumbService;
 import com.intellij.openapi.project.Project;
 import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiClass;
@@ -138,6 +139,8 @@ public final class XmlPreviewService {
         ParsedRef[] parsedRef = new ParsedRef[1];
         XmlPreviewModel model;
         List<String> staticWarnings;
+        // T-StartupReadLockFreeze §14.8：本轮 M2 是否转后台（决定要不要挂「解析落地后重算」）
+        String[] m2AwaitKey = {null};
         try {
             // T-IC-02：跨命名空间 include 片段表（无 project → 空表，纯文本链行为不变）
             CrossNamespaceFragments crossNamespace = XmlCrossNsFragmentResolver.INSTANCE.resolve(fileText, project);
@@ -168,7 +171,20 @@ public final class XmlPreviewService {
             // T-M29.5 / T-PT-01：mapper 方法参数类型 → 类型类别映射（引号由类别派生；
             // Map/解析失败不含键 → 面板兜底引号、无占位提示）
             Map<String, ParamTypeInfo> paramTypes = XmlParamTypeResolver.INSTANCE.resolveTypes(project, parsed.namespace(), statement.id());
-            model = XmlPreviewModel.from(statement, parsed.errors(), Set.of(), staticValues, ewBindings, Map.of(), paramTypes);
+            // T-MbgExamplePreview R5：parameterType → MBG Example profile
+            XmlPreviewProfile profile = resolveExampleProfile(project, statement.parameterType(), parsed.namespace());
+            // T-PreviewOpenPerfM2 M8：dumb mode 跳过 M2
+            boolean m2Allowed = project != null && !isDumb(project);
+            // T-StartupReadLockFreeze §14.8：首开只读缓存；未命中转后台并挂「落地后重算」。
+            Map<String, List<MockObject>> cachedM2 = null;
+            if (profile != null && m2Allowed) {
+                cachedM2 = MbgExampleCallResolver.resolveCachedOnly(project, parsed.namespace(), statement.id());
+                if (cachedM2 == null) {
+                    m2AwaitKey[0] = MbgExampleCallResolver.warmForPreview(project, parsed.namespace(), statement.id());
+                }
+            }
+            Map<String, List<MockObject>> collectionElements = cachedM2 != null ? new HashMap<>(cachedM2) : Map.of();
+            model = XmlPreviewModel.from(statement, parsed.errors(), Set.of(), staticValues, ewBindings, Map.of(), paramTypes, profile, collectionElements);
             staticWarnings = warnings;
         } catch (XmlParseException e) {
             return emptyResult(e.getMessage() != null ? e.getMessage() : "XML 解析失败。");
@@ -176,7 +192,8 @@ public final class XmlPreviewService {
             return emptyResult(e.getMessage() != null ? e.getMessage() : "SQL 脚本解析失败。");
         }
 
-        PreviewResult preview = toResult(model, staticWarnings, entityContext);
+        // 面板口径：本轮基线渲染错误由 xmlErrors 单独显示，不并入 warning（toResult 传 false）。
+        PreviewResult preview = toResult(model, staticWarnings, entityContext, false);
         PreviewResult result = preview;
         if (project != null) {
             PreviewSourceContext contextForDecision = sourceContext != null && project.equals(sourceContext.project())
@@ -191,13 +208,48 @@ public final class XmlPreviewService {
         }
 
         ParsedRef ref = parsedRef[0];
-        if (ref == null) return result;
-        return applyPagination(
+        PreviewResult finalResult = ref == null ? result : applyPagination(
                 result,
                 project,
                 ref.namespace(),
                 ref.statementId(),
                 ref.kind());
+        if (m2AwaitKey[0] == null) return finalResult;
+        // T-StartupReadLockFreeze §14.8：M2 已转后台 —— 带上等待 key，面板在解析落地后重算刷新。
+        kotlin.jvm.functions.Function0<PreviewResult> retry = () ->
+                preview(fileText, statementId, project, entityContext, sourceContext);
+        return copyWithM2Await(finalResult, m2AwaitKey[0], retry);
+    }
+
+    /** dumb-mode 判定（测试环境 DumbService 不可用时按 false 兜底）。 */
+    private static boolean isDumb(Project project) {
+        try {
+            return DumbService.getInstance(project).isDumb();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 以全参构造器复制 PreviewResult，仅替换 m2AwaitKey / retryWhenIndexReady。 */
+    private static PreviewResult copyWithM2Await(PreviewResult src, String m2AwaitKey,
+                                                 kotlin.jvm.functions.Function0<PreviewResult> retry) {
+        return new PreviewResult(
+                src.getSql(), src.getCompactSql(), src.getUnresolvedParams(), src.getParamTable(),
+                src.getWrapperType(), src.getTableName(), src.getWarning(), src.getColumns(),
+                src.getColumnComments(), src.getTableComment(), src.getPreviewModel(),
+                src.getParamHints(), src.getCandidateTables(), src.getBatchModel(),
+                src.getXmlModel(), src.getInitialParamValues(), src.getPerfWarnings(),
+                src.getFillClauses(), src.getPreviousSql(), src.getPagesColumns(),
+                src.getNamedParamHints(), src.getStackDigest(), src.getThreadName(),
+                src.isHasDollarRawSegments(), src.getCountSql(), src.getPaginationLimitLine(),
+                src.getPlaceholderParamNames(), src.getDuplicateParamNames(),
+                src.getDiagramStatement(), src.getHistoryFingerprintSeed(),
+                src.getPaginationParamSources(), src.getRenderedDialect(), src.getDialectDecision(),
+                src.getHistoryEntryId(), src.getActualSql(), src.getSourceLanguage(), src.getOriginalSql(),
+                src.getDegradations(), src.getRuntimeSlots(), retry, m2AwaitKey,
+                src.isInformationalWarning(), src.getIbatisParamModel(), src.getRerender(),
+                src.getDecidingConsumption(), src.getOtherConsumptions(),
+                src.getStatementTypeOptions(), src.getStatementTypeSwitch());
     }
 
     /** Kotlin data class {@code copy(renderedDialect=…, dialectDecision=…)} 等价：其余字段原样保留。 */

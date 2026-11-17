@@ -47,8 +47,8 @@ class MbgExampleResolveDeadlineTest {
         // 截止判定必须真的在**检索内部**使用（否则传了参数也不生效）。
         // 注意别把测试缝 `isDeadlineHitForTest` 的调用算进来——首版按「全文件出现 ≥2 次」判定，
         // 摘除探针后仍为 2（缝自己算一次）⇒ 反向验证假绿，故改为只看 findCallSite 函数体。
-        val findCallSiteBody = src.substringAfter("private fun findCallSite")
-            .substringBefore("private fun ")
+        val findCallSiteBody = src.substringAfter("PsiMethodCallExpression findCallSite(")
+            .substringBefore("exampleVariableName(")
         assertTrue(
             "findCallSite 内必须自查 isDeadlineHit(deadlineAt)：预算要落在检索里，" +
                 "只落在调用方等待上会被「已持读锁」分支绕过",
@@ -70,11 +70,11 @@ class MbgExampleResolveDeadlineTest {
     }
 
     private fun resolverSource(): String = sourceOf(
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/MbgExampleCallResolver.kt",
+        "src/main/java/cn/song/mybatisplus/visualizer/ui/MbgExampleCallResolver.java",
     )
 
     private fun xmlPreviewSource(): String = sourceOf(
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/XmlPreviewService.kt",
+        "src/main/java/cn/song/mybatisplus/visualizer/ui/XmlPreviewService.java",
     )
 
     private fun sourceOf(relativePath: String): String {

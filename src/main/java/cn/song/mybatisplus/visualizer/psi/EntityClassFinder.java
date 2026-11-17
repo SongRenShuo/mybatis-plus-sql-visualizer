@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import cn.song.mybatisplus.visualizer.util.FatalErrors;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ReadAction;
+import com.intellij.openapi.progress.ProcessCanceledException;
 import com.intellij.openapi.progress.ProgressManager;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.roots.ProjectRootModificationTracker;
@@ -15,33 +16,41 @@ import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiModifierList;
-import com.intellij.psi.util.PsiModificationTracker;
+import com.intellij.psi.impl.java.stubs.index.JavaAnnotationIndex;
+import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.psi.search.PsiShortNamesCache;
+import com.intellij.util.concurrency.AppExecutorUtil;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 实体类查找器（T-M36.2：SQL 反向转换的 LambdaQueryWrapper 上下文解析）。
  *
- * 按 SQL 表名在项目中查找对应实体类（供 {@link cn.song.mybatisplus.visualizer.reverse.JavaCodeGenerator}
+ * <p>按 SQL 表名在项目中查找对应实体类（供 {@link cn.song.mybatisplus.visualizer.reverse.JavaCodeGenerator}
  * 生成 {@code LambdaQueryWrapper<Entity>} 代码），查找策略：
- * 1. <b>类名推断快路径</b>：表名 → 驼峰类名候选（含 {@code Entity} 后缀变体 + 去首段变体——
- *    {@code sys_account_role_rel} → {@code AccountRoleRel[Entity]}，前缀不一致常见命名直接命中）→
- *    {@link PsiShortNamesCache} 按类名检索 → {@link EntityResolver} 解析校验表名精确匹配，防同名词误配；
- * 2. <b>@TableName 反查慢路径</b>（快路径未命中时兜底，结果项目级缓存）：
- *    全量扫描项目类，匹配「@TableName 注解值」或「推断表名」等于 SQL 表名的类——
- *    扫描结果（类名/全限定名）缓存于 Project userData，以 {@code PsiModificationTracker.modificationCount}
- *    失效（PSI 任何修改自动重扫一次；无实体匹配场景不再每次转换全量扫描——性能修复）。
- *
- * <p>多模块同名实体可能返回多个候选（调用方走候选选择交互）；无候选返回空列表（调用方回落
- * 字符串列名 QueryWrapper 形态）。</p>
+ * <ol>
+ *   <li><b>类名推断快路径</b>：表名 → 驼峰类名候选（含 {@code Entity} 后缀变体 + 去首段变体）→
+ *       {@link PsiShortNamesCache} 按类名检索 → {@link EntityResolver} 解析校验表名精确匹配；</li>
+ *   <li><b>@TableName 反查慢路径</b>（快路径未命中时兜底）：一次全量扫描建「表名 → 类」全表索引，
+ *       缓存于 Project userData，任意表名查询 O(1)；失效基准＝项目结构版本 + TTL（挂
+ *       PsiModificationTracker 会被预览链路自己写 exec 文件/临时 PSI 顶掉，导致每次打开预览都重扫）。
+ *       索引未就绪时投递后台构建、本次原样返回空（不阻塞、不等待）；</li>
+ *   <li><b>跨 ORM 回补</b>：注解索引未命中时，按查询做一次「全项目推断」扫描（认 JPA {@code @Table} /
+ *       MBG 命名推断等），合并进同一索引，每个缓存期至多一次；</li>
+ *   <li><b>库兜底</b>：实体类来自依赖 JAR 时按候选类名快路径 + 一次性全库扫描。</li>
+ * </ol>
+ * 多模块同名实体可能返回多个候选；无候选返回空列表（调用方回落字符串列名 QueryWrapper 形态）。</p>
  */
 public class EntityClassFinder {
 
@@ -51,12 +60,7 @@ public class EntityClassFinder {
         this.project = project;
     }
 
-    /**
-     * 按表名查找实体类（须在 ReadAction 内调用——PSI 索引访问）。
-     *
-     * @param tableName SQL 表名（解析器已剥前缀/反引号）
-     * @return 表名精确匹配的实体类列表（按候选类名顺序：纯驼峰名优先、Entity 后缀次之）
-     */
+    /** 按表名查找实体类（须在 ReadAction 内调用——PSI 索引访问）。 */
     public List<PsiClass> find(String tableName) {
         if (tableName == null || tableName.isBlank()) return List.of();
         EntityResolver resolver = new EntityResolver();
@@ -77,13 +81,7 @@ public class EntityClassFinder {
             PsiClass[] classes = PsiShortNamesCache.getInstance(project)
                 .getClassesByName(candidateName, scope);
             for (PsiClass clazz : classes) {
-                // T-M36.3：VO/DTO 类排除——候选类名以 VO/DTO 结尾的（如 UserVO）不参与转换
-                // （表名校验已覆盖绝大多数；此为命名惯例的显式防御）
-                if (isVoDto(clazz)) {
-                    continue;
-                }
-                // 解析表名精确匹配（大小写不敏感——表名大小写因方言/平台而异）；
-                // resolve 异常情况返回空表名 → 自然排除
+                if (isVoDto(clazz)) continue;
                 String resolvedTable = resolver.resolve(clazz).getTableName();
                 if (resolvedTable != null && resolvedTable.equalsIgnoreCase(tableName)) {
                     result.add(clazz);
@@ -93,10 +91,7 @@ public class EntityClassFinder {
         return result;
     }
 
-    /**
-     * 库兜底用 allScope：notScope(projectScope) 会把模块库根一并排除。
-     * 项目类此前已查过且 0 命中，重复的几次查询由 EntityResolver 缓存摊销。
-     */
+    /** 库兜底用 allScope：notScope(projectScope) 会把模块库根一并排除。 */
     private GlobalSearchScope libraryScope() { return GlobalSearchScope.allScope(project); }
 
     /** 库内非常规命名实体只读缓存；未就绪则投递后台扫描，本次仍返回空，不等待。 */
@@ -142,11 +137,9 @@ public class EntityClassFinder {
         try {
             future = app.executeOnPooledThread(() -> {
                 try {
-                    // 不包外层 ReadAction：内核自带分片读动作，外层包裹会重新整趟持锁。
                     int entries = runLibrarySweepNow();
                     if (entries < 0) clearLibrarySweepDispatched();
                 } catch (Throwable t) {
-                    // 取消、关工程、取数异常均允许下次重投；JVM 致命错误保留原对象透传。
                     clearLibrarySweepDispatched();
                     if (FatalErrors.isFatal(t)) throw t;
                 } finally {
@@ -154,12 +147,11 @@ public class EntityClassFinder {
                 }
             });
         } catch (Throwable ignored) {
-            // 对应上游投递层 runCatching().getOrNull()，保持与任务体的 fatal 策略边界。
+            // 对应上游 runCatching().getOrNull()
         }
         if (future == null) inFlightSweep.decrementAndGet();
     }
 
-    /** 每结构版本一次，再叠时间冷却，避免依赖/模块频繁变化引发投递风暴。 */
     private boolean markSweepDispatched() {
         if (!cooldownElapsed()) return false;
         long current = projectStructureVersion();
@@ -174,7 +166,6 @@ public class EntityClassFinder {
         return true;
     }
 
-    /** 窗口下界为上趟实际耗时，保证两趟之间至少歇一趟，直接扫描也参与冷却。 */
     private boolean cooldownElapsed() {
         Long last = project.getUserData(LIBRARY_SWEEP_DISPATCH_AT_KEY);
         if (last == null) return true;
@@ -189,7 +180,6 @@ public class EntityClassFinder {
         if (cached != null) cached.dispatched = false;
     }
 
-    /** 设置不可用默认开，测试缝优先。 */
     private boolean isLibrarySweepEnabled() {
         if (sweepEnabledForTest != null) return sweepEnabledForTest;
         try {
@@ -201,13 +191,7 @@ public class EntityClassFinder {
 
     private int sweepScanLimit() { return sweepScanLimitForTest != null ? sweepScanLimitForTest : LIBRARY_SWEEP_SCAN_LIMIT; }
 
-    /**
-     * 全 classpath 的唯一全量扫描，必须在 BGT 调用，不可包外层 ReadAction。
-     * 短名清单用独立短读动作，每 500 个短名一个读动作，片间真正释放读锁并检查取消。
-     * 上限按剩余预算切片，触顶返回 -1 且不落残缺缓存；先取结构版本，结构在扫描期间变化则结果自然过期。
-     * 只认 @TableName：按类名推断会把 JDK 等任意类全建成表，常规命名已由快路径覆盖。
-     * 显式按钮扫描也记录完成时刻和耗时（至少 1ms），避免随后未命中立即再扫。
-     */
+    /** 全 classpath 唯一全量扫描，必须 BGT 调用，不可包外层 ReadAction。 */
     public int runLibrarySweepNow() {
         long startedMs = sweepNow();
         long startedAt = projectStructureVersion();
@@ -235,7 +219,7 @@ public class EntityClassFinder {
                     for (PsiClass clazz : namesCache.getClassesByName(shortName, scope)) {
                         if (clazz.isInterface() || clazz.isEnum() || clazz.isAnnotationType()) continue;
                         if (isVoDto(clazz)) continue;
-                        String table = tableNameAnnotation(clazz);
+                        String table = TableNameAnnotations.tableNameOfClass(clazz);
                         if (table == null || table.isBlank()) continue;
                         tables.computeIfAbsent(table.toLowerCase(Locale.ROOT), ignored -> new ArrayList<>())
                             .add(new MatchedClass(shortName, clazz.getQualifiedName()));
@@ -243,7 +227,6 @@ public class EntityClassFinder {
                 }
                 return null;
             });
-            // 等价于上游片内逐短名 scanned++：只在整片成功返回后才使用这个计数。
             scanned += to - from;
             from = to;
         }
@@ -254,46 +237,41 @@ public class EntityClassFinder {
         return tables.size();
     }
 
+    // ==================================================================
+    // 反查慢路径：一次全表索引 + TTL + 异步构建 + 跨 ORM 回补（master EntityClassFinder.kt 语义）
+    // ==================================================================
+
     /**
-     * @TableName 反查（缓存化兜底）：实体命名与表名驼峰不一致时（如 {@code AccountRoleRelEntity}
-     * ↔ {@code sys_account_role_rel}）按类名推断无法命中——全量扫描项目全部类短名，匹配
-     * 「@TableName 注解值」或「推断表名（{@link EntityResolver#inferDecoratedTableName}）」等于 SQL 表名
-     * （大小写不敏感）的类。
-     *
-     * <p><b>性能（用户反馈：无实体场景转换卡顿）</b>：全量扫描为 O(项目类数) PSI 索引访问，此前每次
-     * 转换都执行（快路径 0 命中时必触发，JOIN 每张副表各一次）——现把扫描结果（类全限定名）
-     * 缓存于 Project userData：同表名后续 find 直接按类名重取（几次索引查询）；缓存以
-     * {@code PsiModificationTracker.modificationCount} 失效（PSI 修改后自动重扫一次）。
-     * 缓存存类名字符串而非 PsiClass 引用（PSI 对象随文件修改失效，引用长期持有不安全）。
-     * 须在 ReadAction 内调用。</p>
+     * @TableName 反查（缓存化兜底）：一次全量扫描建「表名 → 类」全表索引，之后任意表名 O(1)。
+     * 索引未就绪时投递后台构建、本次原样返回空（不阻塞）；注解索引未命中时触发一次跨 ORM 推断回补。
      */
     private List<PsiClass> findByTableNameAnnotationCached(String tableName) {
         ReverseLookupCache entry = reverseLookupCache();
-        String key = tableName.toLowerCase(Locale.ROOT);
-        List<MatchedClass> cached = entry.names.get(key);
-        if (cached != null) {
-            List<PsiClass> restored = new ArrayList<>(cached.size());
-            for (MatchedClass matched : cached) {
-                PsiClass clazz = restoreMatched(matched);
-                if (clazz != null) restored.add(clazz);
-            }
-            return restored;
+        ensureIndexBuilt(entry);
+        List<MatchedClass> hit = entry.index.get(tableName.toLowerCase(Locale.ROOT));
+        // 跨 ORM 兜底：注解索引只覆盖带表名注解的实体；未命中时做一次「全项目推断」并合并进同一索引。
+        if (hit == null && !entry.inferredScanDone) {
+            ensureInferredScan(entry);
+            hit = entry.index.get(tableName.toLowerCase(Locale.ROOT));
         }
-        entry.scans++;
-        List<PsiClass> matched = scanAllClassesByTableName(tableName);
-        List<MatchedClass> entries = new ArrayList<>(matched.size());
-        for (PsiClass clazz : matched) {
-            String name = clazz.getName();
-            if (name == null) continue;
-            entries.add(new MatchedClass(name, clazz.getQualifiedName()));
+        List<MatchedClass> found = hit != null ? hit : List.of();
+        // 顺序契约：旧实现按类名排序返回（多候选时调用方按此顺序处理）。
+        List<MatchedClass> sorted = new ArrayList<>(found);
+        sorted.sort((a, b) -> {
+            String sa = a.shortName != null ? a.shortName : "";
+            String sb = b.shortName != null ? b.shortName : "";
+            return sa.compareTo(sb);
+        });
+        List<PsiClass> result = new ArrayList<>(sorted.size());
+        for (MatchedClass matched : sorted) {
+            PsiClass clazz = restoreMatched(matched);
+            if (clazz != null) result.add(clazz);
         }
-        entry.names.put(key, entries);
-        return matched;
+        return result;
     }
 
     /** 缓存条目按类名重取 PsiClass（shortName 索引查询 + qualifiedName 精确比对防同名误配）。 */
     private PsiClass restoreMatched(MatchedClass matched) {
-        // 两种缓存共用恢复路径，依赖库类必须从 allScope 重取；全限定名防同名误配。
         GlobalSearchScope scope = GlobalSearchScope.allScope(project);
         PsiClass[] classes = PsiShortNamesCache.getInstance(project)
             .getClassesByName(matched.shortName, scope);
@@ -305,64 +283,275 @@ public class EntityClassFinder {
         return null;
     }
 
-    /** 全量扫描匹配表名的类（P2：跳过接口/枚举/注解类——MP 实体恒为 class）。 */
-    private List<PsiClass> scanAllClassesByTableName(String tableName) {
-        PsiShortNamesCache cache = PsiShortNamesCache.getInstance(project);
+    /**
+     * 建索引：一次全量扫描覆盖所有表名，派到应用线程池（非 EDT 至多等 INDEX_WAIT_BUDGET_MS；EDT 一律不等）。
+     * 同步口径（测试/单测）走同步分支。
+     */
+    private void ensureIndexBuilt(ReverseLookupCache entry) {
+        if (entry.built) return;
+        var app = ApplicationManager.getApplication();
+        boolean onEdt = app != null && app.isDispatchThread();
+        if (entry.building.compareAndSet(false, true)) {
+            boolean sync = syncIndexBuildForTest != null ? syncIndexBuildForTest : (app != null && app.isUnitTestMode());
+            if (sync) {
+                long started = System.currentTimeMillis();
+                Map<String, List<MatchedClass>> built;
+                try {
+                    built = scanAllTablesIndex();
+                } catch (Throwable t) {
+                    if (FatalErrors.isFatal(t)) throw t;
+                    built = null;
+                }
+                applyBuiltIndex(entry, built, started);
+                return;
+            }
+            if (!retryCooldownElapsed(entry)) {
+                releaseBuild(entry);
+                return;
+            }
+            dispatchIndexBuild(entry);
+        }
+        if (onEdt) return;
+        try {
+            entry.latch.await(INDEX_WAIT_BUDGET_MS, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** 上次被撤销/失败后的冷却窗口——防连续输入把扫描打成「反复重投」。 */
+    private static boolean retryCooldownElapsed(ReverseLookupCache entry) {
+        long last = entry.lastAbortAt;
+        return last == 0L || System.currentTimeMillis() - last >= INDEX_RETRY_COOLDOWN_MS;
+    }
+
+    /** 把全量扫描派到应用线程池（不持读锁等索引；扫描内部自带取消检查）。 */
+    private void dispatchIndexBuild(ReverseLookupCache entry) {
+        long started = System.currentTimeMillis();
+        try {
+            ReadAction.<Map<String, List<MatchedClass>>>nonBlocking(() -> {
+                try {
+                    return scanAllTablesIndex();
+                } catch (ProcessCanceledException pce) {
+                    throw pce; // 撤销要能被平台看见
+                } catch (Throwable t) {
+                    if (FatalErrors.isFatal(t)) throw t;
+                    return null;
+                }
+            })
+                .inSmartMode(project)
+                .expireWith(project)
+                .submit(AppExecutorUtil.getAppExecutorService())
+                .onSuccess(built -> applyBuiltIndex(entry, built, started))
+                .onError(t -> {
+                    entry.lastAbortAt = System.currentTimeMillis();
+                    releaseBuild(entry);
+                });
+        } catch (RuntimeException e) {
+            entry.lastAbortAt = System.currentTimeMillis();
+            releaseBuild(entry);
+        }
+    }
+
+    /** 索引建成落地（同步/异步共用）：填索引 → 置 built → 放行等待者。 */
+    private void applyBuiltIndex(ReverseLookupCache entry, Map<String, List<MatchedClass>> built, long startedMs) {
+        try {
+            if (built == null) return;
+            ReverseLookupCache current = project.getUserData(REVERSE_LOOKUP_CACHE_KEY);
+            if (current == null) return;
+            ReverseLookupCache target = current;
+            if (target.built) return;
+            entry.index.putAll(built);
+            target.index.putAll(built);
+            // 已有项目级回补结果（同一结构版本）→ 直接并进来，新条目立刻具备 MBG/iBatis 那部分
+            Map<String, List<MatchedClass>> cached = cachedInferredIndex();
+            if (cached != null) {
+                for (Map.Entry<String, List<MatchedClass>> e : cached.entrySet()) {
+                    target.index.putIfAbsent(e.getKey(), e.getValue());
+                }
+                target.inferredScanDone = true;
+            }
+            target.scans++;
+            target.built = true;
+            indexBuildCount(project).incrementAndGet();
+        } finally {
+            releaseBuild(entry);
+            ReverseLookupCache current = project.getUserData(REVERSE_LOOKUP_CACHE_KEY);
+            if (current != null && current != entry) releaseBuild(current);
+        }
+    }
+
+    /** 放行等待者并释放在途标记（失败路径同样要放行）。 */
+    private static void releaseBuild(ReverseLookupCache entry) {
+        entry.building.set(false);
+        entry.latch.countDown();
+    }
+
+    /**
+     * 「全项目推断」回补（跨 ORM 兜底）：只在注解索引未命中时触发，结果合并进同一索引并置 inferredScanDone
+     * （每个结构版本/缓存期至多一次）。项目级缓存命中则直接并入，不再跑全项目推断。
+     */
+    private void ensureInferredScan(ReverseLookupCache entry) {
+        Map<String, List<MatchedClass>> cached = cachedInferredIndex();
+        if (cached != null) {
+            if (!entry.inferredScanDone) {
+                for (Map.Entry<String, List<MatchedClass>> e : cached.entrySet()) {
+                    entry.index.putIfAbsent(e.getKey(), e.getValue());
+                }
+                entry.inferredScanDone = true;
+            }
+            return;
+        }
+        var app = ApplicationManager.getApplication();
+        boolean onEdt = app != null && app.isDispatchThread();
+        if (entry.inferredBuilding.compareAndSet(false, true)) {
+            boolean sync = syncIndexBuildForTest != null ? syncIndexBuildForTest : (app != null && app.isUnitTestMode());
+            if (sync) {
+                runInferredScan(entry);
+                return;
+            }
+            if (!retryCooldownElapsed(entry)) {
+                entry.inferredBuilding.set(false);
+                return;
+            }
+            long started = System.currentTimeMillis();
+            try {
+                ReadAction.<Map<String, List<MatchedClass>>>nonBlocking(() -> {
+                    try {
+                        return scanInferredTableIndex();
+                    } catch (ProcessCanceledException pce) {
+                        throw pce;
+                    } catch (Throwable t) {
+                        if (FatalErrors.isFatal(t)) throw t;
+                        return null;
+                    }
+                })
+                    .inSmartMode(project)
+                    .expireWith(project)
+                    .submit(AppExecutorUtil.getAppExecutorService())
+                    .onSuccess(built -> mergeInferred(entry, built, started))
+                    .onError(t -> {
+                        entry.lastAbortAt = System.currentTimeMillis();
+                        entry.inferredBuilding.set(false);
+                    });
+            } catch (RuntimeException e) {
+                entry.lastAbortAt = System.currentTimeMillis();
+                entry.inferredBuilding.set(false);
+            }
+        }
+        if (onEdt) return;
+        try {
+            entry.inferredLatch.await(INDEX_WAIT_BUDGET_MS, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** 同步口径（测试/预热线程）跑一次全项目推断扫描并合并。 */
+    private void runInferredScan(ReverseLookupCache entry) {
+        long started = System.currentTimeMillis();
+        Map<String, List<MatchedClass>> built;
+        try {
+            built = scanInferredTableIndex();
+        } catch (Throwable t) {
+            if (FatalErrors.isFatal(t)) throw t;
+            built = null;
+        }
+        mergeInferred(entry, built, started);
+    }
+
+    private void mergeInferred(ReverseLookupCache entry, Map<String, List<MatchedClass>> built, long startedMs) {
+        try {
+            if (built == null) return;
+            if (project.getUserData(REVERSE_LOOKUP_CACHE_KEY) != entry) return;
+            for (Map.Entry<String, List<MatchedClass>> e : built.entrySet()) {
+                entry.index.putIfAbsent(e.getKey(), e.getValue());
+            }
+            entry.inferredScanDone = true;
+            entry.inferredScanCount++;
+            project.putUserData(INFERRED_INDEX_KEY, new structuresVersionPair(projectStructureVersion(), built));
+        } finally {
+            entry.inferredBuilding.set(false);
+            entry.inferredLatch.countDown();
+        }
+    }
+
+    /** 项目级「跨 ORM 回补结果」——同结构版本才有效。 */
+    private Map<String, List<MatchedClass>> cachedInferredIndex() {
+        structuresVersionPair cached = project.getUserData(INFERRED_INDEX_KEY);
+        if (cached == null) return null;
+        return cached.version == projectStructureVersion() ? cached.index : null;
+    }
+
+    /** 建全表索引：注解索引候选源 + 测试缝延迟。 */
+    private Map<String, List<MatchedClass>> scanAllTablesIndex() {
+        Long delay = indexScanDelayMsForTest;
+        if (delay != null && delay > 0) {
+            try {
+                Thread.sleep(delay);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        return scanAnnotatedTableIndex();
+    }
+
+    /** 候选源＝平台注解索引（MP @TableName / JPA @Table），只取带注解的类。 */
+    private Map<String, List<MatchedClass>> scanAnnotatedTableIndex() {
+        Map<String, List<MatchedClass>> index = new LinkedHashMap<>();
         GlobalSearchScope scope = GlobalSearchScope.projectScope(project);
-        List<PsiClass> result = new ArrayList<>();
         int scanned = 0;
-        for (String shortName : cache.getAllClassNames()) {
-            // 项目慢路径同样须可取消，避免全量短名遍历长时间持读锁。
-            if (scanned % LIBRARY_SWEEP_CANCEL_INTERVAL == 0) ProgressManager.checkCanceled();
-            scanned++;
-            // 短名快筛：VO/DTO 结尾的直接跳过（避免逐类检查）
-            if (endsWithIgnoreCase(shortName, "VO") || endsWithIgnoreCase(shortName, "DTO")) continue;
-            for (PsiClass clazz : cache.getClassesByName(shortName, scope)) {
-                // P2：接口/枚举/注解类不可能是 MP 实体，跳过（减少 PSI 访问）
+        for (String simpleName : TableNameAnnotations.SIMPLE_NAMES) {
+            Collection<PsiAnnotation> annotations;
+            try {
+                annotations = JavaAnnotationIndex.getInstance().getAnnotations(simpleName, project, scope);
+            } catch (Throwable t) {
+                if (FatalErrors.isFatal(t)) throw t;
+                annotations = List.of();
+            }
+            for (PsiAnnotation annotation : annotations) {
+                if (scanned % LIBRARY_SWEEP_CANCEL_INTERVAL == 0) ProgressManager.checkCanceled();
+                scanned++;
+                String tableName = TableNameAnnotations.tableNameOf(annotation);
+                if (tableName == null || tableName.isBlank()) continue;
+                PsiClass clazz = PsiTreeUtil.getParentOfType(annotation, PsiClass.class);
+                if (clazz == null) continue;
                 if (clazz.isInterface() || clazz.isEnum() || clazz.isAnnotationType()) continue;
                 if (isVoDto(clazz)) continue;
                 String className = clazz.getName();
                 if (className == null) continue;
-                String annotated = tableNameAnnotation(clazz);
-                // T-TS-07：显式传候选类所属项目（= 本 finder 的项目，scope 亦为 projectScope）——
-                // 反查表名的兜底推断不再受「首个打开项目」影响；clazz 是 PSI，project 必可得
-                String resolvedTable = annotated != null
-                        ? annotated
-                        : EntityResolver.inferDecoratedTableName(className, clazz.getProject());
-                if (resolvedTable.equalsIgnoreCase(tableName)) {
-                    result.add(clazz);
-                }
+                index.computeIfAbsent(tableName.toLowerCase(Locale.ROOT), ignored -> new ArrayList<>())
+                    .add(new MatchedClass(className, clazz.getQualifiedName()));
             }
         }
-        result.sort(java.util.Comparator.comparing(PsiClass::getName));
-        return result;
+        return index;
     }
 
-    /** 类级 @TableName 注解值；无注解或值非字符串返回 null（短名兜底——注解类不可解析环境仍可识别）。 */
-    private static String tableNameAnnotation(PsiClass clazz) {
-        PsiModifierList modifierList = clazz.getModifierList();
-        if (modifierList == null) return null;
-        PsiAnnotation[] annotations = modifierList.getAnnotations();
-        if (annotations.length == 0) return null;
-        PsiAnnotation annotation = null;
-        for (PsiAnnotation a : annotations) {
-            if (TABLE_NAME.equals(a.getQualifiedName())) {
-                annotation = a;
-                break;
+    /** 退回口径：全项目短名遍历 + 逐类推断表名（跨 ORM：MP @TableName / JPA @Table 都认）。 */
+    private Map<String, List<MatchedClass>> scanInferredTableIndex() {
+        PsiShortNamesCache cache = PsiShortNamesCache.getInstance(project);
+        GlobalSearchScope scope = GlobalSearchScope.projectScope(project);
+        Map<String, List<MatchedClass>> index = new LinkedHashMap<>();
+        int scanned = 0;
+        for (String shortName : cache.getAllClassNames()) {
+            if (scanned % LIBRARY_SWEEP_CANCEL_INTERVAL == 0) ProgressManager.checkCanceled();
+            scanned++;
+            if (endsWithIgnoreCase(shortName, "VO") || endsWithIgnoreCase(shortName, "DTO")) continue;
+            for (PsiClass clazz : cache.getClassesByName(shortName, scope)) {
+                if (clazz.isInterface() || clazz.isEnum() || clazz.isAnnotationType()) continue;
+                if (isVoDto(clazz)) continue;
+                String className = clazz.getName();
+                if (className == null) continue;
+                String annotated = TableNameAnnotations.tableNameOfClass(clazz);
+                String resolvedTable = annotated != null
+                    ? annotated
+                    : EntityResolver.inferDecoratedTableName(className, clazz.getProject());
+                if (resolvedTable == null || resolvedTable.isBlank()) continue;
+                index.computeIfAbsent(resolvedTable.toLowerCase(Locale.ROOT), ignored -> new ArrayList<>())
+                    .add(new MatchedClass(className, clazz.getQualifiedName()));
             }
         }
-        if (annotation == null) {
-            for (PsiAnnotation a : annotations) {
-                if (a.getNameReferenceElement() != null && "TableName".equals(a.getNameReferenceElement().getReferenceName())) {
-                    annotation = a;
-                    break;
-                }
-            }
-        }
-        if (annotation == null) return null;
-        if (!(annotation.findAttributeValue("value") instanceof PsiLiteralExpression)) return null;
-        Object value = ((PsiLiteralExpression) annotation.findAttributeValue("value")).getValue();
-        return value instanceof String ? (String) value : null;
+        return index;
     }
 
     private static boolean isVoDto(PsiClass clazz) {
@@ -376,13 +565,7 @@ public class EntityClassFinder {
         return s.substring(offset).equalsIgnoreCase(suffix);
     }
 
-    /**
-     * 候选类名：表名驼峰（{@code car_device_info} → {@code CarDeviceInfo}，复用
-     * {@link cn.song.mybatisplus.visualizer.reverse.JavaCodeGenerator#entityClassName}）、{@code Entity}
-     * 后缀变体（{@code CarDeviceInfoEntity}——MP 项目实体命名惯例），以及<b>去首段变体</b>
-     * （{@code sys_account_role_rel} → {@code AccountRoleRel[Entity]}——{@code sys_}/{@code t_}/{@code biz_} 等前缀不一致的
-     * 常见命名直接快路径命中，避免全量反查）；去重。
-     */
+    /** 候选类名：纯驼峰 + Entity 后缀 + 去首段变体；去重。 */
     public List<String> candidateClassNames(String tableName) {
         String pascal = cn.song.mybatisplus.visualizer.reverse.JavaCodeGenerator.entityClassName(tableName);
         int idx = tableName.indexOf('_');
@@ -392,21 +575,24 @@ public class EntityClassFinder {
         return new ArrayList<>(distinct);
     }
 
-    /** 项目级反查缓存（Project userData；PsiModificationTracker 失效）。 */
+    /** 项目级反查缓存（Project userData；失效基准＝项目结构版本 + TTL）。 */
     private static final class ReverseLookupCache {
-        /** 扫描时的 modificationCount——PSI 修改后失效重建。 */
-        final long count;
-        /** 建成时刻（TTL 兜底：结构版本看不见的正文修改靠 TTL 失效）。 */
-        final long createdAt = System.currentTimeMillis();
-        /** 表名（小写）→ 匹配类（短名 + 全限定名）。 */
-        final Map<String, List<MatchedClass>> names = new LinkedHashMap<>();
-        /** 全量扫描次数（测试访问器断言缓存命中不再扫描）。 */
-        int scans = 0;
-        /** 跨 ORM 回补（全项目推断扫描）执行次数，每缓存期至多 +1（测试访问器用）。 */
+        final long structureVersion;
+        final long createdAt;
+        final Map<String, List<MatchedClass>> index = new LinkedHashMap<>();
+        volatile boolean built = false;
+        final AtomicBoolean building = new AtomicBoolean(false);
+        final CountDownLatch latch = new CountDownLatch(1);
+        volatile long lastAbortAt = 0L;
+        volatile boolean inferredScanDone = false;
+        final AtomicBoolean inferredBuilding = new AtomicBoolean(false);
+        final CountDownLatch inferredLatch = new CountDownLatch(1);
         int inferredScanCount = 0;
+        int scans = 0;
 
-        ReverseLookupCache(long count) {
-            this.count = count;
+        ReverseLookupCache(long structureVersion, long createdAt) {
+            this.structureVersion = structureVersion;
+            this.createdAt = createdAt;
         }
     }
 
@@ -421,13 +607,21 @@ public class EntityClassFinder {
         }
     }
 
-    /** 库扫描缓存以项目结构版本失效；正文编辑不能退化为每次打字重扫 classpath。 */
+    /** 项目级「跨 ORM 回补结果」缓存条目的版本包裹（结构版本 → 索引）。 */
+    private static final class structuresVersionPair {
+        final long version;
+        final Map<String, List<MatchedClass>> index;
+
+        structuresVersionPair(long version, Map<String, List<MatchedClass>> index) {
+            this.version = version;
+            this.index = index;
+        }
+    }
+
+    /** 库扫描缓存以项目结构版本失效。 */
     private static final class LibrarySweepCache {
-        /** 扫描开始时的结构版本。 */
         final long count;
-        /** 小写表名到类短名/全限定名，不长期持有 PSI。 */
         final Map<String, List<MatchedClass>> tables;
-        /** 本版本是否投递过；取消/触顶时清除。 */
         boolean dispatched;
 
         LibrarySweepCache(long count, Map<String, List<MatchedClass>> tables, boolean dispatched) {
@@ -440,16 +634,12 @@ public class EntityClassFinder {
     private static final Key<LibrarySweepCache> LIBRARY_SWEEP_CACHE_KEY = Key.create("mp-visualizer.librarySweepCache");
     private static final Key<Long> LIBRARY_SWEEP_DISPATCH_AT_KEY = Key.create("mp-visualizer.librarySweepDispatchAt");
     private static final Key<Long> LIBRARY_SWEEP_LAST_COST_KEY = Key.create("mp-visualizer.librarySweepLastCostMs");
-    /** 项目慢路径每 64 个短名检查取消。 */
     public static final int LIBRARY_SWEEP_CANCEL_INTERVAL = 64;
-    /** 每片一个独立读动作，片间释放读锁（不能只靠无进度上下文的 checkCanceled 让锁）。 */
     public static final int LIBRARY_SWEEP_SLICE = 500;
-    /** 病态兜底而非常规截断线；真实 classpath 含 JDK 常有 2~3 万个短名。 */
     public static final int LIBRARY_SWEEP_SCAN_LIMIT = 200_000;
     public static final long LIBRARY_SWEEP_COOLDOWN_MS = 5_000L;
     public static Integer sweepScanLimitForTest = null;
     public static long sweepCooldownMs = LIBRARY_SWEEP_COOLDOWN_MS;
-    /** Kotlin function 字段保留 Function0/Function1，而不是改成不可赋 Kotlin lambda 的 Java SAM 字段。 */
     public static Function0<Long> sweepClockForTest = null;
     public static Boolean sweepEnabledForTest = null;
     public static Function1<Project, Unit> sweepDispatchForTest = null;
@@ -493,67 +683,49 @@ public class EntityClassFinder {
         project.putUserData(LIBRARY_SWEEP_LAST_COST_KEY, null);
     }
 
+    /** 当前项目结构版本 + TTL 判定：命中则复用缓存，否则重建。 */
     private ReverseLookupCache reverseLookupCache() {
-        // 失效计数：PsiModificationTracker（IPGP 中位于 com.intellij.psi.util 包，编译实证；
-        // PSI 任何修改递增，缓存自动失效重扫）
-        long current = PsiModificationTracker.getInstance(project).getModificationCount();
+        long current = projectStructureVersion();
+        long now = System.currentTimeMillis();
         ReverseLookupCache existing = project.getUserData(REVERSE_LOOKUP_CACHE_KEY);
-        if (existing != null && existing.count == current) {
-            // TTL 兜底：正文修改（结构版本看不见）超 TTL 视为失效，允许重建一次；测试置 0 强制重建。
-            long ttl = reverseLookupTtlMs;
-            long age = System.currentTimeMillis() - existing.createdAt;
-            if (ttl > 0 && age >= 0 && age < ttl) return existing;
+        if (existing != null && existing.structureVersion == current
+            && now - existing.createdAt >= 0 && now - existing.createdAt < reverseLookupTtlMs) {
+            return existing;
         }
-        Long delay = indexScanDelayMsForTest;
-        if (delay != null && delay > 0) {
-            try {
-                Thread.sleep(delay);
-            } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
-            }
-        }
-        indexBuildCount(project).incrementAndGet();
-        ReverseLookupCache fresh = new ReverseLookupCache(current);
+        ReverseLookupCache fresh = new ReverseLookupCache(current, now);
         project.putUserData(REVERSE_LOOKUP_CACHE_KEY, fresh);
         return fresh;
     }
 
-    /** Kotlin companion object 兼容层（{@code EntityClassFinder.Companion.xxx(...)} 调用形态）。 */
+    /** Kotlin companion object 兼容层。 */
     public static final class Companion {
         private Companion() {}
 
-        /** 测试访问器：项目级全量反查扫描次数（缓存命中后不再增长）。 */
         public int scanCountForTest(Project project) {
             ReverseLookupCache cache = project.getUserData(REVERSE_LOOKUP_CACHE_KEY);
             return cache != null ? cache.scans : 0;
         }
 
-        /** 反查缓存信息（设置页展示）：返回（缓存表名条目数, 缓存类名总数）；无缓存 → (0, 0)。 */
         public kotlin.Pair<Integer, Integer> reverseLookupCacheInfo(Project project) {
             ReverseLookupCache entry = project.getUserData(REVERSE_LOOKUP_CACHE_KEY);
             if (entry == null) return new kotlin.Pair<>(0, 0);
             int total = 0;
-            for (List<MatchedClass> classes : entry.names.values()) {
+            for (List<MatchedClass> classes : entry.index.values()) {
                 total += classes.size();
             }
-            return new kotlin.Pair<>(entry.names.size(), total);
+            return new kotlin.Pair<>(entry.index.size(), total);
         }
 
-        /** 清除项目级反查缓存（设置页「清除缓存」；下次 find 重新全量扫描）。 */
         public void clearReverseLookupCache(Project project) {
             project.putUserData(REVERSE_LOOKUP_CACHE_KEY, null);
             clearLibrarySweepCache(project);
         }
 
-        /**
-         * 反查缓存大小估算（设置页展示 KB/MB）：缓存内容为字符串（表名/类短名/全限定名），
-         * 按 UTF-16 字符 2 字节 + 每条目/每值固定开销近似——展示用，非精确 JVM 内存。
-         */
         public long reverseLookupCacheSizeBytes(Project project) {
             ReverseLookupCache entry = project.getUserData(REVERSE_LOOKUP_CACHE_KEY);
             if (entry == null) return 0L;
             long bytes = 0L;
-            for (Map.Entry<String, List<MatchedClass>> e : entry.names.entrySet()) {
+            for (Map.Entry<String, List<MatchedClass>> e : entry.index.entrySet()) {
                 bytes += e.getKey().length() * 2L + 16;
                 for (MatchedClass matched : e.getValue()) {
                     int nameLen = matched.shortName.length() + (matched.qualifiedName != null ? matched.qualifiedName.length() : 0);
@@ -566,30 +738,27 @@ public class EntityClassFinder {
 
     public static final Companion Companion = new Companion();
 
-    // ---- 外层 static 转发器（兼容 Kotlin 侧 {@code EntityClassFinder.method(...)} 调用形态） ----
+    // ---- 外层 static 转发器 ----
 
-    public static int scanCountForTest(Project project) {
-        return Companion.scanCountForTest(project);
-    }
+    public static int scanCountForTest(Project project) { return Companion.scanCountForTest(project); }
 
     public static kotlin.Pair<Integer, Integer> reverseLookupCacheInfo(Project project) {
         return Companion.reverseLookupCacheInfo(project);
     }
 
-    public static void clearReverseLookupCache(Project project) {
-        Companion.clearReverseLookupCache(project);
-    }
+    public static void clearReverseLookupCache(Project project) { Companion.clearReverseLookupCache(project); }
 
-    public static long reverseLookupCacheSizeBytes(Project project) {
-        return Companion.reverseLookupCacheSizeBytes(project);
-    }
+    public static long reverseLookupCacheSizeBytes(Project project) { return Companion.reverseLookupCacheSizeBytes(project); }
 
     // ==================================================================
-    // T-SyncK2JMaster179 生产补漏：master EntityClassFinder.kt companion 的 TTL / 测试缝 / 访问器。
+    // companion 常量 / 测试缝 / 访问器
     // ==================================================================
 
     /** 调用方等待索引建成的预算上限（毫秒）。 */
     public static final long INDEX_WAIT_BUDGET_MS = 800L;
+
+    /** 扫描被撤销/失败后的冷却窗口（毫秒）。 */
+    public static final long INDEX_RETRY_COOLDOWN_MS = 10_000L;
 
     /** 反查索引 TTL（毫秒），默认 5 分钟；测试置 0 强制下次查询重建。 */
     public static volatile long reverseLookupTtlMs = 300_000L;
@@ -602,6 +771,14 @@ public class EntityClassFinder {
 
     private static final Key<java.util.concurrent.atomic.AtomicInteger> REVERSE_LOOKUP_SCAN_TOTAL_KEY =
         Key.create("mp-visualizer.reverseLookupScanTotal");
+
+    private static final Key<ReverseLookupCache> REVERSE_LOOKUP_CACHE_KEY =
+        Key.create("mp-visualizer.reverseLookupCache");
+
+    private static final Key<structuresVersionPair> INFERRED_INDEX_KEY =
+        Key.create("sqlvis.reverseLookup.inferredIndex");
+
+    private static final String TABLE_NAME = "com.baomidou.mybatisplus.annotation.TableName";
 
     /** 跨缓存实例的累计建索引次数（守卫用：缓存重建后 scans 归零仍能看出有没有重扫）。 */
     public static java.util.concurrent.atomic.AtomicInteger indexBuildCount(Project project) {
@@ -618,9 +795,4 @@ public class EntityClassFinder {
         ReverseLookupCache cache = project.getUserData(REVERSE_LOOKUP_CACHE_KEY);
         return cache != null ? cache.inferredScanCount : 0;
     }
-
-    private static final String TABLE_NAME = "com.baomidou.mybatisplus.annotation.TableName";
-
-    private static final Key<ReverseLookupCache> REVERSE_LOOKUP_CACHE_KEY =
-        Key.create("mp-visualizer.reverseLookupCache");
 }

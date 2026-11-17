@@ -21,18 +21,20 @@ import java.io.File
  *
  * 根因（243 字节码实证）：`AnAction.getActionUpdateThread()` 默认实现是「实现 `UpdateInBackground`
  * 且为 true → BGT；`ActionClassMetaData.isDefaultUpdate` 为 true → BGT；否则 EDT」，而
- * `isDefaultUpdate` 判的是「重写 `update()` 的类是不是 `AnAction` 本身」。本类覆写了 `update()`
- * 与 `displayTextInToolbar()`，于是默认落 **EDT**；它委托的原生 `ChooseDataSourceAction` javap
- * 实证返回 **BGT**（PSI 读走平台预缓存 DataContext）。包装组必须跟随声明 BGT。
+ * 本类覆写了 `update()` 与 `displayTextInToolbar()`，于是默认落 **EDT**；它委托的原生
+ * `ChooseDataSourceAction` javap 实证返回 **BGT**（PSI 读走平台预缓存 DataContext）。包装组必须跟随声明 BGT。
  *
  * 为什么是形态守卫：EDT 慢操作断言只在真实应用 EDT 上生效（headless 测试线程不是真实 EDT），
- * 行为测试测不出「这段 update 跑在哪个线程」；`ActionUpdateThread` 声明是唯一可机器化判据
- * （同 `log/SqlLogToolbarUpdateThreadGuardTest` 的口径）。
+ * 行为测试测不出「这段 update 跑在哪个线程」；`ActionUpdateThread` 声明是唯一可机器化判据。
+ *
+ * K2J 端口说明：生产已 100% Java，守卫目标改为 `ChooseDataSourceTakeover.java`，判定形态同步改为
+ * Java 语法（`ActionUpdateThread getActionUpdateThread()` 返回 `ActionUpdateThread.BGT`；
+ * `void update(...)` 方法体），断言契约逐字不变。
  */
 class TakeoverUpdateThreadGuardTest {
 
     private val takeoverPath =
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/ChooseDataSourceTakeover.kt"
+        "src/main/java/cn/song/mybatisplus/visualizer/execute/ChooseDataSourceTakeover.java"
 
     /**
      * 判定内核（VIOLATIONS）：接管组的 update 线程契约。
@@ -47,10 +49,10 @@ class TakeoverUpdateThreadGuardTest {
             out += "$takeoverPath: 未定位到 ChooseDataSourceTakeoverGroup（类改名/搬家后守卫须同步跟进）"
             return out
         }
-        if (!BGT_DECL.containsMatchIn(src)) {
-            out += "$takeoverPath: 未声明 `override fun getActionUpdateThread(): ActionUpdateThread = " +
-                "ActionUpdateThread.BGT`（本类覆写了 update，平台默认落 EDT；原生 ChooseDataSourceAction " +
-                "javap 实证是 BGT，EDT 上读 PSI_FILE 必打 PreCachedDataContext SEVERE）"
+        if (!declaresBgt(src)) {
+            out += "$takeoverPath: 未声明 `getActionUpdateThread()` 返回 `ActionUpdateThread.BGT`" +
+                "（本类覆写了 update，平台默认落 EDT；原生 ChooseDataSourceAction javap 实证是 BGT，" +
+                "EDT 上读 PSI_FILE 必打 PreCachedDataContext SEVERE）"
         }
         val updateBody = bodyOf(src, "update")
         if (updateBody == null) {
@@ -81,8 +83,8 @@ class TakeoverUpdateThreadGuardTest {
     fun `自证_接管组未声明BGT与update体触PSI必被点名`() {
         val noDeclaration = """
             internal class ChooseDataSourceTakeoverGroup(private val original: Any) : ActionGroup("", true) {
-                override fun update(e: Any) {
-                    original.update(e)
+                public void update(AnActionEvent e) {
+                    original.update(e);
                 }
             }
         """.trimIndent()
@@ -91,11 +93,11 @@ class TakeoverUpdateThreadGuardTest {
 
         val psiInUpdate = """
             internal class ChooseDataSourceTakeoverGroup(private val original: Any) : ActionGroup("", true) {
-                override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+                public ActionUpdateThread getActionUpdateThread() { return ActionUpdateThread.BGT; }
 
-                override fun update(e: Any) {
-                    val psi = PsiManager.getInstance(project).findFile(vf)
-                    original.update(e)
+                public void update(AnActionEvent e) {
+                    PsiFile psi = PsiManager.getInstance(project).findFile(vf);
+                    original.update(e);
                 }
             }
         """.trimIndent()
@@ -108,12 +110,12 @@ class TakeoverUpdateThreadGuardTest {
         // T-TemplatePresentationWarn：update 体里直写模板呈现的 setEnabled/setVisible 必被点名。
         val templateWrite = """
             internal class ChooseDataSourceTakeoverGroup(private val original: Any) : ActionGroup("", true) {
-                override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+                public ActionUpdateThread getActionUpdateThread() { return ActionUpdateThread.BGT; }
 
-                override fun update(e: Any) {
-                    original.update(e)
-                    templatePresentation.setEnabled(e.presentation.isEnabled)
-                    templatePresentation.setVisible(e.presentation.isVisible)
+                public void update(AnActionEvent e) {
+                    original.update(e);
+                    templatePresentation.setEnabled(e.getPresentation().isEnabled());
+                    templatePresentation.setVisible(e.getPresentation().isVisible());
                 }
             }
         """.trimIndent()
@@ -126,13 +128,13 @@ class TakeoverUpdateThreadGuardTest {
 
         val good = """
             internal class ChooseDataSourceTakeoverGroup(private val original: Any) : ActionGroup("", true) {
-                override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+                public ActionUpdateThread getActionUpdateThread() { return ActionUpdateThread.BGT; }
 
-                override fun update(e: Any) {
-                    original.update(e)
-                    e.presentation.setPerformGroup(true)
-                    templatePresentation.setPerformGroup(true)
-                    templatePresentation.copyFrom(e.presentation)
+                public void update(AnActionEvent e) {
+                    original.update(e);
+                    e.getPresentation().setPerformGroup(true);
+                    templatePresentation.setPerformGroup(true);
+                    templatePresentation.copyFrom(e.getPresentation());
                 }
             }
         """.trimIndent()
@@ -164,24 +166,26 @@ class TakeoverUpdateThreadGuardTest {
         }
     }
 
-    /** 函数声明点：`fun [接收者.]name(` 里 `(` 的下标；普通调用点不命中。 */
+    /** getActionUpdateThread 方法体返回 ActionUpdateThread.BGT（支持 FQN 前缀）。 */
+    private fun declaresBgt(src: String): Boolean {
+        val m = Regex("""getActionUpdateThread\s*\(\s*\)""").find(src) ?: return false
+        val body = bodyRange(src, m.range.last + 1) ?: return false
+        return "ActionUpdateThread.BGT" in src.substring(body)
+    }
+
+    /** Java 方法声明点：`void update(`（排除 `original.update(` 这类调用点）。 */
     private fun declarationAt(src: String, fn: String): Int? {
-        var at = src.indexOf("$fn(")
-        while (at > 0) {
-            var back = at
-            while (back > 0 && (src[back - 1].isLetterOrDigit() || src[back - 1] == '.' || src[back - 1] == '_')) {
-                back--
-            }
-            var s = back
-            while (s > 0 && src[s - 1].isWhitespace()) s--
-            if (s >= 3 && src.regionMatches(s - 3, "fun", 0, 3) &&
-                (s - 4 < 0 || !(src[s - 4].isLetterOrDigit() || src[s - 4] == '_'))
-            ) {
-                return at
-            }
-            at = src.indexOf("$fn(", at + fn.length + 1)
+        val re = Regex("""\bvoid\s+$fn\s*\(""")
+        var searchFrom = 0
+        while (true) {
+            val m = re.find(src, searchFrom) ?: return null
+            val at = m.range.last // '(' 的下标
+            // 确认是声明而非调用：'void' 前不是点号或标识符（声明前是 public/protected/private/注解/空白）
+            val start = m.range.first
+            val before = if (start > 0) src[start - 1] else ' '
+            if (before != '.') return at
+            searchFrom = start + 1
         }
-        return null
     }
 
     /** 函数体区间：从声明后的首个 `{` 起按大括号配平（非固定长度窗口，避免跨界读到邻居函数）。 */
@@ -207,17 +211,7 @@ class TakeoverUpdateThreadGuardTest {
         declarationAt(src, fn)?.let { bodyRange(src, it) }?.let { src.substring(it.first, it.last + 1) }
 
     private companion object {
-        /** BGT 声明形态（`=` 表达式体；含显式类型标注的 `override fun …(): ActionUpdateThread`）。 */
-        private val BGT_DECL = Regex(
-            """override\s+fun\s+getActionUpdateThread\s*\(\s*\)\s*:\s*ActionUpdateThread\s*=\s*ActionUpdateThread\.BGT""",
-        )
-
-        /**
-         * BGT update 体内禁用的令牌——命中任一条即「声明成 BGT 之后把 EDT-only 调用搬进了后台线程」。
-         *
-         * 注意：`original.update(e)` 读 PSI 走平台预缓存 DataContext（原生动作自己就是 BGT），
-         * 所以 `PsiManager` / `findFile` 只禁**本类自己**直取，不针对委托调用。
-         */
+        /** BGT update 体内禁用的令牌——命中任一条即「声明成 BGT 之后把 EDT-only 调用搬进了后台线程」。 */
         private val UPDATE_BANNED_TOKENS = listOf(
             "PsiManager" to "BGT 上直取 PSI 应由原生 update 的预缓存 DataContext 提供",
             "findFile(" to "同上：PSI/VFS 查找不得出现在 update 体",
@@ -228,8 +222,7 @@ class TakeoverUpdateThreadGuardTest {
             "WriteCommandAction" to "update 体不得写模型/文档",
             // T-TemplatePresentationWarn（2026-11-14 真机 243 日志 40 条 WARN）：模板呈现上直接
             // setEnabled/setVisible 会被 243 `Presentation.assertNotTemplatePresentation` 点名
-            // （`warnInProduction` 带全栈，263 有升级为 error 的风险）。合规镜像通道是平台自己的
-            // `copyFrom(Presentation)`（私有实现直写 myFlags 位、不经断言、且补发属性变化事件）。
+            // （warnInProduction 带全栈，263 有升级为 error 的风险）。合规通道是 `copyFrom(Presentation)`。
             "templatePresentation.setEnabled" to "模板呈现的 setEnabled 是平台断言面" +
                 "（243 warnInProduction），镜像必须走 `templatePresentation.copyFrom(e.presentation)`",
             "templatePresentation.setVisible" to "模板呈现的 setVisible 是平台断言面" +

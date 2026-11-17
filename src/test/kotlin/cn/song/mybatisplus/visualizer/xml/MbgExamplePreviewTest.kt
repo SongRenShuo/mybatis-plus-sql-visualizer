@@ -401,7 +401,7 @@ class MbgExamplePreviewTest {
         val withBaseline = XmlPreviewService.INSTANCE.toResult(m)
         assertTrue(withBaseline.warning.orEmpty().contains("求值为空"))
         // 面板口径：只保留解析期/静态告警，本轮错误由 xmlErrors 单独显示
-        val panel = XmlPreviewService.INSTANCE.toResult(m)
+        val panel = XmlPreviewService.toResult(m, false)
         assertFalse(panel.warning.orEmpty().contains("求值为空"))
     }
 
