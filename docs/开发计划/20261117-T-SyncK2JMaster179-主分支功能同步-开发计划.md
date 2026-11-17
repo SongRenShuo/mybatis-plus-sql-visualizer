@@ -161,3 +161,17 @@
 **本地复跑**：修复后 `:testShard5` **BUILD SUCCESSFUL，160 类 0 失败，3m06s**。
 
 **坑（第 9 条）**：**「任务超时」会把该分片的失败一并吞掉**，红读数只剩超时，且日志零输出；查这类问题先用「权重画像 → 离线复算分片」拿类清单，再本地整片跑，别在 CI 上盲试。
+
+#### 8.5.1 超时本身另有成因：冷沙盒索引被插件自身 jar 触发 VFS 守卫（`96d99e378` 修复）
+
+修掉上面 15 红之后 `test(5)` **依旧** 31m20s 超时——超时与那批失败无关，另一条独立成因：
+
+1. `plugin.xml` 的 `<standardResource>`（iBATIS DTD 离线映射，T-Ibatis2Support 券 E）让平台把「承载该资源的 jar」＝**插件自身 jar** 算进索引根（`ExternalResourcesRootsProvider` → `IndexableSetContributorDescriptor` → `VirtualFileManagerImpl.findFileByUrl`）；
+2. 测试 JVM 里该 jar 在 `<build>/test-sandbox/<分片>/plugins_<任务>/…/lib/*.jar`，**不在** `VfsRootAccess` 放行集合（temp / `build/classes` / IDE 安装目录 / 家目录 / config）内 ⇒ **冷沙盒首次建索引**抛 `VfsRootAccessNotAllowedError` → 扫描任务被判 `Task interrupted`；
+3. dumb mode 永不退出 ⇒ EDT 侧 `IndexingTestUtil.waitAfterWriteAction` 在 `PlatformTestUtil.waitWithEventsDispatching` 里无限自旋 ⇒ 一个用例都不落盘 ⇒ CI 步骤级 30 分钟超时。
+
+**取证**：新增的「分片进度诊断」步骤打印 `completedClasses=0`（run `44098799034`）；另起干净 worktree（`.worktrees/t-shard5-cold`）跑同一分片复现：7.5 分钟 0 结果、`jcmd Thread.print` 见上述自旋栈、沙盒 `idea.log` 见 `File accessed outside allowed roots: …/plugins_testShard5/mybatis-plus-sql-visualizer/lib/….jar` 与 `Task interrupted`。**热沙盒不触发**（持久化索引已有该根，`findInPersistence` 不走文件系统）——所以本地反复复跑一直绿，CI 天生冷树才稳定暴露；也解释了为什么本轮之前的 CI 运行（`efd3f9e0a` 基线不带 `standardResource`）是 7m24s 绿。
+
+**修法**：`buildSrc/src/main/kotlin/mpv-testing.gradle.kts` 的 `tasks.withType<Test>().configureEach` 加 `environment("NO_FS_ROOTS_ACCESS_CHECK", "1")`（平台官方逃生门：`VfsRootAccess.<clinit>` 读该 env/系统属性，置位即 `SHOULD_PERFORM_ACCESS_CHECK=false`）。**「只放行单条路径」实测不可行**：检查发生在 `HeavyPlatformTestCase.super.setUp()` 建项目/起扫描期间，早于测试自己 `setUp()` 里的 `VfsRootAccess.allowRootAccess`（`allowedRoots()` 虽每次现算，但扫描已先发起）。
+
+**验证**：挪走 `build/test-sandbox/shard5/system_testShard5` 强制冷索引后复跑 `:testShard5` → **160 类全落盘，BUILD SUCCESSFUL in 6m11s**（修复前同一条件 7.5 分钟 0 结果、永不收敛）。

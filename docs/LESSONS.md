@@ -878,12 +878,39 @@ unit-test 模式）会让延迟体跑在**已持读动作的测试线程**里，
 画像复算出 shard5 的 160 类后本地整片跑，**1900 用例 15 红**，全部是 Kotlin→Java 漏移植（lexer 缺
 iBatis 单字符定界符四态 `69a132e56`；`XmlPreviewService` 缺多文本静态常量入口 + 一个测试漏
 `setUp` 隔离 `e145e7f79`；`<pages>` 判定误接全扫探针 `8f2668c8a`；设置面板漏 `localDirField` 的
-`isModified` `33ad7ac6e`），修复后 `:testShard5` 160 类 **0 失败 3m06s**。
+`isModified` `33ad7ac6e`），修复后 `:testShard5` 160 类 **0 失败 3m06s**。（**超时本身另有独立成因**，
+见 L81：冷沙盒索引被插件自身 jar 触发 VFS 守卫而挂死；那 15 红是同一分片里另修的漏移植。）
 
 **正例**：分片红且日志无失败行 → 先离线复算类清单（自校验与 CI 逐字一致）再本地整片跑。
 **反例**：把「任务超时」读成「无失败」，或反复重推 CI 期望它自己变绿。
 
 **Seen 1× (2026-11-17)**
+
+### L81 插件自己登记 `<standardResource>`（或任何资源型索引根）后，测试 JVM 必须关 `NO_FS_ROOTS_ACCESS_CHECK`——否则冷沙盒建索引必挂死
+
+**规则**：只要插件 `plugin.xml` 通过平台 `com.intellij.standardResource`（或等价机制）把资源打进**插件 jar**，
+平台就会把该 jar 当「外部资源索引根」去解析（`ExternalResourcesRootsProvider → IndexableSetContributorDescriptor
+→ VirtualFileManagerImpl.findFileByUrl`）；而测试 JVM 里插件 jar 位于 `<build>/test-sandbox/<分片>/plugins_<任务>/…/lib/`，
+**不在** `VfsRootAccess` 的放行集合（temp / `build/classes` / IDE 安装目录 / 家目录 / config）内 ⇒ 冷沙盒首次
+建索引抛 `VfsRootAccessNotAllowedError` → 扫描任务被判 "Task interrupted" → dumb mode 永不退出 → EDT 侧
+`IndexingTestUtil.waitAfterWriteAction` 在 `waitWithEventsDispatching` 里无限自旋 → 整个分片一个用例都不落盘
+（CI 步骤级超时、日志零输出）。处置＝测试任务统一 `environment("NO_FS_ROOTS_ACCESS_CHECK", "1")`（`VfsRootAccess.<clinit>`
+读 env/系统属性，置位即 `SHOULD_PERFORM_ACCESS_CHECK=false`，异常文案也如此提示）。**不要**试「只 allow 单条路径」：
+检查发生在 `HeavyPlatformTestCase.super.setUp()` 建项目/起扫描期间，早于测试自己 `setUp()` 里的 `allowRootAccess`。
+
+**证据**：2026-11-17 `test(5)` 连四轮 31m14s~31m24s 撞步骤超时、新加的诊断步骤打印 `completedClasses=0`
+（run `44098799034`）。挪走 `build/test-sandbox/shard5/system_testShard5` 强制冷索引复现：7.5 分钟 0 结果，
+`jcmd Thread.print` 见 `AWT-EventQueue-0` 在 `PlatformTestUtil.waitWithEventsDispatching ← IndexingTestUtil.waitNow`
+自旋，沙盒 `idea.log` 见 `VfsRootAccessNotAllowedError: File accessed outside allowed roots:
+…/plugins_testShard5/mybatis-plus-sql-visualizer/lib/…jar` 与 `Task interrupted`。修法 `96d99e378`（`environment(...)`），
+冷沙盒复跑 `:testShard5` **160 类全落盘 BUILD SUCCESSFUL in 6m11s**。**热沙盒完全不触发**（持久化索引已有该根，
+`findInPersistence` 不走文件系统、守卫不介入）——这正是本地反复复跑一直绿、CI 天生冷树必挂的原因。
+
+**正例**：怀疑「冷热差异」时，先把沙盒持久化目录（`system_<任务>`）挪走强制冷索引再复现，并在挂住时 `jcmd Thread.print` + 读沙盒 `idea.log`。
+**反例**：拿热沙盒的绿读数证明「分片没问题」，或只在测试 `setUp()` 里 `allowRootAccess`（时序已晚）。
+
+**Seen 1× (2026-11-17)**
+
 
 ## 升级记录
 
