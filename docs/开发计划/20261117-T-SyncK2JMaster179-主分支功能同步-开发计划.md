@@ -129,7 +129,8 @@
 - **CI push-test**（`4d523ace7` 起）：`fast(1/2)`、`test(1/2/3/4)` 均 success，`nightly-nudge` skipped；长期卡住的 `test(3)` 已转绿。
 - **`test(5)` 曾被误记为「历轮稳定绿」（20261117 订正）**：实测跑完的四个轮次（`44024907874` / `44037321840` / `44069616993` / `44082606101`）里 `test(5)` **次次 31m14s~31m24s 撞 30 分钟步骤超时**（`##[error]The action '分片 5' has timed out after 30 minutes`），日志零输出；同轮 `test(1~4)` 只需 6~9 分钟，`test(4)` 的 `:testShard4` 实测仅 **92 秒**。基线绿轮 `42904843372`（`efd3f9e0a`，2026-11-10）的 `test(5)` 是 `7m24s` 绿 ⇒ 属本轮引入。已加 `if: always()` 分片进度诊断步骤（结果 XML 清单 + 首末完成时刻），以便区分「某用例挂死」与「用例全跑完但 JVM 不退出」。
 - **CI flake 已根治**：`testShard3` 的 `McpSourceLocatorRenderAtLineTest::testiBatis_Java调用行` 早前 CI-only 偶发 `SOURCE_NOT_FOUND`。根因＝长分片下写 sqlMap 触发 dumb mode，`SqlMapNamespaceIndex` 查询抛 `IndexNotReadyException` → 定位返回空锚（生产链与 master 冻结 tip 逐字一致，是测试对索引异步可见性的环境时序依赖；索引正确性另有 `SqlMapNamespaceIndexTest` 专测）。根治＝`addSqlMap()` 用该链自带 `lookupOverrideForTest` 缝从刚建 PSI 直接提供 id 锚点（按 `namespace.id` 取裸 id 匹配），令测试对 dumb/索引时序完全免疫，`tearDown` 复位不污染同 JVM 后续用例。多轮无效尝试（接缝自清/EDT-pump 等 dumb/索引 ensureUpToDate）中 `waitForSmartMode` 曾在 EDT 挂死 17+ 分钟已回退。
-- **gate**：push-test 全绿读数确认后派发。（`96d99e378` 起全绿：run `44106324994` 7 腿 success）
+- **gate（全绿收官）**：run `44108708496` @`bdcfe5551` **全部 job success**——`build` 3m22s、`test(1~5)+test(fast)` 6m33s~9m42s、`verifyplugin` 6m49s、`verify(243/253/262)` 3m04s/4m00s/5m05s、`marketplace` 12m29s、`gate` 0m02s，`publish` skipped（gate 模式不发布）。
+- **push-test 连续两轮全绿**：`44106324994` @`96d99e378`（test(5) 10m0s）与 `44108659553` @`bdcfe5551`（test(5) 9m16s）；此前 `test(5)` 每轮 31m2x 超时。
 
 ### 8.4 事故与坑沉淀
 
@@ -177,3 +178,5 @@
 **验证**：挪走 `build/test-sandbox/shard5/system_testShard5` 强制冷索引后复跑 `:testShard5` → **160 类全落盘，BUILD SUCCESSFUL in 6m11s**（修复前同一条件 7.5 分钟 0 结果、永不收敛）。
 
 **CI 验证（`96d99e378`，run `44106324994`）**：`push-test` **7 条腿全 success**——`fast(1/2)` 6m2s / 5m8s，`test(1)` 9m50s、`test(2)` 9m1s、`test(3)` 9m53s、`test(4)` 8m3s、**`test(5)` 10m0s（`BUILD SUCCESSFUL in 8m 19s`）**；分片进度诊断 `completedClasses=160`（修复前 run `44098799034` 为 `completedClasses=0` + 31m20s 超时）。
+
+**收官门禁（`bdcfe5551`）**：`push-test` run `44108659553` 7 腿全 success（test(5) 9m16s，连续第二轮绿）；`build-plugin` **gate** run `44108708496` 全 job success（build / test×6 / verifyplugin / verify243·253·262 / marketplace），`publish` skipped。
