@@ -53,6 +53,7 @@ import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
+import javax.swing.border.Border;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import java.awt.BorderLayout;
@@ -60,6 +61,7 @@ import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.FontMetrics;
+import java.awt.Insets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -69,6 +71,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Supplier;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * {@code SqlPreviewPanelParamPanel.kt}（T-M53-II 拆分件）的 Java 承载类——扩展函数
@@ -1189,14 +1193,24 @@ public final class SqlPreviewPanelParamPanelKt {
      */
     @NotNull
     public static JBLabel columnLabel(@NotNull SqlPreviewPanel p, String fullText, int columnWidth) {
-        JBLabel label = new JBLabel(fullText);
-        FontMetrics metrics = label.getFontMetrics(UIUtil.getLabelFont());
-        if (metrics.stringWidth(fullText) > columnWidth) {
-            label.setToolTipText(fullText);
-            label.setText(ellipsize(p, fullText, metrics, columnWidth));
-        }
-        label.setPreferredSize(new Dimension(columnWidth, label.getPreferredSize().height));
+        JBLabel label = new JBLabel();
+        // T-ParamNameTruncation：全名写入 client property，视口变化后 relabelParamLabels 原地重排
+        label.putClientProperty(SqlPreviewPanel.PROP_LABEL_FULL_TEXT, fullText);
+        applyLabelColumn(p, label, fullText, columnWidth);
         return label;
+    }
+
+    /** T-ParamNameTruncation：单个标签的截断态落定（构建期与视口变化重排共用同一套度量）。 */
+    public static void applyLabelColumn(@NotNull SqlPreviewPanel p, @NotNull JBLabel label,
+                                        @NotNull String fullText, int columnWidth) {
+        FontMetrics metrics = p.getFontMetrics(UIUtil.getLabelFont());
+        Insets in = label.getInsets();
+        int avail = paramLabelTextAvailPx(columnWidth, in == null ? 0 : in.left, in == null ? 0 : in.right);
+        String display = metrics.stringWidth(fullText) > avail
+                ? ellipsize(p, fullText, metrics, avail) : fullText;
+        label.setText(display);
+        label.setToolTipText(wrappedLabelTooltip(fullText));
+        label.setPreferredSize(new Dimension(columnWidth, label.getPreferredSize().height));
     }
 
     /**
@@ -1205,13 +1219,11 @@ public final class SqlPreviewPanelParamPanelKt {
      * 默认 240 面板 → 上限约 109，宽面板放宽至 260 封顶；未布局/测试环境取 260）。
      */
     public static int labelColumnWidth(@NotNull SqlPreviewPanel p, List<String> texts) {
-        if (texts.isEmpty()) return 140;
+        if (texts.isEmpty()) return LABEL_COLUMN_MIN_PX;
         FontMetrics metrics = p.getFontMetrics(UIUtil.getLabelFont());
-        int viewport = p.paramScroll.getViewport().getWidth();
-        int maxWidth = viewport <= 0 ? 260 : Math.max(80, Math.min(viewport - 128, 260));
-        int maxTextWidth = 0;
-        for (String t : texts) maxTextWidth = Math.max(maxTextWidth, metrics.stringWidth(t));
-        return Math.max(80, Math.min(maxTextWidth, maxWidth));
+        List<Integer> widths = new ArrayList<>();
+        for (String t : texts) widths.add(metrics.stringWidth(t));
+        return paramLabelColumnWidth(widths, p.paramScroll.getViewport().getWidth());
     }
 
     /**
@@ -2341,4 +2353,146 @@ public final class SqlPreviewPanelParamPanelKt {
         label.setToolTipText(String.join("\n", lines));
         label.setVisible(true);
     }
+
+    // ==================================================================
+    // T-SyncK2JMaster179 生产补漏：master SqlPreviewPanelParamPanel.kt 的 internal 顶层函数/常量，
+    // 端口阶段漏翻、新移植测试直接调用。Kotlin internal → Java public，默认参数 → 重载。
+    // ==================================================================
+
+    /** T-ParamNameTruncation：标签列宽预算常量（视口比例 / 硬上下限 / 未布局兜底视口 / tooltip 折行宽度）。 */
+    public static final double LABEL_COLUMN_VIEWPORT_RATIO = 0.55;
+    public static final int LABEL_COLUMN_MAX_PX = 480;
+    public static final int LABEL_COLUMN_MIN_PX = 80;
+    public static final int LABEL_COLUMN_FALLBACK_VIEWPORT_PX = 640;
+    public static final int LABEL_TOOLTIP_WRAP_CHARS = 64;
+
+    /** T-LabelInset：无边框标签的内边距替身（数值与真实标签一致）。 */
+    public static final Insets EMPTY_INSETS = new Insets(0, 0, 0, 0);
+
+    /**
+     * 列宽预算的纯函数形态：内容宽度按「视口 × 比例」封顶，再夹在 [MIN, MAX] 之间；
+     * viewportPx &lt;= 0（未布局）按兜底视口估算。需求宽度 = max(文本宽 + 该行内边距)。
+     */
+    public static int paramLabelColumnWidth(@NotNull List<Integer> textWidths, int viewportPx) {
+        return paramLabelColumnWidth(textWidths, viewportPx, java.util.Collections.emptyList());
+    }
+
+    public static int paramLabelColumnWidth(@NotNull List<Integer> textWidths, int viewportPx,
+                                            @NotNull List<Integer> insets) {
+        if (textWidths.isEmpty()) return LABEL_COLUMN_MIN_PX;
+        int viewport = viewportPx > 0 ? viewportPx : LABEL_COLUMN_FALLBACK_VIEWPORT_PX;
+        int budget = (int) (viewport * LABEL_COLUMN_VIEWPORT_RATIO);
+        budget = Math.max(LABEL_COLUMN_MIN_PX, Math.min(budget, LABEL_COLUMN_MAX_PX));
+        int need = 0;
+        for (int i = 0; i < textWidths.size(); i++) {
+            int extra = i < insets.size() ? insets.get(i) : 0;
+            need = Math.max(need, textWidths.get(i) + extra);
+        }
+        return Math.max(LABEL_COLUMN_MIN_PX, Math.min(need, budget));
+    }
+
+    /** 标签可绘文本宽度 = 列宽 − 左右内边距（Swing 按此判定是否截尾），下限 0。 */
+    public static int paramLabelTextAvailPx(int columnWidth, int leftInset, int rightInset) {
+        return Math.max(0, columnWidth - leftInset - rightInset);
+    }
+
+    /** tooltip 文本：短名原样，超长名改用 &lt;html&gt; 软折行。 */
+    @NotNull
+    public static String wrappedLabelTooltip(@NotNull String fullText) {
+        return wrappedLabelTooltip(fullText, LABEL_TOOLTIP_WRAP_CHARS);
+    }
+
+    @NotNull
+    public static String wrappedLabelTooltip(@NotNull String fullText, int charsPerLine) {
+        if (fullText.length() <= charsPerLine) return fullText;
+        StringBuilder sb = new StringBuilder("<html>");
+        List<String> lines = softWrapLines(fullText, charsPerLine);
+        for (int i = 0; i < lines.size(); i++) {
+            if (i > 0) sb.append("<br>");
+            sb.append(escapeTooltipHtml(lines.get(i)));
+        }
+        return sb.append("</html>").toString();
+    }
+
+    /** 软折行：每段 ≤ width，优先在 . / _ / ) 后断，找不到就硬断。 */
+    @NotNull
+    private static List<String> softWrapLines(@NotNull String text, int width) {
+        List<String> lines = new ArrayList<>();
+        int start = 0;
+        while (start < text.length()) {
+            if (text.length() - start <= width) {
+                lines.add(text.substring(start));
+                break;
+            }
+            int end = start + width;
+            int lower = start + Math.max(1, width / 2);
+            for (int i = end; i >= lower; i--) {
+                char ch = text.charAt(i - 1);
+                if (ch == '.' || ch == '_' || ch == ')') {
+                    end = i;
+                    break;
+                }
+            }
+            lines.add(text.substring(start, end));
+            start = end;
+        }
+        return lines;
+    }
+
+    @NotNull
+    private static String escapeTooltipHtml(@NotNull String text) {
+        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+    }
+
+    /** 纯函数：该 foreach 本轮是否展开过；item 未知时保守判「展开」。 */
+    public static boolean forEachExpandedThisRound(@Nullable String item, @NotNull List<String> mappingProperties) {
+        if (item == null || item.trim().isEmpty()) return true;
+        String prefix = "__frch_" + item + "_";
+        for (String p : mappingProperties) if (p.startsWith(prefix)) return true;
+        return false;
+    }
+
+    /** MBG 参数行：占位符来源 + criterion 条件文本 → (source, 用户可读标签)。 */
+    @NotNull
+    public static List<Pair<String, String>> mbgParamRowsOf(@NotNull List<String> sources,
+                                                            @NotNull List<String> conditions) {
+        Pattern prefixRegex = Pattern.compile("^__frch_criterion_(\\d+)");
+        Map<String, List<String>> groups = new LinkedHashMap<>();
+        for (String source : sources) {
+            Matcher m = prefixRegex.matcher(source);
+            if (!m.find()) continue;
+            String number = m.group(1);
+            groups.computeIfAbsent(number, k -> new ArrayList<>()).add(source);
+        }
+        List<Pair<String, String>> rows = new ArrayList<>();
+        int index = 0;
+        for (List<String> groupSources : groups.values()) {
+            String condition = null;
+            if (index < conditions.size()) {
+                String raw = conditions.get(index);
+                if (raw != null && !raw.trim().isEmpty()) condition = raw.trim();
+            }
+            String base = condition != null ? condition : "条件 " + (index + 1);
+            boolean between = groupSources.size() >= 2;
+            java.util.Set<String> distinct = new LinkedHashSet<>(groupSources);
+            int k = 0;
+            for (String source : distinct) {
+                String suffix = between && k == 0 ? " 起始值"
+                        : between && k == 1 ? " 结束值" : " 值";
+                rows.add(new Pair<>(source, base + suffix));
+                k++;
+            }
+            index++;
+        }
+        return rows;
+    }
+
+    /**
+     * 视口变化后原地重排本面板已有标签（防抖由调用方负责）。只改文本/首选尺寸/tooltip，
+     * 不重建左栏、不碰参数值状态表与召回链。测试缝：直接转发到面板的截断态登记。
+     */
+    public static void relabelParamLabels(@NotNull SqlPreviewPanel p) {
+        p.relabelParamLabels();
+    }
+
 }

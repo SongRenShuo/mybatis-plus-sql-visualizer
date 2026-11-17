@@ -148,6 +148,9 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     public static final String PROP_FIELD_SOURCE = "mpsv.paramSource";
     public static final String PROP_FOREACH_NULL = "mpsv.foreachNull";
 
+    /** T-ParamNameTruncation：参数行标签的全名 client property 锚点（视口变化后原地重排用）。 */
+    public static final String PROP_LABEL_FULL_TEXT = "mpsv.labelFullText";
+
     /** F-45：列信息标签页标题。 */
     public static final String COLUMN_INFO_TAB_TITLE = "列信息";
 
@@ -1460,6 +1463,59 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             if (cc instanceof JBLabel) return (JBLabel) cc;
         }
         return null;
+    }
+
+    /**
+     * T-ParamNameTruncation（T-SyncK2JMaster179 补漏）：视口变化后原地重排参数行标签——
+     * 只改已有标签文本/首选尺寸/tooltip，不重建左栏、不碰参数值状态表。
+     * master 为 SqlPreviewPanelParamPanel.kt 的扩展函数，Java 端口落为实例缝，门面转发到此。
+     */
+    public void relabelParamLabels() {
+        List<JBLabel> labels = new ArrayList<>();
+        List<String> fullTexts = new ArrayList<>();
+        java.awt.FontMetrics metrics = getFontMetrics(UIUtil.getLabelFont());
+        for (Component c : paramPanel.getComponents()) {
+            collectLabelsWithFullText(c, labels, fullTexts);
+        }
+        if (labels.isEmpty()) return;
+        List<Integer> widths = new ArrayList<>();
+        List<Integer> insetsPx = new ArrayList<>();
+        for (int i = 0; i < labels.size(); i++) {
+            widths.add(metrics.stringWidth(fullTexts.get(i)));
+            java.awt.Insets in = labels.get(i).getInsets();
+            insetsPx.add(in == null ? 0 : in.left + in.right);
+        }
+        int columnWidth = SqlPreviewPanelParamPanelKt.paramLabelColumnWidth(
+                widths, paramScroll.getViewport().getWidth(), insetsPx);
+        for (int i = 0; i < labels.size(); i++) {
+            JBLabel label = labels.get(i);
+            String full = fullTexts.get(i);
+            java.awt.Insets in = label.getInsets();
+            int left = in == null ? 0 : in.left;
+            int right = in == null ? 0 : in.right;
+            int avail = SqlPreviewPanelParamPanelKt.paramLabelTextAvailPx(columnWidth, left, right);
+            String display = metrics.stringWidth(full) > avail
+                    ? SqlPreviewPanelTextKt.ellipsizeMiddle(full, metrics::stringWidth, avail) : full;
+            label.setText(display);
+            label.setToolTipText(SqlPreviewPanelParamPanelKt.wrappedLabelTooltip(full));
+            label.setPreferredSize(new Dimension(columnWidth, label.getPreferredSize().height));
+        }
+        paramPanel.revalidate();
+        paramPanel.repaint();
+    }
+
+    private void collectLabelsWithFullText(Component c, List<JBLabel> labels, List<String> fullTexts) {
+        Object full = c instanceof JBLabel ? ((JBLabel) c).getClientProperty(PROP_LABEL_FULL_TEXT) : null;
+        if (c instanceof JBLabel && full instanceof String) {
+            labels.add((JBLabel) c);
+            fullTexts.add((String) full);
+            return;
+        }
+        if (c instanceof Container) {
+            for (Component child : ((Container) c).getComponents()) {
+                collectLabelsWithFullText(child, labels, fullTexts);
+            }
+        }
     }
 
     /** T-HibDualCapture：第 index 个普通参数框的 tooltip（`#source = 值`），供长值兜底断言。 */
