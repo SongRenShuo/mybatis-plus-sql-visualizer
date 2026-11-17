@@ -34,6 +34,12 @@ class McpSourceLocatorRenderAtLineTest : BasePlatformTestCase() {
 
     override fun setUp() {
         super.setUp()
+        // iBatis 定位链共用 JVM 级静态测试缝：同分片前序用例若无复位会漏到这里，
+        // 令 iBatis 调用行拿到空锚（SOURCE_NOT_FOUND）。本类自清，保证顺序无关。
+        cn.song.mybatisplus.visualizer.ui.nav.IbatisXmlStatementTargets.lookupOverrideForTest = null
+        cn.song.mybatisplus.visualizer.ui.gutter.IbatisJavaCallSites.lookupOverrideForTest = null
+        cn.song.mybatisplus.visualizer.log.MapperXmlLocator.lookupOverrideForTest = null
+        cn.song.mybatisplus.visualizer.ui.gutter.MapperXmlToJavaLineMarkerProvider.isDumbProvider = { false }
         writeMapper("mapper/UserMapper.xml", mapper)
     }
 
