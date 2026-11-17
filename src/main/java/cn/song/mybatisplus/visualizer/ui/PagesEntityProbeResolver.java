@@ -18,12 +18,6 @@ import org.jetbrains.annotations.Nullable;
  * <p>供两条链共用：{@code <pages>} 页面语句（{@link PagesXmlPreviewService}）与通用 XML 内嵌 SQL
  * （{@link XmlInlineSqlPreviewService}，如无 {@code entityClass} 的 {@code <dataValue>}）。判定器本身保持纯函数，
  * PSI/索引访问集中在这里，Dumb 态与解析异常一律返回 null（判定回落 SQL，不抛）。</p>
- *
- * <p>券 0（T-Ibatis2SlowFix）：本探针是<b>同步预览热路径</b>，只能走「零扫描」形态（{@link #probeCheap}）——
- * 「直查（类短名 / 全限定名索引）＋只读别名缓存」覆盖常规写法（根标识符＝实体简单名，或带
- * {@code entityClass} 时按类直查，{@code @Entity(name=...)} 别名与根的比对也随之成立）；而<b>全项目短名扫描</b>
- * 形态的 {@code @Entity(name)} 反查（{@link EntityAliasSweep#resolve}，实测单次约 1s、历史上同形态 70s 冻结
- * EDT）不得再出现在这条路径上。反查能力本身未删：缓存被预热后 {@link #probeCheap} 即命中。</p>
  */
 public final class PagesEntityProbeResolver {
 
@@ -31,13 +25,18 @@ public final class PagesEntityProbeResolver {
     }
 
     /**
-     * 同步路径探针（零扫描）：直查 + <b>只读</b>别名缓存，见类注释。
-     *
-     * <p>直查命中即返回（含按 {@code entityClass} 全限定名直查的常规形态）；打不到一律返回 null，
-     * 由判定器按「无证据」回落保守默认（SQL），<b>不</b>触发全项目别名扫描。</p>
+     * 券 0（T-Ibatis2SlowFix）：同步路径探针（<b>零扫描</b>）——直查 + 只读别名缓存。
+     * 直查命中即返回（含按 entityClass 全限定名直查的常规形态）；打不到一律返回 null，
+     * 由判定器按「无证据」回落保守默认（SQL），<b>不</b>触发全项目别名扫描。
+     * 反查能力本身未删：缓存被预热后 probeCheap 即命中。
      */
     @Nullable
     public static PagesEntityProbe probeCheap(Project project, String name, @Nullable PsiElement context) {
+        return probe(project, name, context);
+    }
+
+    @Nullable
+    public static PagesEntityProbe probe(Project project, String name, @Nullable PsiElement context) {
         try {
             PsiClass clazz = resolveEntityClass(project, name, context);
             if (clazz == null) return null;
@@ -57,7 +56,7 @@ public final class PagesEntityProbeResolver {
     private static PsiClass resolveEntityClass(Project project, String name, @Nullable PsiElement context) {
         EntityClassResolver.Resolution byName;
         try {
-            byName = EntityAliasSweep.resolveCachedOnly(project, name, context);
+            byName = EntityAliasSweep.resolve(project, name, context);
         } catch (Throwable ignored) {
             byName = null;
         }

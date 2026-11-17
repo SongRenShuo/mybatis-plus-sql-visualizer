@@ -80,7 +80,7 @@ public final class EditorCommentShortcuts {
             AnAction original = manager.getAction(IdeActions.ACTION_COMMENT_LINE);
             if (original != null) {
                 DashLineCommentAction replacement = new DashLineCommentAction(original);
-                manager.replaceAction(IdeActions.ACTION_COMMENT_LINE, replacement);
+                cn.song.mybatisplus.visualizer.util.ActionReplaceSilentlyKt.replaceActionSilently(manager, IdeActions.ACTION_COMMENT_LINE, replacement);
                 installedAction = replacement;
                 refCount = 0;
             }
@@ -99,7 +99,7 @@ public final class EditorCommentShortcuts {
                 ActionManager manager = ActionManager.getInstance();
                 // 只在当前在位的仍是本接管件时换回（防覆盖别的组件在期间的替换）
                 if (manager.getAction(IdeActions.ACTION_COMMENT_LINE) == replacement) {
-                    manager.replaceAction(IdeActions.ACTION_COMMENT_LINE, replacement.getOriginal());
+                    cn.song.mybatisplus.visualizer.util.ActionReplaceSilentlyKt.replaceActionSilently(manager, IdeActions.ACTION_COMMENT_LINE, replacement.getOriginal());
                 }
             }
             installedAction = null;

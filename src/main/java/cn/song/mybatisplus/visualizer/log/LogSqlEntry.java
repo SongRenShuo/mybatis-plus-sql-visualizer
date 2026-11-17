@@ -23,7 +23,7 @@ public record LogSqlEntry(
      * 避免 mid-line 截断导致 multiline SQL 列表展示不完整）。
      */
     String summary,
-    /** 条目来源（MyBatis / iBatis / Hibernate / 未知）。 */
+    /** 条目来源（MyBatis / Hibernate / 未知）。 */
     SqlSource source,
     /**
      * 执行耗时（毫秒）；null 表示未解析到耗时信息。

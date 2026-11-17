@@ -168,17 +168,7 @@ public final class PreviewDialectResolver {
         return copyWith(result, DialectRegistry.INSTANCE.byName(name), decision);
     }
 
-    /**
-     * Kotlin {@code copy(renderedDialect = …, dialectDecision = …)} 的手工重建（其余构造参数保持当前值）。
-     *
-     * <p>T-SyncK2JMaster178-fix2：此前走 35 参历史重载，新八参
-     * （{@code retryWhenIndexReady}/{@code informationalWarning}/{@code sourceLanguage}/
-     * {@code originalSql}/{@code degradations}/{@code runtimeSlots}/{@code ibatisParamModel}/
-     * {@code rerender}）全被置默认值——master 的 data class {@code copy} 是全字段转抄，
-     * iBatis 预览经 {@code showResult} 入口 {@code withResolvedDialect} 一走本重建，
-     * {@code ibatisParamModel}/{@code rerender} 即丢失：左栏条件行/参数行全不建
-     * （全选/清除按钮消失）、rerender 链断（供值后横幅告警残留）。必须走 43 参规范构造器逐字段转抄。</p>
-     */
+    /** Kotlin {@code copy(renderedDialect = …, dialectDecision = …)} 的手工重建（其余构造参数保持当前值）。 */
     private static PreviewResult copyWith(PreviewResult r, Dialect renderedDialect,
                                           DialectDecisionEngine.Decision dialectDecision) {
         return new PreviewResult(
@@ -188,12 +178,9 @@ public final class PreviewDialectResolver {
                 r.getCandidateTables(), r.getBatchModel(), r.getXmlModel(), r.getInitialParamValues(),
                 r.getPerfWarnings(), r.getFillClauses(), r.getPreviousSql(), r.getPagesColumns(),
                 r.getNamedParamHints(), r.getStackDigest(), r.getThreadName(), r.isHasDollarRawSegments(),
-                r.getRetryWhenIndexReady(), r.isInformationalWarning(),
                 r.getCountSql(), r.getPaginationLimitLine(), r.getPlaceholderParamNames(),
                 r.getDuplicateParamNames(), r.getDiagramStatement(), r.getHistoryFingerprintSeed(),
                 r.getPaginationParamSources(), renderedDialect, dialectDecision,
-                r.getHistoryEntryId(), r.getActualSql(),
-                r.getSourceLanguage(), r.getOriginalSql(), r.getDegradations(), r.getRuntimeSlots(),
-                r.getIbatisParamModel(), r.getRerender());
+                r.getHistoryEntryId(), r.getActualSql());
     }
 }

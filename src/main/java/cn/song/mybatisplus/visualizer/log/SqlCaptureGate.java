@@ -17,11 +17,11 @@ public final class SqlCaptureGate {
     /**
      * T-PanweiInsertCapture F1：让位期间被丢弃的<b>可解析 SQL 行</b>累计。
      *
-     * <p>口径：{@code processConsoleLine} 处于「paused 且活性回落未解封」时，嗅探（{@code sniffLogTimestamp}）
+     * <p>口径：processConsoleLine 处于「paused 且活性回落未解封」时，嗅探（sniffLogTimestamp）
      * 确实解析出条目 → 本计数 +1，随后那一行按让位语义丢弃。噪声行不计。</p>
      *
-     * <p>为什么落在闸门对象上：计数点在文件级函数 {@code processConsoleLine} 内，拿不到 {@code SqlLogConsoleBridge}
-     * 实例；闸门是两条路径都可见的公共锚点（与 {@code paused} 同源）。</p>
+     * <p>为什么落在闸门对象上：计数点在文件级函数 processConsoleLine 内，拿不到 SqlLogConsoleBridge
+     * 实例；闸门是两条路径都可见的公共锚点（与 paused 同源）。</p>
      */
     public static final java.util.concurrent.atomic.AtomicLong suppressedSqlLines =
             new java.util.concurrent.atomic.AtomicLong();

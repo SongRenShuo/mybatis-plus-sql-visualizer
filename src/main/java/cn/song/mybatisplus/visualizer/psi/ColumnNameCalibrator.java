@@ -444,6 +444,15 @@ public final class ColumnNameCalibrator {
      * ReadAction；任何反射链异常都在下游被吞掉（runCatching），不会冒泡到调用方。
      */
     private static void requestPrefetch(@Nullable Project project, @NotNull String tableName) {
+        // §18（2026-11-13 14:47 真机）：索引期不投递 schema 预热——那会儿数据源模型同样没加载，
+        // 830 张表逐张投递只会刷出 830 条「模型冷跳过」，纯噪音；索引就绪后的下一次重绘会自然补。
+        if (project != null) {
+            try {
+                if (com.intellij.openapi.project.DumbService.isDumb(project)) return;
+            } catch (Throwable ignored) {
+                // 平台未就绪按可投递处理（保守方向不改变既有语义）
+            }
+        }
         if (!markPrefetchDispatched(tableName)) return;
         if (inFlightCount() >= MAX_IN_FLIGHT_PREFETCH) return;
         Function2<Project, String, Unit> sink = prefetchSinkForTest;

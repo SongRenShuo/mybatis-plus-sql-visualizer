@@ -65,15 +65,6 @@ public final class ExplainIndexAdvisor {
 
     private static final Pattern ROWS_N = Pattern.compile("rows=(\\d+)");
 
-    /** R45 ③：OceanBase ASCII 计划树表头（真机实证 `|ID|OPERATOR  |NAME|EST.ROWS|EST.TIME(us)|`）——OB 规则的门。 */
-    private static final Pattern OB_PLAN_HEADER = Pattern.compile("\\|\\s*ID\\s*\\|\\s*OPERATOR\\s*\\|");
-
-    /** R45 ③：OB 全表扫算子（4.x 传统计划 `TABLE SCAN` / `TABLE FULL SCAN`）。 */
-    private static final Pattern OB_FULL_SCAN_OP = Pattern.compile("(?i)^TABLE\\s+(?:FULL\\s+)?SCAN$");
-
-    /** R45 ③：OB 索引范围扫算子（`TABLE RANGE SCAN`）——已走索引，不报缺索引。 */
-    private static final Pattern OB_RANGE_SCAN_OP = Pattern.compile("(?i)^TABLE\\s+RANGE\\s+SCAN$");
-
     /**
      * 从 EXPLAIN 结果识别索引缺失类模式。
      *
@@ -177,11 +168,11 @@ public final class ExplainIndexAdvisor {
     private static final List<RuleInfo> RULE_INVENTORY = List.of(
             new RuleInfo("FULL_SCAN", "type=ALL full table scan over the threshold"),
             new RuleInfo("NO_INDEX_USED", "no usable index was selected (key=NULL)"),
+            new RuleInfo("TABLE_FULL_SCAN", "full table scan in the OceanBase ASCII plan tree (TABLE SCAN / TABLE FULL SCAN)"),
             new RuleInfo("HIGH_ROWS_ESTIMATE", "estimated rows still high even with an index (poor selectivity)"),
             new RuleInfo("FILESORT", "ORDER BY cannot use an index (Using filesort)"),
             new RuleInfo("TEMPORARY_TABLE", "GROUP BY/DISTINCT spills to a temp table (Using temporary)"),
-            new RuleInfo("SEQ_SCAN", "sequential scan on a large table (PostgreSQL/KingBase)"),
-            new RuleInfo("TABLE_FULL_SCAN", "full table scan in the OceanBase ASCII plan tree (TABLE SCAN / TABLE FULL SCAN)")
+            new RuleInfo("SEQ_SCAN", "sequential scan on a large table (PostgreSQL/KingBase)")
     );
 
     /** 体检规则清单（R45；空实现无——清单恒非空，供面板「体检规则」说明栏与文档生成）。 */
@@ -227,33 +218,22 @@ public final class ExplainIndexAdvisor {
     /**
      * OceanBase 文本计划解析（T-OBExplainFormat 留账的「OB 专属文本规则」补全）。
      *
-     * <p>形态依据（真机实证，提交 58b8b5f3 正文逐字留证；同口径见
-     * {@code cn.song.mybatisplus.visualizer.sql.ExplainSupport} 的 OceanBase 条目）：社区镜像
-     * {@code oceanbase/oceanbase-ce:4.3.5-lts}（OB CE 4.3.5.6，{@code ob_compatibility_mode=MYSQL}）上
-     * {@code EXPLAIN <sql>} 返回<b>单列 {@code Query Plan}</b>，值是 OB 自有 ASCII 表格：</p>
-     * <pre>
-     * ==========================================
-     * |ID|OPERATOR  |NAME|EST.ROWS|EST.TIME(us)|
-     * |0 |EXPRESSION|    |1       |1           |
-     * ==========================================
-     * Outputs &amp; filters:
-     *   0 - output([1]), filter(nil) / values({1})
-     * </pre>
-     * <p>真实表算子是 {@code TABLE RANGE SCAN} / {@code TABLE FULL SCAN}，带 {@code partitions(p0)}、
-     * {@code is_index_back}、{@code range_key/range_cond} 等 OB 专有字段（同源留证）。注意：真机留证覆盖到
-     * <b>表头 + EXPRESSION 行</b>与<b>算子名</b>，表扫行本身未逐字落盘——本解析只按表头声明的列名取值
-     * （OPERATOR/NAME/EST.ROWS），不按固定列位猜，故列宽/补空格差异不影响。</p>
+     * <p>形态依据（真机实证，提交 58b8b5f3 正文逐字留证）：社区镜像 oceanbase/oceanbase-ce:4.3.5-lts
+     * （OB CE 4.3.5.6，ob_compatibility_mode=MYSQL）上 {@code EXPLAIN <sql>} 返回<b>单列 Query Plan</b>，
+     * 值是 OB 自有 ASCII 表格（{@code |ID|OPERATOR|NAME|EST.ROWS|EST.TIME(us)|}）。真实表算子是
+     * {@code TABLE RANGE SCAN} / {@code TABLE FULL SCAN}。真机留证覆盖到<b>表头 + EXPRESSION 行</b>与
+     * <b>算子名</b>，表扫行本身未逐字落盘——本解析只按表头声明的列名取值（OPERATOR/NAME/EST.ROWS），
+     * 不按固定列位猜，故列宽/补空格差异不影响。</p>
      *
-     * <p>规则口径：</p>
-     * <ul>
-     *  <li>{@code TABLE SCAN} / {@code TABLE FULL SCAN}（全表扫）→ {@code TABLE_FULL_SCAN}，EST.ROWS 超阈才提示；</li>
-     *  <li>{@code TABLE RANGE SCAN}（走索引的范围扫）→ 不报「缺索引」，只在 EST.ROWS 超阈时报
-     *      {@code HIGH_ROWS_ESTIMATE}（选择性差 / 大范围扫，与 MySQL 档同规则码同语义）；</li>
-     *  <li>{@code TABLE GET} / {@code EXPRESSION} 等其它算子不产出建议（点查与常量计划无索引话题）。</li>
-     * </ul>
+     * <p>规则口径：TABLE SCAN / TABLE FULL SCAN（全表扫）→ {@code TABLE_FULL_SCAN}，EST.ROWS 超阈才提示；
+     * TABLE RANGE SCAN（走索引的范围扫）→ 不报「缺索引」，只在 EST.ROWS 超阈时报
+     * {@code HIGH_ROWS_ESTIMATE}；TABLE GET / EXPRESSION 等其它算子不产出建议。</p>
      */
     private static void adviseObPlanText(@NotNull String text, @NotNull List<Hint> out) {
-        List<String> lines = List.of(text.split("\n", -1));
+        List<String> lines = new ArrayList<>();
+        for (String line : text.split("\n", -1)) {
+            lines.add(line);
+        }
         int headerIdx = -1;
         for (int i = 0; i < lines.size(); i++) {
             if (OB_PLAN_HEADER.matcher(lines.get(i)).find()) {
@@ -261,30 +241,36 @@ public final class ExplainIndexAdvisor {
                 break;
             }
         }
-        if (headerIdx < 0) return;
+        if (headerIdx < 0) {
+            return;
+        }
         List<String> header = obRowCells(lines.get(headerIdx));
-        if (header == null) return;
+        if (header == null) {
+            return;
+        }
         int opCol = -1;
         int nameCol = -1;
         int rowsCol = -1;
         for (int i = 0; i < header.size(); i++) {
             String h = header.get(i).trim();
-            if (h.equalsIgnoreCase("OPERATOR") && opCol < 0) opCol = i;
-            else if (h.equalsIgnoreCase("NAME") && nameCol < 0) nameCol = i;
-            else if (h.equalsIgnoreCase("EST.ROWS") && rowsCol < 0) rowsCol = i;
+            if ("OPERATOR".equalsIgnoreCase(h) && opCol < 0) opCol = i;
+            if ("NAME".equalsIgnoreCase(h) && nameCol < 0) nameCol = i;
+            if ("EST.ROWS".equalsIgnoreCase(h) && rowsCol < 0) rowsCol = i;
         }
-        if (opCol < 0) return;
+        if (opCol < 0) {
+            return;
+        }
         for (int i = headerIdx + 1; i < lines.size(); i++) {
             List<String> cells = obRowCells(lines.get(i));
-            if (cells == null) continue;
-            if (cells.size() != header.size()) continue; // 列数不符 = 非计划行（分隔线/说明段），不猜
+            if (cells == null || cells.size() != header.size()) continue; // 列数不符 = 非计划行（分隔线/说明段），不猜
             String op = cells.get(opCol).trim();
             if (op.isEmpty()) continue;
             String target = nameCol >= 0 ? (cells.get(nameCol).trim().isEmpty() ? "?" : cells.get(nameCol).trim()) : "?";
             Long estRows = null;
             if (rowsCol >= 0) {
                 try {
-                    estRows = Long.parseLong(cells.get(rowsCol).trim());
+                    String v = cells.get(rowsCol).trim();
+                    if (!v.isEmpty()) estRows = Long.parseLong(v);
                 } catch (NumberFormatException ignored) {
                 }
             }
@@ -302,18 +288,32 @@ public final class ExplainIndexAdvisor {
                         "HIGH_ROWS_ESTIMATE",
                         target,
                         "estimated rows=" + estRows + " even with a range scan — poor selectivity / "
-                                + "wide range scan; verify the filter columns are covered"));
+                            + "wide range scan; verify the filter columns are covered"));
             }
         }
     }
 
-    /** OB ASCII 行 → 单元格清单（按 {@code |} 切，保留原始列数）；非 {@code |…|} 行（{@code ===} 分隔线、说明段）返回 null。 */
-    @Nullable
-    private static List<String> obRowCells(@NotNull String line) {
+    /** OB ASCII 行 → 单元格清单（按 {@code |} 切，保留原始列数）；非 {@code |…|} 行（分隔线、说明段）返回 null。 */
+    private static List<String> obRowCells(@Nullable String line) {
+        if (line == null) return null;
         String trimmed = line.trim();
         if (trimmed.length() < 3 || !trimmed.startsWith("|") || !trimmed.endsWith("|")) return null;
-        return List.of(trimmed.substring(1, trimmed.length() - 1).split("\\|", -1));
+        String inner = trimmed.substring(1, trimmed.length() - 1);
+        List<String> cells = new ArrayList<>();
+        for (String c : inner.split("\\|", -1)) {
+            cells.add(c);
+        }
+        return cells;
     }
+
+    /** R45 ③：OceanBase ASCII 计划树表头（真机实证 {@code |ID|OPERATOR  |NAME|EST.ROWS|EST.TIME(us)|}）——OB 规则的门。 */
+    private static final Pattern OB_PLAN_HEADER = Pattern.compile("\\|\\s*ID\\s*\\|\\s*OPERATOR\\s*\\|");
+
+    /** R45 ③：OB 全表扫算子（4.x 传统计划 {@code TABLE SCAN} / {@code TABLE FULL SCAN}）。 */
+    private static final Pattern OB_FULL_SCAN_OP = Pattern.compile("(?i)^TABLE\\s+(?:FULL\\s+)?SCAN$");
+
+    /** R45 ③：OB 索引范围扫算子（{@code TABLE RANGE SCAN}）——已走索引，不报缺索引。 */
+    private static final Pattern OB_RANGE_SCAN_OP = Pattern.compile("(?i)^TABLE\\s+RANGE\\s+SCAN$");
 
     // ---------- PG/KingBase FORMAT JSON（T-ECH-03） ----------
 

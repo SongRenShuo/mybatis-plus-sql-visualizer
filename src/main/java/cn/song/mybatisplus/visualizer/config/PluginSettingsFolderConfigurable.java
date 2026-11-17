@@ -592,7 +592,10 @@ public class PluginSettingsFolderConfigurable implements Configurable {
     // 导航按 id 查（见 navigateToPage），id 写错会静默跳不动，由
     // PluginSettingsFolderConfigurableTest 的「id 与类指向同一页」守卫兜住。
     private static final String ID_UI = "cn.song.mybatisplus.visualizer.settings.ui";
-    private static final String ID_PREVIEW = "cn.song.mybatisplus.visualizer.settings.preview";
+
+    /** T-NotifyTune 券 A：方言设置所在页（预览页）EP id——引导通知动作从对话框外定位用。 */
+    public static final String PAGE_ID_PREVIEW = "cn.song.mybatisplus.visualizer.settings.preview";
+    private static final String ID_PREVIEW = PAGE_ID_PREVIEW;
     private static final String ID_TABLE_MAPPING = "cn.song.mybatisplus.visualizer.settings.tableMapping";
     private static final String ID_SQL_LOG = "cn.song.mybatisplus.visualizer.settings.sqlLog";
 
@@ -610,13 +613,23 @@ public class PluginSettingsFolderConfigurable implements Configurable {
     }
 
     /**
-     * 打开插件主设置页并定位到 SQL 日志页（hint=null 只切页）。
-     * 面板引导链接统一入口——定位高亮复用既有 {@code navigateToPage → focusTarget}（滚动+黄闪+橙框）。
+     * 打开插件主设置页并定位到指定子页（hint=null 只切页，不作行级定位）。
+     * 定位高亮复用既有 {@code navigateToPage → focusTarget}（滚动+黄闪+橙框），零新样式。
+     *
+     * <p>T-NotifyTune：由券 A 的方言提示动作引入；页 id 由调用方给出（见 {@link #PAGE_ID_PREVIEW}）。</p>
      */
-    public static void openSqlLogSettingsFocused(Project project, String hint) {
-        pendingFocus = new PendingFocus(ID_SQL_LOG, hint);
+    public static void openSettingsFocused(Project project, String pageId, String hint) {
+        pendingFocus = new PendingFocus(pageId, hint);
         ShowSettingsUtil.getInstance()
                 .showSettingsDialog(project, PluginSettingsFolderConfigurable.class);
+    }
+
+    /**
+     * 打开插件主设置页并定位到 SQL 日志页（hint=null 只切页）。
+     * 面板引导链接统一入口——兼容旧调用，内部走 {@link #openSettingsFocused}。
+     */
+    public static void openSqlLogSettingsFocused(Project project, String hint) {
+        openSettingsFocused(project, ID_SQL_LOG, hint);
     }
 
     /** 消费待定位目标（取走即清；生产调度与测试缝单源共用，防两处漂移）。 */
@@ -741,6 +754,9 @@ public class PluginSettingsFolderConfigurable implements Configurable {
         // 界面与操作
         SubPageRef u = PAGE_UI.ref;
         fields.add(new SearchableField(msg("settings.showGutterIcon"), "", "settings.section.ui", u));
+        // T-PreviewExecWriteDefer：控制台准备档（三档）——新增设置行必须同步登记到搜索索引
+        fields.add(new SearchableField(msg("settings.consolePrep"), msg("settings.consolePrep.tip"),
+                "settings.section.ui", u));
         // T-MapperNavCoexistYield：共存让位开关（界面节，默认开）
         fields.add(new SearchableField(msg("settings.mapperNavYield"), msg("settings.mapperNavYield.tip"), "settings.section.ui", u));
         // O-72 T-XmlInlineSql：通用 XML 内嵌 SQL 检测开关（界面节）
@@ -755,6 +771,9 @@ public class PluginSettingsFolderConfigurable implements Configurable {
         fields.add(new SearchableField(msg("settings.joinDiagramNative"), msg("settings.joinDiagramNative.tip"), "settings.section.ui", u));
         // T-PreviewWhitespaceToggle O-44a：空白符可视化开关（界面节，默认关=不设置该属性）
         fields.add(new SearchableField(msg("settings.editorShowWhitespaces"), msg("settings.editorShowWhitespaces.tip"), "settings.section.ui", u));
+        // T-NotifyTune：两个主动通知开关必须进索引（SettingsPanelSearchableGuardTest 断言一；禁入 UNINDEXED_SWITCH_KEYS）
+        fields.add(new SearchableField(msg("settings.dialectTip"), msg("settings.dialectTip.tip"), "settings.section.ui", u));
+        fields.add(new SearchableField(msg("settings.firstCaptureGuide"), msg("settings.firstCaptureGuide.tip"), "settings.section.ui", u));
 
         // 关于
         SubPageRef a = PAGE_ABOUT.ref;

@@ -127,6 +127,16 @@ public final class XmlEwResolver {
     @NotNull
     private static List<PsiElement> defaultCallFinder(@NotNull PsiMethod method) {
         List<PsiElement> result = new ArrayList<>();
+        // T-StartupReadLockFreeze S5（同族面）：ReferencesSearch 依赖索引，索引构建期会同步等待
+        // ——预览装配线程在这里持锁等索引，撞上 EDT 的写锁升级就是冻结（计划 §三）。
+        // 与 MapperNavigationTargets 同口径：dumb 时降级为空（预览退回占位提示），不做检索。
+        long startedMs = System.currentTimeMillis();
+        if (com.intellij.openapi.project.DumbService.isDumb(method.getProject())) {
+            com.intellij.openapi.diagnostic.Logger.getInstance(XmlEwResolver.class).info(
+                    "[m2] resolve skip reason=dumb-mode stage=ew-refs elapsedMs="
+                            + (System.currentTimeMillis() - startedMs));
+            return result;
+        }
         for (com.intellij.psi.PsiReference ref : ReferencesSearch.search(method).findAll()) {
             result.add(ref.getElement());
         }

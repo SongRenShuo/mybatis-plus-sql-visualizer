@@ -1,5 +1,8 @@
 package cn.song.mybatisplus.visualizer.execute;
 
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewService;
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel;
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelExecutionKt;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import com.intellij.openapi.actionSystem.AnAction;
 import com.intellij.openapi.actionSystem.AnActionEvent;
@@ -9,40 +12,36 @@ import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.popup.JBPopupFactory;
 import com.intellij.openapi.ui.popup.PopupStep;
 import com.intellij.openapi.ui.popup.util.BaseListPopupStep;
-import kotlin.jvm.functions.Function1;
+import com.intellij.util.Consumer;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import javax.swing.Icon;
-import java.lang.reflect.Method;
+import java.awt.Component;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 
 /**
  * T-DsListAddSource（20261111）：数据源列表末尾的「添加数据源…」——接 <b>IDE 原生新建数据源流</b>，
  * 插件不造任何表单。用于替换列表末尾那条解析不出名字的「unknown」死项。
  *
- * <p><b>平台链路</b>（243 {@code database-plugin.jar} 字节码实证，开发计划 §3.3）：
- * {@code DatabaseViewActions.getCreateDataSourceAction(manager, project, title, includeSeparator, consumer)}
- * → 内部调 {@code DataSourceManager.getCreateDataSourceAction(consumer')} 得驱动组
- * （{@code LocalDataSourceManager$NewDataSourceActionGroup}，LRU 排序）→
- * {@code DatabaseViewActions.lambda$getCreateDataSourceAction$0}：{@code AbstractDataSource.setGroupName(title)} +
- * {@code onDataSourceCreated(...)} → {@code DbPsiFacadeImpl.createDataSourceWrapperElement} →
- * {@code DataSourceManagerDialog.showDialog(facade, dsWrapper, null, consumer, runnable)}——
- * 即数据库工具窗「+」同一条菜单、同一个原生属性对话框。</p>
+ * <p><b>平台链路</b>（243 database-plugin.jar 字节码实证，开发计划 §3.3）：
+ * DatabaseViewActions.getCreateDataSourceAction(manager, project, title, includeSeparator, consumer)
+ * → 内部调 DataSourceManager.getCreateDataSourceAction(consumer') 得驱动组
+ * （LocalDataSourceManager$NewDataSourceActionGroup，LRU 排序）→ 回调里 setGroupName(title) +
+ * onDataSourceCreated → DbPsiFacadeImpl.createDataSourceWrapperElement →
+ * DataSourceManagerDialog.showDialog——即数据库工具窗「+」同一条菜单、同一个原生属性对话框。</p>
  *
- * <p><b>为什么取子项自己渲染而不是直接弹原生组</b>（P-2 预证）：{@code NewDataSourceActionGroup.update}
+ * <p><b>为什么取子项自己渲染而不是直接弹原生组</b>（P-2 预证）：NewDataSourceActionGroup.update
  * 调 {@code DatabaseViewActions.isDataSourceActionsEnabled}，要求 DataContext 带
- * {@code DatabaseView.DATABASE_VIEW_KEY}（javap 实证，20261112）——我们的弹层永远没有这个 key，
- * 整组会被置灰/隐藏。驱动子项（{@code LocalDataSourceManager$2}）自身无 update 门，
- * {@code actionPerformed} 只读构造期捕获字段（driver + consumer），逐项取出照常可用。</p>
+ * {@code DatabaseView.DATABASE_VIEW_KEY}（javap 实证）——我们的弹层永远没有这个 key，
+ * 整组会被置灰/隐藏。驱动子项自身无 update 门，actionPerformed 只读构造期捕获字段，逐项取出照常可用。</p>
  *
- * <p><b>反射隔离</b>：全部 {@code com.intellij.database.*} 经 {@code Class.forName}；Community / 平台类缺席时
- * {@link #isAvailable} 返回 false，调用方按 D-3 隐藏条目（不显示置灰死项，也不报错）。</p>
- *
- * <p>k2j 移植说明：master 侧为 {@code execute/NewDataSourceEntry.kt}（internal object）——object 落
- * 静态形态 final 类；{@code availabilityForTest} 函数类型落 {@code Function1<Project, Boolean>}
- * （禁 Supplier/Predicate，Kotlin 调用方不做 SAM 转换）。</p>
+ * <p><b>反射隔离</b>：全部 {@code com.intellij.database.*} 经 {@code Class.forName}；Community /
+ * 平台类缺席时 {@link #isAvailable} 返回 false，调用方按 D-3 隐藏条目（不显示置灰死项，也不报错）。</p>
  */
 public final class NewDataSourceEntry {
 
@@ -55,16 +54,20 @@ public final class NewDataSourceEntry {
     private static final String DS_MANAGER_DIALOG_CLASS = "com.intellij.database.view.ui.DataSourceManagerDialog";
 
     /** Class 缓存（F68a 同款：负缓存用 Optional，Community 下 forName 恒抛只付一次）。 */
-    private static final ConcurrentHashMap<String, Optional<Class<?>>> classCache = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, Optional<Class<?>>> CLASS_CACHE = new ConcurrentHashMap<>();
+
+    /** Kotlin object 语义兼容实例。 */
+    public static final NewDataSourceEntry INSTANCE = new NewDataSourceEntry();
 
     private NewDataSourceEntry() {
     }
 
-    private static Class<?> cls(String fqcn) {
-        return classCache.computeIfAbsent(fqcn, key -> {
+    @Nullable
+    private static Class<?> cls(@NotNull String fqcn) {
+        return CLASS_CACHE.computeIfAbsent(fqcn, name -> {
             try {
-                return Optional.of(Class.forName(key));
-            } catch (Throwable ignored) {
+                return Optional.ofNullable(Class.forName(name));
+            } catch (Throwable t) {
                 return Optional.empty();
             }
         }).orElse(null);
@@ -73,39 +76,36 @@ public final class NewDataSourceEntry {
     /** 驱动子项投影（原生组子项的 名称/图标/动作 三元组）。 */
     public static final class DriverItem {
         public final String text;
+        @Nullable
         public final Icon icon;
-        final AnAction action;
+        @NotNull
+        public final AnAction action;
 
-        public DriverItem(String text, Icon icon, AnAction action) {
+        DriverItem(@NotNull String text, @Nullable Icon icon, @NotNull AnAction action) {
             this.text = text;
             this.icon = icon;
             this.action = action;
         }
     }
 
-    /**
-     * 测试缝：强制覆盖可用性判定（沙盒测试环境没有 Database 插件时默认恒 false，
-     * 用例无法走「末尾添加项」断言）。命名照仓内 {@code unknownTargetQueryConfirmationForTest} 惯例。
-     */
-    public static volatile Function1<Project, Boolean> availabilityForTest = null;
+    /** 测试缝：强制覆盖可用性判定（沙盒测试环境没有 Database 插件时默认恒 false）。 */
+    @Nullable
+    public static volatile Function<Project, Boolean> availabilityForTest = null;
 
     /** 平台「新建数据源」入口是否可用。决定列表是否显示「添加数据源…」（D-3：隐藏而非置灰）。 */
-    public static boolean isAvailable(Project project) {
-        Function1<Project, Boolean> override = availabilityForTest;
-        if (override != null) {
-            Boolean result = override.invoke(project);
-            if (result != null) return result;
-        }
-        return nativeDatabasePresent();
+    public static boolean isAvailable(@NotNull Project project) {
+        Function<Project, Boolean> override = availabilityForTest;
+        return override != null ? override.apply(project) : nativeDatabasePresent();
     }
 
     /**
      * Database 插件是否在位——<b>只做类可达判定，不展开原生动作组</b>。
      *
-     * <p>D8（真机 2026.11.12 2026.3 日志）：本方法被菜单更新路径（{@code ChooseDataSourceTakeoverGroup.getChildren}）
-     * 调用，原本在里面调 {@code ActionGroup.getChildren(null)} 展开驱动组；2026.3 平台把这种手写展开记为
-     * <b>插件错误</b>并抛 {@code Throwable: Do not call getChildren(null). Do not expand action groups manually.}
-     * （{@code DefaultActionGroup.reportGetChildrenForNullEvent}）。菜单更新是高频路径，不能在这里展开组。</p>
+     * <p>D8（真机 2026.11.12 2026.3 日志）：本方法被菜单更新路径（ChooseDataSourceTakeoverGroup 的
+     * getChildren）调用，原本在里面调 {@code ActionGroup.getChildren(null)} 展开驱动组；2026.3 平台
+     * 把这种手写展开记为<b>插件错误</b>并抛
+     * {@code Throwable: Do not call getChildren(null). Do not expand action groups manually.}
+     * （DefaultActionGroup.reportGetChildrenForNullEvent）。菜单更新是高频路径，不能在这里展开组。</p>
      */
     private static boolean nativeDatabasePresent() {
         return cls(LOCAL_DS_CLASS) != null && cls(DS_MANAGER_CLASS) != null && cls(DB_VIEW_ACTIONS_CLASS) != null;
@@ -117,7 +117,7 @@ public final class NewDataSourceEntry {
      * <p>驱动组不可用（空 / 反射失败）时按计划 §四 D-4 降级：直开「数据源和驱动程序」窗口。
      * 返回 false = 两条路都没走通（只记日志，不抛——列表动作不允许把异常漏给 UI）。</p>
      */
-    public static boolean openCreatePopup(Project project, java.awt.Component anchor) {
+    public static boolean openCreatePopup(@NotNull Project project, @Nullable Component anchor) {
         List<DriverItem> actions = buildNativeDriverActions(project);
         if (actions != null && !actions.isEmpty()) {
             try {
@@ -129,11 +129,13 @@ public final class NewDataSourceEntry {
                     }
 
                     @Override
+                    @Nullable
                     public Icon getIconFor(DriverItem value) {
                         return value.icon;
                     }
 
                     @Override
+                    @Nullable
                     public PopupStep<?> onChosen(DriverItem value, boolean finalChoice) {
                         return doFinalStep(() -> {
                             try {
@@ -141,7 +143,7 @@ public final class NewDataSourceEntry {
                                 // place 随意给一个合法串即可。
                                 value.action.actionPerformed(AnActionEvent.createFromAnAction(
                                         value.action, null, "MpSqlVisualizer",
-                                        (DataContext) dataId -> null));
+                                        DataContext.EMPTY_CONTEXT));
                             } catch (Throwable e) {
                                 LOG.warn("[DsList][AddSource] driver pick FAILED: "
                                         + e.getClass().getSimpleName() + ": " + e.getMessage());
@@ -149,8 +151,7 @@ public final class NewDataSourceEntry {
                         });
                     }
                 };
-                com.intellij.openapi.ui.popup.JBPopup popup =
-                        JBPopupFactory.getInstance().createListPopup(step);
+                var popup = JBPopupFactory.getInstance().createListPopup(step);
                 if (anchor != null && anchor.isShowing()) {
                     popup.showUnderneathOf(anchor);
                 } else {
@@ -159,33 +160,36 @@ public final class NewDataSourceEntry {
                 LOG.info("[DsList][AddSource] native driver popup shown (" + actions.size() + " drivers)");
                 return true;
             } catch (Throwable e) {
-                LOG.warn("[DsList][AddSource] driver popup FAILED: "
-                        + e.getClass().getSimpleName() + ": " + e.getMessage());
+                LOG.warn("[DsList][AddSource] driver popup FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage());
             }
         }
         return openManagerDialog(project);
     }
 
-    /** D-4 降级路：直开「数据源和驱动程序」窗口（{@code showDialog(Project, Object, DatabaseCredentials)}）。 */
-    private static boolean openManagerDialog(Project project) {
+    /** D-4 降级路：直开「数据源和驱动程序」窗口（showDialog(Project, Object, DatabaseCredentials)）。 */
+    private static boolean openManagerDialog(@NotNull Project project) {
         try {
             Class<?> dialogClass = cls(DS_MANAGER_DIALOG_CLASS);
-            if (dialogClass == null) return false;
-            Method method = null;
-            for (Method m : dialogClass.getMethods()) {
-                if (m.getName().equals("showDialog") && m.getParameterTypes().length == 3
-                        && m.getParameterTypes()[0] == Project.class) {
-                    method = m;
+            if (dialogClass == null) {
+                return false;
+            }
+            java.lang.reflect.Method method = null;
+            for (java.lang.reflect.Method candidate : dialogClass.getMethods()) {
+                if ("showDialog".equals(candidate.getName())
+                        && candidate.getParameterTypes().length == 3
+                        && candidate.getParameterTypes()[0] == Project.class) {
+                    method = candidate;
                     break;
                 }
             }
-            if (method == null) return false;
+            if (method == null) {
+                return false;
+            }
             method.invoke(null, project, null, null);
             LOG.info("[DsList][AddSource] fallback: DataSourceManagerDialog opened");
             return true;
         } catch (Throwable e) {
-            LOG.warn("[DsList][AddSource] manager dialog FAILED: "
-                    + e.getClass().getSimpleName() + ": " + e.getMessage());
+            LOG.warn("[DsList][AddSource] manager dialog FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage());
             return false;
         }
     }
@@ -194,63 +198,64 @@ public final class NewDataSourceEntry {
      * 取平台驱动组的子项投影。null = 平台不可用/反射失败（调用方隐藏条目）。
      * 空列表按 null 处理（空组渲染出来也是空弹层）。
      */
-    private static List<DriverItem> buildNativeDriverActions(Project project) {
+    @Nullable
+    private static List<DriverItem> buildNativeDriverActions(@NotNull Project project) {
         Class<?> localDsClass = cls(LOCAL_DS_CLASS);
-        if (localDsClass == null) return null;
         Class<?> managerClass = cls(DS_MANAGER_CLASS);
-        if (managerClass == null) return null;
         Class<?> dbActionsClass = cls(DB_VIEW_ACTIONS_CLASS);
-        if (dbActionsClass == null) return null;
-        com.intellij.util.Consumer<Object> consumer = new OnCreatedConsumer(project);
+        if (localDsClass == null || managerClass == null || dbActionsClass == null) {
+            return null;
+        }
+        Consumer<Object> consumer = new OnCreatedConsumer(project);
         AnAction group;
         try {
             Object manager = managerClass
                     .getMethod("byDataSource", Project.class, Class.class)
                     .invoke(null, project, localDsClass);
-            Method method = dbActionsClass.getMethod(
+            java.lang.reflect.Method method = dbActionsClass.getMethod(
                     "getCreateDataSourceAction",
-                    managerClass, Project.class, String.class, Boolean.TYPE,
-                    com.intellij.util.Consumer.class);
+                    managerClass, Project.class, String.class, boolean.class, Consumer.class);
             // 第 4 参 false：不附加 Separator 与「from URL/path」等工具窗专属项（javap 实证该开关语义）
-            group = (AnAction) method.invoke(null, manager, project, "", false, consumer);
-        } catch (Throwable ignored) {
+            group = method.invoke(null, manager, project, "", false, consumer) instanceof AnAction action
+                    ? action : null;
+        } catch (Throwable t) {
+            group = null;
+        }
+        if (!(group instanceof ActionGroup actionGroup)) {
             return null;
         }
-        if (!(group instanceof ActionGroup)) return null;
-        ActionGroup actionGroup = (ActionGroup) group;
-        // D8（2026.3 平台实证）：`getChildren(null)` 已被平台禁止——`DefaultActionGroup.reportGetChildrenForNullEvent`
-        // 会抛 `Throwable: Do not call getChildren(null). Do not expand action groups manually.`，
-        // IDE 直接记一条插件错误。这里传一个**真实的事件对象**（不是 null），并把这条路径限制在
-        // 用户点击「添加数据源…」时执行（`isAvailable` 已改为纯类可达判定，不再展开组）。
-        AnAction[] children;
+        // D8（2026.3 平台实证）：getChildren(null) 已被平台禁止——传一个**真实的事件对象**（不是 null），
+        // 并把这条路径限制在用户点击「添加数据源…」时执行（isAvailable 已改为纯类可达判定，不再展开组）。
+        AnActionEvent event = AnActionEvent.createFromDataContext("MpSqlVisualizer", null, DataContext.EMPTY_CONTEXT);
+        List<AnAction> children;
         try {
-            AnActionEvent event = AnActionEvent.createFromDataContext("MpSqlVisualizer", null, DataContext.EMPTY_CONTEXT);
-            children = actionGroup.getChildren(event);
-        } catch (Throwable ignored) {
+            children = List.of(actionGroup.getChildren(event));
+        } catch (Throwable t) {
             return null;
         }
-        if (children == null) return null;
-        List<DriverItem> items = new ArrayList<>(children.length);
+        List<DriverItem> items = new ArrayList<>(children.size());
         for (AnAction action : children) {
-            String text = null;
+            String text;
             try {
                 text = action.getTemplatePresentation().getText();
-            } catch (Throwable ignored) {
-                // getOrNull 语义
+            } catch (Throwable t) {
+                text = null;
             }
-            if (text == null) {
+            if (text == null || text.isBlank()) {
                 try {
                     text = action.getTemplateText();
-                } catch (Throwable ignored) {
-                    // getOrNull 语义
+                } catch (Throwable t) {
+                    text = null;
                 }
             }
-            if (text == null || text.isBlank()) continue;
-            Icon icon = null;
+            if (text == null || text.isBlank()) {
+                continue;
+            }
+            Icon icon;
             try {
                 icon = action.getTemplatePresentation().getIcon();
-            } catch (Throwable ignored) {
-                // getOrNull 语义
+            } catch (Throwable t) {
+                icon = null;
             }
             items.add(new DriverItem(text, icon, action));
         }
@@ -258,42 +263,50 @@ public final class NewDataSourceEntry {
     }
 
     /**
-     * 平台回调：用户在原生属性对话框确认后收到新建的 {@code DbDataSource}。
+     * 平台回调：用户在原生属性对话框确认后收到新建的 DbDataSource。
      *
-     * <p>P-5（未证，真机验收核）：回调时机按「对话框 OK 之后、数据源已注册」对待——
-     * 因此自动切换前先核 {@code DataSourceStorage} 里确实在册，防「对话框一打开就回调」
-     * 的口径把预览切到一个还没配完的空源上。</p>
+     * <p>P-5（未证，真机验收核）：回调时机按「对话框 OK 之后、数据源已注册」对待——因此自动切换前
+     * 先核 DataSourceStorage 里确实在册，防「对话框一打开就回调」的口径把预览切到一个还没配完的空源上。</p>
      *
      * <p>D-1（用户未拍板，按计划建议执行）：建源成功自动切到新源——复用换源链
      * （清 pin + 全源枚举 + 只重建控制台，不提交 SQL，执行仍走「执行 SQL」入口过闸）。</p>
      */
-    private static final class OnCreatedConsumer implements com.intellij.util.Consumer<Object> {
+    private static final class OnCreatedConsumer implements Consumer<Object> {
+
         private final Project project;
 
-        OnCreatedConsumer(Project project) {
+        OnCreatedConsumer(@NotNull Project project) {
             this.project = project;
         }
 
         @Override
-        public void consume(Object created) {
+        public void consume(@Nullable Object created) {
+            if (created == null) {
+                return;
+            }
             try {
                 Object local = DataSourceSettings.resolveLocalDataSource(created);
                 String name = local != null ? DataSourceSettings.nameOrNull(local) : null;
                 boolean registered = false;
                 if (local != null) {
-                    String uid = DataSourceSettings.getUniqueId(local);
-                    registered = uid != null && DataSourceSettings.getDataSourceById(project, uid) != null;
+                    String id = DataSourceSettings.getUniqueId(local);
+                    registered = id != null && DataSourceSettings.getDataSourceById(project, id) != null;
                 }
                 LOG.info("[DsList][AddSource] platform onCreated: name=" + name + ", registered=" + registered
                         + ", class=" + created.getClass().getName());
-                if (name == null || name.isBlank() || !registered) return;
-                cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel panel =
-                        cn.song.mybatisplus.visualizer.ui.SqlPreviewService.activePreviewPanel(project);
-                if (panel == null) return;
+                if (name == null || name.isBlank() || !registered) {
+                    return;
+                }
+                SqlPreviewPanel panel = SqlPreviewService.activePreviewPanel(project);
+                if (panel == null) {
+                    return;
+                }
                 com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater(() -> {
-                    if (project.isDisposed()) return;
+                    if (project.isDisposed()) {
+                        return;
+                    }
                     try {
-                        cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelExecutionKt.switchDataSourceTo(panel, name);
+                        SqlPreviewPanelExecutionKt.switchDataSourceTo(panel, name);
                     } catch (Throwable e) {
                         LOG.warn("[DsList][AddSource] auto-switch to '" + name + "' FAILED: "
                                 + e.getClass().getSimpleName() + ": " + e.getMessage());

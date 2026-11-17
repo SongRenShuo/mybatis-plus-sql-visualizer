@@ -100,10 +100,7 @@ public final class SqlPreviewPanelEditorLifecycleKt {
                 File io = projectPreviewFile(p);
                 if (io == null) {
                     p.prewarmFailed = true;
-                    // T-DegradedPreviewUx P0：失败带原因分型——消费侧（degradationReasonOrNull）
-                    // 据此选文案与宽限期，不再靠字符串猜原因
-                    await.fail(new PreviewPrewarmException(
-                            PreviewDegradationReason.FILE_UNAVAILABLE, "project preview file unavailable"));
+                    await.fail(new IllegalStateException("project preview file unavailable"));
                     LOG.warn("[M36] prewarm FAILED in " + prewarmElapsedMs(p, prewarmStartedAt)
                             + "ms: project preview file unavailable (project/basePath null or mkdirs false)");
                     return;
@@ -119,10 +116,7 @@ public final class SqlPreviewPanelEditorLifecycleKt {
                 }
                 if (vf == null) {
                     p.prewarmFailed = true;
-                    // T-DegradedPreviewUx P0：失败带原因分型
-                    await.fail(new PreviewPrewarmException(
-                            PreviewDegradationReason.VFS_UNAVAILABLE,
-                            "VFS refresh null after " + (retries + 1) + " tries"));
+                    await.fail(new IllegalStateException("VFS refresh null after " + (retries + 1) + " tries"));
                     LOG.warn("[M36] prewarm FAILED in " + prewarmElapsedMs(p, prewarmStartedAt)
                             + "ms: VFS refresh null after " + (retries + 1) + " tries (" + io.getPath()
                             + ", exists=" + io.exists() + ")");
@@ -171,10 +165,7 @@ public final class SqlPreviewPanelEditorLifecycleKt {
                         return;
                     }
                     p.prewarmFailed = true;
-                    // T-DegradedPreviewUx P0：失败带原因分型
-                    await.fail(new PreviewPrewarmException(
-                            PreviewDegradationReason.PSI_UNAVAILABLE,
-                            "PsiManager.findFile null for " + vf.getName()));
+                    await.fail(new IllegalStateException("PsiManager.findFile null for " + vf.getName()));
                     LOG.warn("[M36] prewarm FAILED in " + prewarmElapsedMs(p, prewarmStartedAt)
                             + "ms: PsiManager.findFile null for " + vf.getName());
                     return;
@@ -284,72 +275,6 @@ public final class SqlPreviewPanelEditorLifecycleKt {
     }
 
     /**
-     * 13.12：预览落点兜底的「只提示一次」闸门（按面板实例持有，抽成类型以便纯逻辑用例直测）。
-     *
-     * <p>为什么要去重：落点判定会在每次预览/预热时跑，若每次都弹一条提示就变成新的噪音源；
-     * 用户只需要知道「这个项目我改用了备用落点、以及怎么改回来」一次。</p>
-     */
-    public static final class PreviewFallbackNoticeGate {
-        private final java.util.concurrent.atomic.AtomicBoolean notified =
-                new java.util.concurrent.atomic.AtomicBoolean(false);
-
-        /** @return true = 本次是首个调用方（应当提示）；后续调用 false */
-        public boolean shouldNotify() {
-            return notified.compareAndSet(false, true);
-        }
-    }
-
-    /**
-     * 13.12：预览临时目录改写到项目根时，给一条<b>只出现一次</b>的告知 + 蓝字入口。
-     *
-     * <p>与执行侧的差别（用户 2026-11-11 定案「兜底不得抢在提示前面」的延伸）：执行是阻断性失败，
-     * 必须让用户选；预览的失败形态是<b>功能降级</b>，所以这里自动兜底保证预览可用，但<b>不再静默</b>——
-     * 明确告诉用户「你项目里 .idea 这层建不出 PSI，我已经改写到项目根」，并给去修配置的入口。</p>
-     */
-    public static void notifyPreviewRootFallbackOnce(@NotNull SqlPreviewPanel p, @NotNull Project proj,
-                                                     @NotNull cn.song.mybatisplus.visualizer.execute.ExecPsiFailureHint.ExecPsiFailureCause cause) {
-        if (!p.previewFallbackNoticeGate.shouldNotify()) return;
-        String settingsLabel;
-        String settingsTip;
-        Runnable settingsAction;
-        switch (cause) {
-            case IGNORED_BY_FILE_TYPES:
-            case IGNORED_BY_VCS:
-            case DIR_NOT_INDEXED: {
-                // 2026-11-11 用户定案：不引导改 `.gitignore`（忽略 `.idea/` 是正常设置），
-                // 忽略模式统一指向 Settings → Editor → File Types。
-                // F5：目录级探针判否（文件级谓词全绿的那种形态）——入口同上，指向忽略模式设置页
-                settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes");
-                settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes.tip");
-                settingsAction = () -> SqlPreviewPanelExecutionKt.openFileTypesSettings(proj);
-                break;
-            }
-            // 排除 / 方言 / 未识别语言：没有稳定的设置入口或与落点无关，只给告知
-            default: {
-                settingsLabel = null;
-                settingsTip = null;
-                settingsAction = null;
-                break;
-            }
-        }
-        Runnable show = () -> {
-            if (!p.previewDisposed) {
-                p.resultPanel.showStatusWithActions(
-                        MpSqlVisualizerBundle.message("preview.tempDir.fallback.notice"),
-                        null, null, null,
-                        settingsLabel, settingsTip, settingsAction,
-                        null, true);
-            }
-        };
-        if (ApplicationManager.getApplication().isDispatchThread()) {
-            show.run();
-        } else {
-            ApplicationManager.getApplication().invokeLater(
-                    show, com.intellij.openapi.application.ModalityState.nonModal());
-        }
-    }
-
-    /**
      * T-PreviewExecDs-01a：项目内预览临时文件——{@code <project>/.idea/sql-visualizer/preview/}。
      * 独立子目录（exec/ 互不污染，同 M36.5.13 语义）。VFS 安全写入三态（document 驱动 &gt;
      * setBinaryContent &gt; FileUtil 兜底），杜绝 MemoryDiskConflictResolver 的 File Cache Conflict 弹窗。
@@ -364,35 +289,10 @@ public final class SqlPreviewPanelEditorLifecycleKt {
         if (proj == null) return null;
         String base = proj.getBasePath();
         if (base == null) return null;
-        // T-ExecPsiGate R6：2026.3 起平台对「父目录不在内容模型里」的文件不建 PSI
-        // （`AbstractFileViewProvider.shouldCreatePsi`）。`.idea` 被 excluded 的项目里，
-        // 预览临时文件会因此拿不到 PSI（表现为「临时文件解析失败」降级横幅），故先探一次，
-        // 探不过就换到项目根 `.sql-visualizer/preview/`（仍在内容根内、不在 `.idea` 下）。
-        File ideaDir = new File(
+        File dir = new File(
                 base,
                 ".idea" + File.separator + cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME
                         + File.separator + "preview");
-        // 13.12：切成因判定——「探不过」有四种原因，告知文案与蓝字入口要跟着变
-        cn.song.mybatisplus.visualizer.execute.ExecPsiFailureHint.ExecPsiFailureCause fallbackCause;
-        try {
-            fallbackCause = cn.song.mybatisplus.visualizer.execute.DataSourceSelectorResultsKt
-                    .execDirFailureCause(proj, ideaDir);
-        } catch (Throwable t) { // master runCatching.getOrNull 语义
-            fallbackCause = null;
-        }
-        if (fallbackCause != null) notifyPreviewRootFallbackOnce(p, proj, fallbackCause);
-        File dir;
-        if (fallbackCause == null) {
-            dir = ideaDir;
-        } else {
-            dir = new File(base, ".sql-visualizer" + File.separator + "preview");
-            try {
-                File ignore = new File(base, ".sql-visualizer" + File.separator + ".gitignore");
-                if (!ignore.exists()) java.nio.file.Files.writeString(ignore.toPath(), "*\n");
-            } catch (Throwable ignored) {
-                // master runCatching 降级语义
-            }
-        }
         if (!dir.exists() && !dir.mkdirs()) return null;
         // T-PerfSweep6 T-PS6-04（发现 4）：本面板首次解析预热目录时做一次目录级兜底清扫
         // （年龄 > 7 天 / 条数 > 200），只认本插件自有命名——见 {@link #sweepStalePreviewFiles}。
@@ -480,9 +380,7 @@ public final class SqlPreviewPanelEditorLifecycleKt {
         // ClassCastException → PSI 建不出来 → 整条预览降级（真机 262 实证，10/10 次）。
         // 注册面已在 database-optional.xml 成对补齐；这里留一道保险：将来再漏一个，最差是「这次不映射、
         // 补全按 GenericSQL 走」，不再拖垮整条预览。
-        // T-ExecPsiGate（2026-11-10）：判据提到 sql 包（SqlPsiCapabilityKt.canCreateSqlPsiFor），
-        // preview 链与 exec 链共用一份，避免再次分叉。
-        if (!cn.song.mybatisplus.visualizer.sql.SqlPsiCapabilityKt.canCreateSqlPsiFor(targetLanguage)) {
+        if (!canCreateSqlPsiFor(targetLanguage)) {
             Logger.getInstance(SqlPreviewPanel.class).info(
                     "[T-PreviewPsiDialect] skip dialect mapping for '" + desiredName + "': language '"
                             + (targetLanguage instanceof com.intellij.lang.Language language
@@ -594,6 +492,47 @@ public final class SqlPreviewPanelEditorLifecycleKt {
         }
     }
 
+    /**
+     * T-PreviewPsiDialect：该语言能否建出 SQL PSI（master 顶层 internal 函数的静态承载）。
+     *
+     * <p>判据取自平台行为本身——{@code SqlParserDefinitionBase.createFile} 要求
+     * {@code getFileNodeType().getLanguage()} 是 {@code SqlLanguageDialect}。所以直接查「当前生效的
+     * ParserDefinition 的 file node type 绑定的语言是不是 SQL 方言」。平台内置方言
+     * （MySQL / PostgreSQL / GenericSQL / SQL92）与补齐后的四个自注册方言都返回 true；
+     * 只有回落到基语言 {@code SQL} 的实现返回 false。</p>
+     *
+     * <p><b>刻意不静态引用 {@code com.intellij.sql.*}</b>：本文件属常驻加载面，DatabaseTools 是可选依赖，
+     * 直接引用会让无 Database 插件的环境类加载失败。故按类名沿继承链判定。</p>
+     */
+    public static boolean canCreateSqlPsiFor(Object language) {
+        if (!(language instanceof com.intellij.lang.Language)) {
+            return false;
+        }
+        try {
+            com.intellij.lang.Language lang = (com.intellij.lang.Language) language;
+            Object fileNodeLanguage = com.intellij.lang.LanguageParserDefinitions.INSTANCE
+                    .forLanguage(lang).getFileNodeType().getLanguage();
+            return isSqlLanguageDialectInstance(fileNodeLanguage);
+        } catch (Throwable t) {
+            return false; // runCatching{...}.getOrDefault(false) 语义
+        }
+    }
+
+    /** 按类名沿父类链判断（{@code SqlLanguageDialect} 是抽象类，不是接口）。 */
+    private static boolean isSqlLanguageDialectInstance(Object language) {
+        if (language == null) {
+            return false;
+        }
+        Class<?> c = language.getClass();
+        while (c != null) {
+            if ("com.intellij.sql.dialects.SqlLanguageDialect".equals(c.getName())) {
+                return true;
+            }
+            c = c.getSuperclass();
+        }
+        return false;
+    }
+
     /** 默认预算 400ms 重载（master 默认参数）。 */
     public static PsiFile awaitPreviewPsiLanguage(@NotNull SqlPreviewPanel p, @NotNull Project proj,
                                                   @NotNull VirtualFile vf, @NotNull String targetLanguageId)
@@ -690,25 +629,13 @@ public final class SqlPreviewPanelEditorLifecycleKt {
 
     /**
      * T-PerfTail #2：编辑器装配（原 createEditor 后半抽取，同步主路径与异步回调共用同一收口）。
-     * Kotlin 默认参数 {@code reason = null} 的等价重载。
-     */
-    public static void assemblePreviewEditor(@NotNull SqlPreviewPanel p, @NotNull String sql,
-                                             @Nullable Pair<VirtualFile, PsiFile> prewarmed) {
-        assemblePreviewEditor(p, sql, prewarmed, null);
-    }
-
-    /**
-     * T-PerfTail #2：编辑器装配（原 createEditor 后半抽取，同步主路径与异步回调共用同一收口）。
      *
      * @param prewarmed 预热产物（项目内文件 + PSI）；null → 降级链（内存 PSI → 裸 document）。
      *   主路径对 {@code prewarmedTempFile} 做**一次性消费**（同引用校验）——releaseEditor 后二次
      *   createEditor 时产物已被消费，与原 await 一次性语义一致地走降级。
-     * @param reason 调用方已知的降级原因（T-DegradedPreviewUx P0：异步回调分支据此分型披露）；
-     *   null 时按 {@code prewarmAwait} 终态推断，仍无结论归 PRODUCT_CONSUMED。
      */
     public static void assemblePreviewEditor(@NotNull SqlPreviewPanel p, @NotNull String sql,
-                                             @Nullable Pair<VirtualFile, PsiFile> prewarmed,
-                                             @Nullable PreviewDegradationReason reason) {
+                                             @Nullable Pair<VirtualFile, PsiFile> prewarmed) {
         Project proj = p.project;
         FileType sqlFileType = FileTypeManager.getInstance().getStdFileType("SQL");
         Document doc;
@@ -720,29 +647,20 @@ public final class SqlPreviewPanelEditorLifecycleKt {
                 p.prewarmedTempFile = null;
                 try {
                     VirtualFile vFile = prewarmed.getFirst();
-                    // T-DegradedPreviewUx P4：不复用预热线程捕获的 PSI 实例——方言映射切换会让平台
-                    // 异步重解析该文件并作废旧实例（真机 16:14:33 日志：prewarm done 后紧接 Reparsing
-                    // MySQL->PostgreSQL）。装配时按文件重取当前 PSI，是这条竞态的最后一道兜底。
-                    PsiFile currentPsi = ReadAction.compute(
-                            (com.intellij.openapi.util.ThrowableComputable<PsiFile, Throwable>) () ->
-                                    PsiManager.getInstance(proj).findFile(vFile));
-                    if (currentPsi == null) throw new IllegalStateException("preview PSI unavailable after dialect remap");
+                    PsiFile psi = prewarmed.getSecond();
                     // T-PreviewUx-Pack #2：主路径成功——清除降级横幅
-                    // T-PrewarmLateRecover F2：动作一并摘除（横幅已清，留着会被后续 RENDER_WARNING 继承）
+                    // T-PrewarmLateRecover F2：动作一并摘除
                     p.degradationBanner.onRetry = null;
-                    // T-DegradedPreviewUx P1：主路径装配成功 = 降级已恢复——宽限定时器必须取消，
-                    // 否则到点还会把过期横幅弹出来（瞬时超时场景的横幅一次都不该出现）
-                    cancelDegradedGraceTimer(p);
                     p.degradationBanner.clear(DegradationBanner.Kind.DEGRADED);
                     // T-PrewarmLateRecover F1：主路径装配 → 当前文档不再属于降级态
                     p.degradedPreviewDocument = null;
                     p.previewTempFile = vFile;
-                    p.psiFile = currentPsi;
+                    p.psiFile = psi;
                     // T-PreviewDocLock：262 平台给「PSI 文件 → 文档」解析加了运行期读权限断言，故 EDT 上
                     // 同步执行 ReadAction，语义不变。约束：lambda 内只能做纯内存模型读。
                     Document d = ReadAction.compute(
                             (com.intellij.openapi.util.ThrowableComputable<Document, Throwable>) () ->
-                                    PsiDocumentManager.getInstance(proj).getDocument(currentPsi));
+                                    PsiDocumentManager.getInstance(proj).getDocument(psi));
                     if (d == null) throw new IllegalStateException("临时 SQL 文件无关联文档");
                     // T-M36.6-03：预热文件为占位空内容 → 首次装配按实际 SQL 填充并同步 PSI
                     if (!d.getText().equals(sql)) {
@@ -754,28 +672,11 @@ public final class SqlPreviewPanelEditorLifecycleKt {
                     }
                     doc = d;
                 } catch (Throwable t) {
-                    // T-DegradedPreviewUx P0：主路径产物在途失败（文档解析/写入异常）——真实原因是 PSI 侧，
-                    // 不沿用 await 的终态（此刻 await 可能已成功）
-                    // T-DegradedPreviewUx P4：此前该异常只传到二级降级的 msg、仅第三级才落日志，
-                    // 二级降级时（真机首开形态）原因完全不可见——这里补一行不含 SQL 的 WARN 便于取证。
-                    Logger.getInstance(SqlPreviewPanel.class)
-                            .warn("[M36] preview main-path assembly FAILED: " + t.getClass().getSimpleName()
-                                    + ": " + t.getMessage());
-                    doc = fallbackPreviewDocument(p, sql, PreviewDegradationReason.PSI_UNAVAILABLE,
+                    doc = fallbackPreviewDocument(p, sql,
                             t.getMessage() != null ? t.getMessage() : t.getClass().getSimpleName());
                 }
             } else {
-                // T-DegradedPreviewUx P0：降级原因分型——调用方已知 → await 终态推断 → 兜底 PRODUCT_CONSUMED
-                PreviewDegradationReason degradedReason;
-                if (reason != null) {
-                    degradedReason = reason;
-                } else {
-                    PreviewDegradationReason fromAwait = p.prewarmAwait != null
-                            ? PreviewDegradationReasonKt.degradationReasonOrNull(p.prewarmAwait) : null;
-                    degradedReason = fromAwait != null ? fromAwait : PreviewDegradationReason.PRODUCT_CONSUMED;
-                }
-                doc = fallbackPreviewDocument(p, sql, degradedReason,
-                        "prewarmed product unavailable (timeout/failed/consumed)");
+                doc = fallbackPreviewDocument(p, sql, "prewarmed product unavailable (timeout/failed/consumed)");
             }
         } else {
             doc = null;
@@ -831,12 +732,11 @@ public final class SqlPreviewPanelEditorLifecycleKt {
      */
     @NotNull
     public static Document fallbackPreviewDocument(@NotNull SqlPreviewPanel p, @NotNull String sql,
-                                                   @NotNull PreviewDegradationReason reason,
                                                    @NotNull String msg) {
         // 第二级：内存 PSI（保留补全上下文载体）
         Document memoryPsiDoc = createInMemoryPreviewPsi(p, sql);
         if (memoryPsiDoc != null) {
-            showDegradedBanner(p, reason);
+            showDegradedBanner(p, "panel.banner.degradedPsi");
             p.degradedPreviewDocument = memoryPsiDoc;
             return memoryPsiDoc;
         }
@@ -844,74 +744,23 @@ public final class SqlPreviewPanelEditorLifecycleKt {
         Logger.getInstance(SqlPreviewPanel.class)
                 .warn("[M36] preview temp file unavailable, fall back to bare in-memory editor: " + msg);
         p.psiFile = null;
-        showDegradedBanner(p, PreviewDegradationReason.MEMORY_PSI_FAILED);
+        showDegradedBanner(p, "panel.banner.degradedPlain");
         Document doc = EditorFactory.getInstance().createDocument(sql);
         p.degradedPreviewDocument = doc;
         return doc;
     }
 
     /**
-     * T-DegradedPreviewUx P1：降级横幅按原因分档披露。
+     * T-PrewarmLateRecover F2：挂降级横幅并接上「重试」动作。
      *
-     * <ul>
-     *  <li>**超时**（产物仍在途）：先不显示，挂 {@link SqlPreviewPanel#DEGRADED_GRACE_MS} 宽限定时器；
-     *      产物在此期间到达，主路径装配会取消定时器并清横幅——瞬时降级全程不打扰。</li>
-     *  <li>**硬失败**：立即显示（原因短句 + 「重试」），不延迟。</li>
-     * </ul>
-     *
-     * <p>动作仍由 {@link #retryPrewarm} 承接（T-PrewarmLateRecover F2 语义不变）。</p>
+     * <p>动作覆盖的是 F1 够不到的那一类——预热**硬失败**（VFS refresh 失败 / findFile null /
+     * 项目内目录建不出来）：没有产物可等，只能由用户点一次重新臂预热。</p>
      */
-    public static void showDegradedBanner(@NotNull SqlPreviewPanel p, @NotNull PreviewDegradationReason reason) {
-        // 新一次降级判定：上一轮宽限定时器作废（避免旧 reason 到点弹出）
-        cancelDegradedGraceTimer(p);
+    public static void showDegradedBanner(@NotNull SqlPreviewPanel p, @NotNull String messageKey) {
         p.degradationBanner.onRetry = () -> retryPrewarm(p);
-        if (reason == PreviewDegradationReason.TIMEOUT) {
-            // 面板复用（clear → showResult）时上一轮的降级横幅可能还挂着：本轮是「待披露」态，
-            // 先收掉旧横幅，宽限期内保持静默，到点再按超时型显示。
-            p.degradationBanner.clear(DegradationBanner.Kind.DEGRADED);
-            p.degradedGraceReason = reason;
-            javax.swing.Timer timer = new javax.swing.Timer((int) SqlPreviewPanel.DEGRADED_GRACE_MS,
-                    e -> flushDegradedGrace(p));
-            timer.setRepeats(false);
-            p.degradedGraceTimer = timer;
-            timer.start();
-            return;
-        }
-        showDegradedBannerNow(p, reason);
-    }
-
-    /** 立即显示降级横幅（硬失败路径与宽限期到点的共同收口）。 */
-    public static void showDegradedBannerNow(@NotNull SqlPreviewPanel p, @NotNull PreviewDegradationReason reason) {
-        String causeKey = reason.causeKey();
-        String cause = causeKey != null ? MpSqlVisualizerBundle.message(causeKey) : null;
-        String text = cause == null
-                ? MpSqlVisualizerBundle.message(reason.bannerKey())
-                : MpSqlVisualizerBundle.message(reason.bannerKey(), cause);
-        // 宽度不足时正文会被裁——完整文案 + 降级期操作提示放 tooltip（不新造「详情」控件）
-        // UI-022：headless 下改参数/勾选条件重渲染正常（见 SqlPreviewPanelDegradedUxTest），
-        // 真实 GUI 表现仍待沙盒定位，故把「未生效时点重试」这条出路放在悬停提示里，不写进单行正文。
-        String tooltip = text + "\n" + MpSqlVisualizerBundle.message("panel.banner.degradedHint");
-        p.degradationBanner.show(DegradationBanner.Kind.DEGRADED, text, tooltip);
-    }
-
-    /** 宽限期到点：停表并显示超时型横幅（幂等；测试后门与 Timer 动作共用）。 */
-    public static void flushDegradedGrace(@NotNull SqlPreviewPanel p) {
-        PreviewDegradationReason pending = p.degradedGraceReason;
-        if (pending == null) return;
-        cancelDegradedGraceTimer(p);
-        if (p.previewDisposed) return;
-        // 宽限期内预热可能已经硬失败（VFS 重试走完仍 null 等）：重取一次终态，
-        // 避免把「永久失败」继续描述成「稍后会自动切换」。
-        PreviewDegradationReason fromAwait = p.prewarmAwait != null
-                ? PreviewDegradationReasonKt.degradationReasonOrNull(p.prewarmAwait) : null;
-        showDegradedBannerNow(p, fromAwait != null ? fromAwait : pending);
-    }
-
-    /** T-DegradedPreviewUx P1：停止并丢弃宽限定时器（幂等，四个收口点共用）。 */
-    public static void cancelDegradedGraceTimer(@NotNull SqlPreviewPanel p) {
-        if (p.degradedGraceTimer != null) p.degradedGraceTimer.stop();
-        p.degradedGraceTimer = null;
-        p.degradedGraceReason = null;
+        p.degradationBanner.show(
+                DegradationBanner.Kind.DEGRADED,
+                MpSqlVisualizerBundle.message(messageKey));
     }
 
     /**
@@ -1156,8 +1005,6 @@ public final class SqlPreviewPanelEditorLifecycleKt {
      * "Memory leak detected"）。</p>
      */
     public static void disposeCurrentEditorOnly(@NotNull SqlPreviewPanel p) {
-        // T-DegradedPreviewUx P1：编辑器被释放 = 当前降级装配作废，宽限定时器一并停（幂等）
-        cancelDegradedGraceTimer(p);
         Editor ed = p.editor;
         if (ed != null) {
             // T-M52：监听器由 Disposable 管理，dispose 即移除

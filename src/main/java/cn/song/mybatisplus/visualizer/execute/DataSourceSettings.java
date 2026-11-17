@@ -213,29 +213,33 @@ public final class DataSourceSettings implements PersistentStateComponent<DataSo
     // 「unknown 数据源」死项的根因（计划 §2.2，243 database-plugin.jar javap 实证）：
     // `DbImplUtil.getAllDataSourcesForExec(PsiFile)` 返回 `JBIterable<DbDataSource>`
     // （PSI 层包装），而既有取名链用 LocalDataSource 上的 Method 去反射 invoke →
-    // IllegalArgumentException → runCatching 吞掉 → 回落字面量 "Unknown"。
+    // IllegalArgumentException → 吞掉 → 回落字面量 "Unknown"。
     // 列表装配处改用下面两个入口：解析不出就丢弃条目，不再漏出 unknown。
     //
-    // 既有 getName 的 "Unknown" 回落**保持不动**：last-used 记忆链、`chosenRunnerName`
-    // 比对、方言闸门（ExecutionDialectGate）都依赖它返回非空串，语义面零变化。
+    // 既有 getName 的 "Unknown" 回落**保持不动**：last-used 记忆链、chosenRunnerName 比对、
+    // 方言闸门（ExecutionDialectGate）都依赖它返回非空串，语义面零变化。
 
-    /** DbDataSource 类名（PSI 层数据源包装；反射用，Community 缺席时返回 null）。master 侧常量名 {@code DB_DS_DELEGATE_METHOD}（存 delegate 取值方法名）。 */
+    /** DbDataSource 的 delegate 桥方法名（PSI 层数据源包装；反射用，Community 缺席时返回 null）。 */
     private static final String DB_DS_DELEGATE_METHOD = "getDelegate";
 
     /**
-     * 把任意平台数据源对象投影成 {@code LocalDataSource}。
+     * 把任意平台数据源对象投影成 LocalDataSource。
      *
-     * <p>{@code DbDataSource.getDelegate()}（桥方法返回 {@code RawDataSource}）解出内层原始源，
-     * 只有真 {@code LocalDataSource} 才认；本身已是 LocalDataSource 时原样返回。
+     * <p>{@code DbDataSource.getDelegate()}（桥方法返回 RawDataSource）解出内层原始源，
+     * 只有真 LocalDataSource 才认；本身已是 LocalDataSource 时原样返回。
      * 平台不可用 / delegate 缺失 / 内层不是 LocalDataSource → null。</p>
      */
     @Nullable
     public static Object resolveLocalDataSource(@NotNull Object ds) {
-        Class<?> localDsClass = cachedClass(LOCAL_DS_CLASS);
-        if (localDsClass != null && localDsClass.isInstance(ds)) return ds;
+        Class<?> localCls = cachedClass(LOCAL_DS_CLASS);
+        if (localCls != null && localCls.isInstance(ds)) {
+            return ds;
+        }
         try {
             Object delegate = ds.getClass().getMethod(DB_DS_DELEGATE_METHOD).invoke(ds);
-            if (delegate != null && localDsClass != null && localDsClass.isInstance(delegate)) return delegate;
+            if (delegate != null && localCls != null && localCls.isInstance(delegate)) {
+                return delegate;
+            }
             return null;
         } catch (Throwable ignored) {
             return null;
@@ -251,15 +255,17 @@ public final class DataSourceSettings implements PersistentStateComponent<DataSo
     @Nullable
     public static String nameOrNull(@NotNull Object ds) {
         Object local = resolveLocalDataSource(ds);
-        if (local == null) return null;
+        if (local == null) {
+            return null;
+        }
         try {
-            Class<?> cls = cachedClass(LOCAL_DS_CLASS);
-            if (cls == null) return null;
-            Method getNameMethod = cachedMethod(cls, "getName");
+            Method getNameMethod = cachedMethod(cachedClass(LOCAL_DS_CLASS), "getName");
             if (getNameMethod == null) return null;
             Object result = getNameMethod.invoke(local);
-            String name = result instanceof String ? (String) result : null;
-            return name != null && !name.isBlank() ? name : null;
+            if (result instanceof String name && !name.isBlank()) {
+                return name;
+            }
+            return null;
         } catch (Throwable ignored) {
             return null;
         }

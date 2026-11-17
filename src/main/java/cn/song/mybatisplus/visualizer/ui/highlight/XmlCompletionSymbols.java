@@ -378,9 +378,67 @@ public final class XmlCompletionSymbols {
      * 跨文件 {@code <sql id>} 候选（<b>带 {@code namespace.} 前缀</b>形态，W4-2 的 {@code refid} 跨文件）：
      * 项目内其它 XML 文件里根 {@code <mapper>} 的 {@code <sql id>}。
      *
-     * <p>索引来源 FileTypeIndex（XML 文件类型，<b>非全项目类扫描</b>）；dumb 态或索引不可用 → 空。</p>
+     * <p>T-IndexScanSweep2 P1（2026-11-16）起走<b>项目级名称清单服务</b>
+     * {@link XmlSymbolNameIndexCache}：一次构建、按索引状态失效、补全期<b>零 PSI 全扫</b>
+     * （改造前每次补全对最多 500 个 XML 建 PSI）。服务只维护「全项目」名称集，故本处再减去
+     * <b>当前文件自身</b>的 {@code ns.sqlId}（同文件片段由 localIds 以裸 id 形态补齐——与改造前
+     * 「按文件身份排除当前文件」同语义）。建好前 / dumb 态 → 空。</p>
+     *
+     * <p>边界（如实登记）：改造前按<b>文件身份</b>排除当前文件；现按<b>名字集合</b>排除——若两个
+     * 不同文件声明了同一 {@code ns.sqlId}（同 namespace 重名属工程错误）会被一并排除；无 namespace
+     * 的 mapper 文件（少见）其裸 id 亦按名字排除，可能连带排除他文件的同名裸 id。均为病态形态，
+     * 不改「正常工程逐项一致」。</p>
+     *
+     * <p>回退：Registry {@code sqlvis.completion.nameIndexCache=false} → {@link #legacyCrossFileSqlIds}
+     * （原现扫实现）。</p>
      */
     public static List<String> crossFileSqlIds(Project project, @Nullable XmlFile currentFile) {
+        try {
+            if (DumbService.isDumb(project)) return List.of();
+            XmlSymbolNameIndexCache service = XmlSymbolNameIndexCache.getInstance(project);
+            if (!service.isCacheEnabled()) {
+                return legacyCrossFileSqlIds(project, currentFile);
+            }
+            List<String> all = service.crossFileSqlIds();
+            if (all.isEmpty()) return List.of();
+            Set<String> own = ownSqlIds(currentFile);
+            LinkedHashSet<String> out = new LinkedHashSet<>();
+            for (String id : all) {
+                if (out.size() >= CAP) break;
+                if (own.contains(id)) continue;
+                out.add(id);
+            }
+            return List.copyOf(out);
+        } catch (Throwable t) {
+            return List.of();
+        }
+    }
+
+    /** 当前文件自身的 {@code ns.sqlId} 集（单文件活 PSI 读，廉价；无 namespace 时裸 id）。 */
+    private static Set<String> ownSqlIds(@Nullable XmlFile currentFile) {
+        try {
+            XmlTag root = currentFile != null ? currentFile.getRootTag() : null;
+            if (root == null || !root.getName().equals("mapper")) return Set.of();
+            String ns = root.getAttributeValue("namespace");
+            ns = ns != null && !ns.isBlank() ? ns : null;
+            LinkedHashSet<String> ids = new LinkedHashSet<>();
+            for (XmlTag sql : root.findSubTags("sql")) {
+                String id = sql.getAttributeValue("id");
+                if (id == null || id.isBlank()) continue;
+                ids.add(ns != null ? ns + "." + id : id);
+            }
+            return Set.copyOf(ids);
+        } catch (Throwable t) {
+            return Set.of();
+        }
+    }
+
+    /**
+     * 现扫实现（T-IndexScanSweep2 P1 前的原实现，<b>Registry 回退通道专用</b>，下一版删除）：
+     * {@code FileTypeIndex(XML)} 取全项目 XML → 逐个建 PSI → 取根 {@code <mapper>} 的 {@code <sql id>}，
+     * 按文件身份排除当前文件。
+     */
+    private static List<String> legacyCrossFileSqlIds(Project project, @Nullable XmlFile currentFile) {
         try {
             if (DumbService.isDumb(project)) return List.of();
             com.intellij.openapi.vfs.VirtualFile currentVf = currentFile != null ? currentFile.getVirtualFile() : null;
@@ -448,28 +506,48 @@ public final class XmlCompletionSymbols {
      * 缓存<b>挂在 project 上</b>（不是进程级单例字段）：原先用「进程级 @Volatile stamp/value +
      * 比当前 project 的 modificationCount」，多项目 IDE 里两个 project 的计数撞上时会互相读到
      * 对方的缓存值（本轮补测发现的结构性缺陷，已改）。挂 project 后随 project 一起回收，无泄漏。
+     * （现仅服务于 Registry 回退通道 {@link #legacyConfigPropertyKeys}。）
      */
     private static final Key<Long> PROPS_CACHE_STAMP = Key.create("MPSV_CONFIG_PROPERTIES_CACHE_STAMP");
 
     private static final Key<List<String>> PROPS_CACHE_VALUE = Key.create("MPSV_CONFIG_PROPERTIES_CACHE_VALUE");
 
     /**
-     * 全项目 mybatis-config.xml {@code <properties>} 的 key 聚合（<b>带缓存</b>：按
-     * {@code PsiModificationTracker.modificationCount} 失效，缓存挂 project）。
+     * 全项目 mybatis-config.xml {@code <properties>} 的 key 聚合（T-IndexScanSweep2 P1（2026-11-16）起走
+     * <b>项目级名称清单服务</b> {@link XmlSymbolNameIndexCache}：一次构建、按索引状态失效、补全期零 PSI 全扫；
+     * 建好前 / dumb 态 → 空）。
      *
      * <p>key 口径<b>以 MyBatis 实现为准</b>（XMLConfigBuilder.propertiesElement →
      * XNode.getChildrenAsProperties()，mybatis 3.5.19 sources 实读）：{@code <properties>} 的子标签
      * <b>标签名被忽略</b>，key 取子标签的 {@code name} 属性值（且要求 {@code value} 属性在场）。
-     * 例：{@code <property name="schemaName" value="app"/>} → key = schemaName。
-     * 本轮补测前这里取的是<b>子标签名</b>（恒为 "property"），等于该能力对真实配置文件无效。</p>
+     * 例：{@code <property name="schemaName" value="app"/>} → key = schemaName。</p>
      *
      * <p>已知边界（不覆盖）：{@code <properties resource="…"/>}/{@code url="…"} 指向的外部
      * .properties 文件里的 key 不可见（需读文件内容，本轮不做）；{@code <settings>} 的 {@code name}
      * 属性是设置项、不是变量，不入集。</p>
      *
-     * <p>dumb 态/索引不可用 → 空。单文件纯函数 {@link #propertyKeysOf} 供测试直测。</p>
+     * <p>回退：Registry {@code sqlvis.completion.nameIndexCache=false} → {@link #legacyConfigPropertyKeys}
+     * （原现扫实现，其失效戳是 {@code PsiModificationTracker.modificationCount}——击键即失效，等于没有）。
+     * 单文件纯函数 {@link #propertyKeysOf} 保留供测试直测。</p>
      */
     public static List<String> configPropertyKeys(Project project) {
+        try {
+            if (DumbService.isDumb(project)) return List.of();
+            XmlSymbolNameIndexCache service = XmlSymbolNameIndexCache.getInstance(project);
+            if (!service.isCacheEnabled()) {
+                return legacyConfigPropertyKeys(project);
+            }
+            return service.configPropertyKeys();
+        } catch (Throwable t) {
+            return List.of();
+        }
+    }
+
+    /**
+     * 现扫实现（T-IndexScanSweep2 P1 前的原实现，<b>Registry 回退通道专用</b>，下一版删除）：
+     * {@code FileTypeIndex(XML)} 全项目逐个建 PSI，按 {@code PsiModificationTracker.modificationCount} 失效。
+     */
+    private static List<String> legacyConfigPropertyKeys(Project project) {
         try {
             if (DumbService.isDumb(project)) return List.of();
             long stamp = PsiModificationTracker.getInstance(project).getModificationCount();

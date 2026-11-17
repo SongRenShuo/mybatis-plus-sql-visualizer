@@ -29,7 +29,7 @@ public class HibernateLogParser {
     public static final int DEFAULT_MAX_PARSE_LENGTH = 20000;
 
     /**
-     * T-ConsoleFlushAlign：静默冲刷默认阈值（毫秒），对齐 {@link JdbcTemplateLogParser#DEFAULT_SETTLE_MS}。
+     * T-ConsoleFlushAlign：静默冲刷默认阈值（毫秒），对齐 JdbcTemplateLogParser.DEFAULT_SETTLE_MS。
      *
      * <p>取 1 秒的由来：绑定参数行（TRACE）与语句行（DEBUG）由同线程相邻打印，间隔 1ms 量级；1 秒的
      * 静默足以判定「没有参数行/续行可等」，而误伤（把参数行留在条目外）需要该线程在两行之间
@@ -74,15 +74,6 @@ public class HibernateLogParser {
     private int maxParseLength;
     private boolean recognizeBareSql;
 
-    /**
-     * T-ConsoleFlushAlign：静默冲刷阈值（毫秒）。桶内最后一行静默超过它，即认定「后续行不会再来了」
-     * （绑定参数行 / SQL 续行与语句行同线程相邻输出，正常间隔 1ms 量级），可安全闭合产出。
-     */
-    private final long settleMs;
-
-    /** settle 判定的时钟（测试注入可控件；与 {@link LogThreadRouter} 共用同一时钟）。 */
-    private final kotlin.jvm.functions.Function0<Long> clock;
-
     private final List<LogSqlEntry> entries = new ArrayList<>();
 
     /**
@@ -113,18 +104,24 @@ public class HibernateLogParser {
     /**
      * T-HibConc：线程分桶路由。routeNoTokenToRecent=true 是 Hibernate 专属——多行 SQL 正文与
      * {@code Hibernate: } stdout 标志行都不带日志前缀（提取不到 token），须跟随同线程的带 token 行。
-     *
-     * <p>初始化已挪入构造器体（k2j 规则：字段初始化器引用主构造参数 {@code clock} → 挪构造器）。</p>
      */
     private final LogThreadRouter<Bucket> router;
+
+    /**
+     * T-ConsoleFlushAlign：静默冲刷阈值（毫秒）。桶内最后一行静默超过它，即认定「后续行不会再来了」
+     * （绑定参数行 / SQL 续行与语句行同线程相邻输出，正常间隔 1ms 量级），可安全闭合产出。
+     */
+    private final long settleMs;
+
+    /** settle 判定的时钟（测试注入可控件；与 LogThreadRouter 共用同一时钟）。 */
+    private final java.util.function.LongSupplier clock;
 
     public HibernateLogParser() {
         this(new LogSqlRestorer());
     }
 
     public HibernateLogParser(LogSqlRestorer restorer) {
-        this(restorer, DEFAULT_SQL_PREFIX, DEFAULT_PARAM_PREFIX, true, DEFAULT_MAX_PARSE_LENGTH, true,
-                DEFAULT_SETTLE_MS, System::currentTimeMillis);
+        this(restorer, DEFAULT_SQL_PREFIX, DEFAULT_PARAM_PREFIX, true, DEFAULT_MAX_PARSE_LENGTH, true);
     }
 
     public HibernateLogParser(LogSqlRestorer restorer, String sqlPrefix, String paramPrefix,
@@ -133,10 +130,15 @@ public class HibernateLogParser {
                 DEFAULT_SETTLE_MS, System::currentTimeMillis);
     }
 
-    /** master 主构造全参形态（T-ConsoleFlushAlign：settleMs/clock 注入入口，测试用）。 */
+    /** 全配置便捷构造（restorer 取默认）——master 具名默认参数形态（EP Filter/桥用）。 */
+    public HibernateLogParser(String sqlPrefix, String paramPrefix, boolean mixedPrefix, int maxParseLength) {
+        this(new LogSqlRestorer(), sqlPrefix, paramPrefix, mixedPrefix, maxParseLength, true);
+    }
+
+    /** T-ConsoleFlushAlign 全参形态（settle 阈值与时钟注入；测试可控件）。 */
     public HibernateLogParser(LogSqlRestorer restorer, String sqlPrefix, String paramPrefix,
                               boolean mixedPrefix, int maxParseLength, boolean recognizeBareSql,
-                              long settleMs, kotlin.jvm.functions.Function0<Long> clock) {
+                              long settleMs, java.util.function.LongSupplier clock) {
         this.restorer = restorer;
         this.sqlPrefix = sqlPrefix;
         this.paramPrefix = paramPrefix;
@@ -145,20 +147,14 @@ public class HibernateLogParser {
         this.recognizeBareSql = recognizeBareSql;
         this.settleMs = settleMs;
         this.clock = clock;
+        // 时钟与 clock 同源（flushSettled 的静默判定一致性；测试注入可控件，同 ShardingSphere 先例）
         this.router = new LogThreadRouter<>(
                 Bucket::new,
                 b -> b.collecting,
                 b -> !b.collecting && !b.inComment && b.pendingParams.isEmpty() && b.pendingShadow == null,
                 LogThreadRouter.DEFAULT_MAX_BUCKETS,
                 true,
-                // 时钟与 clock 同源（flushSettled 的静默判定一致性；测试注入可控件，同 ShardingSphere 先例）
-                clock);
-    }
-
-    /** 全配置便捷构造（restorer 取默认）——master 具名默认参数形态（EP Filter/桥用）。 */
-    public HibernateLogParser(String sqlPrefix, String paramPrefix, boolean mixedPrefix, int maxParseLength) {
-        this(new LogSqlRestorer(), sqlPrefix, paramPrefix, mixedPrefix, maxParseLength, true,
-                DEFAULT_SETTLE_MS, System::currentTimeMillis);
+                () -> clock.getAsLong());
     }
 
     public LogSqlRestorer getRestorer() {
@@ -371,38 +367,6 @@ public class HibernateLogParser {
         return first;
     }
 
-    /**
-     * T-ConsoleFlushAlign：静默冲刷——闭合全部<b>已静默 ≥ {@code settleMs}</b> 的桶的待产出条目，产出进
-     * {@code entries}（由调用方随下一次 {@code takeEntries} 取走），返回本次产出条数。
-     *
-     * <p>为什么必须有它：绑定参数行（TRACE 级，{@code logging.level} 常只开 {@code org.hibernate.SQL: debug} 不含
-     * type 描述符）到达后要等「非 SQL 行」才闭合；参数行被截断时只等同线程<b>下一条语句行</b>闭合——
-     * 实时链路从不调 {@code closePending}，应用安静后最后一条语句在桶里无限期滞留，{@code takeEntries()} 恒空。
-     * 静默 ≥ 阈值即判定「后续行不会再来了」，此时闭合是安全的（同
-     * {@code JdbcTemplateLogParser.flushSettled} 口径：宁交未还原形态，不整段丢弃）。</p>
-     *
-     * <p>零参条目沿用 T-HibDualCapture 影子槽语义：{@code closePending} 对零参条目返回 null（条目暂存
-     * {@code pendingShadow} 等待 stdout 副本合并）——随下一次 {@code takeEntries} 在非收集态桶上立即交出，不另设冲刷点。</p>
-     *
-     * <p>调用点两处：① {@code processConsoleLine} 逐行入口（同控制台线程，喂行后调用，当前行的桶刚被触达故
-     * 不被截断）；② 控制台桥的常规轮询 {@code SqlLogConsoleBridge.flushSettledEntries}（EDT）——应用之后
-     * 一行都不再打时，靠这一拍兜底。</p>
-     */
-    public int flushSettled() {
-        return flushSettled(clock.invoke());
-    }
-
-    /** {@link #flushSettled()} 的显式时刻形态（master 默认参数 {@code nowMs = clock()} 的等价重载）。 */
-    public int flushSettled(long nowMs) {
-        int produced = 0;
-        for (Bucket bucket : router.settledBuckets(settleMs, nowMs)) {
-            if (closePending(bucket) != null) {
-                produced++;
-            }
-        }
-        return produced;
-    }
-
     /** 闭合指定桶的未完成条目。 */
     private LogSqlEntry closePending(Bucket bucket) {
         String sql;
@@ -468,6 +432,33 @@ public class HibernateLogParser {
         List<LogSqlEntry> result = new ArrayList<>(entries);
         entries.clear();
         return result;
+    }
+
+    /**
+     * T-ConsoleFlushAlign：静默冲刷——闭合全部<b>已静默 ≥ settleMs</b> 的桶的待产出条目，产出进
+     * {@link #entries}（由调用方随下一次 {@link #takeEntries()} 取走），返回本次产出条数。
+     *
+     * <p>为什么必须有它：绑定参数行（TRACE 级，logging.level 常只开 {@code org.hibernate.SQL: debug}
+     * 不含 type 描述符）到达后要等「非 SQL 行」才闭合；参数行被截断时只等同线程<b>下一条语句行</b>闭合——
+     * 实时链路从不调 closePending，应用安静后最后一条语句在桶里无限期滞留。静默 ≥ 阈值即判定
+     * 「后续行不会再来了」，此时闭合是安全的（宁交未还原形态，不整段丢弃）。</p>
+     *
+     * <p>零参条目沿用 T-HibDualCapture 影子槽语义：closePending 对零参条目返回 null（条目暂存
+     * pendingShadow 等待 stdout 副本合并）——随下一次 takeEntries 在非收集态桶上立即交出，不另设冲刷点。</p>
+     *
+     * <p>调用点两处：① processConsoleLine 逐行入口（同控制台线程，喂行后调用，当前行的桶刚被触达故
+     * 不被截断）；② 控制台桥的常规轮询 flushSettledEntries（EDT）——应用之后一行都不再打时，靠这一拍兜底。</p>
+     */
+    public int flushSettled() {
+        return flushSettled(clock.getAsLong());
+    }
+
+    public int flushSettled(long nowMs) {
+        int produced = 0;
+        for (Bucket bucket : router.settledBuckets(settleMs, nowMs)) {
+            if (closePending(bucket) != null) produced++;
+        }
+        return produced;
     }
 
     // ---------- 私有方法 ----------

@@ -49,13 +49,38 @@ public final class FirstCaptureGuide {
         return alreadyGuidedState;
     }
 
-    /** 每次成功入队回调（SqlLogManager 挂载；headless 下恒静默）。 */
-    public static void onEntryAccepted(@NotNull Project project, @NotNull SqlLogEntryBuffer buffer) {
+    /**
+     * 每次成功入队回调（SqlLogManager 挂载；headless 下恒静默）。
+     *
+     * @param autoOpened 本次回调里 maybeAutoShow() 是否真的请求了自动展开——是则窗口自身已是
+     *   「发现」，不再叠一条气球（T-NotifyTune 券 B / D-6）。
+     */
+    public static void onEntryAccepted(@NotNull Project project, @NotNull SqlLogEntryBuffer buffer,
+                                       boolean autoOpened) {
+        cn.song.mybatisplus.visualizer.config.PluginSettings.State settings =
+                cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().getState();
         boolean headless = ApplicationManager.getApplication() != null
             && ApplicationManager.getApplication().isUnitTestMode();
+        boolean windowVisible = false;
+        try {
+            com.intellij.openapi.wm.ToolWindow tw = com.intellij.openapi.wm.ToolWindowManager
+                    .getInstance(project).getToolWindow(SqlLogManager.TOOL_WINDOW_ID);
+            windowVisible = tw != null && tw.isVisible();
+        } catch (Throwable ignored) {
+            windowVisible = false;
+        }
         // O(1) size 访问器——本回调在控制台流式灌入热路径上，禁用 snapshot() 全量拷贝
-        if (!shouldGuide(alreadyGuidedState, buffer.size(), headless)) return;
+        if (!shouldGuide(
+                settings.getFirstCaptureGuideEnabled(),
+                alreadyGuidedState || settings.getFirstCaptureGuideShown(),
+                buffer.size(),
+                windowVisible,
+                autoOpened,
+                headless)) {
+            return;
+        }
         alreadyGuidedState = true;
+        settings.setFirstCaptureGuideShown(true);
         if (project.isDisposed()) return;
         ApplicationManager.getApplication().invokeLater(() -> {
             if (project.isDisposed()) return;
@@ -88,8 +113,14 @@ public final class FirstCaptureGuide {
      * 指路决策（纯函数，测试缝）：未指路过 + 缓冲恰为 1 条（本条即会话首条，历史非空则跳过）
      * + 非 headless。入列回调触发时条目已入缓冲，size==1 即「首次捕获」。
      */
-    public static boolean shouldGuide(boolean alreadyGuided, int bufferCount, boolean unitTestMode) {
-        return !alreadyGuided && bufferCount == 1 && !unitTestMode;
+    /**
+     * 指路决策（纯函数，测试缝）：开关开 + 未指路/未展示 + 缓冲恰为 1 条（本条即首条）
+     * + 窗口未可见 + 本次未自动展开 + 非 headless。入列回调触发时条目已入缓冲，size==1 即「首次捕获」。
+     */
+    public static boolean shouldGuide(boolean enabled, boolean alreadyGuided, int bufferCount,
+                                      boolean windowVisible, boolean autoOpened, boolean unitTestMode) {
+        return enabled && !alreadyGuided && bufferCount == 1
+                && !windowVisible && !autoOpened && !unitTestMode;
     }
 
     /** 测试重置（会话记忆清零）。 */

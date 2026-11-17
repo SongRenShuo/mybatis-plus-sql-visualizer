@@ -235,8 +235,8 @@ public final class DynamicInstallSupport {
 
     /**
      * plugin.xml 有界读取（超限判 Invalid——KB 级文件读出 MB 级即异常包）。
-     * master 183c98b3d 起 internal：PluginPackageOwnership 的 since-build 顺带读取复用同一实现
-     * （T-LocalUpdateDir，只放宽可见性不改语义/签名）——Java 无 internal，落包级可见。
+     * 包内可见：PluginPackageOwnershipKt 的 since-build 顺带读取复用同一实现
+     * （T-LocalUpdateDir，只放宽可见性不改语义/签名）。
      */
     static String readDescriptorBounded(java.io.InputStream stream) {
         byte[] buf = new byte[64 * 1024];
@@ -286,7 +286,7 @@ public final class DynamicInstallSupport {
         return s.trim();
     }
 
-    /** lib 目录下插件 jar 内嵌描述符扫描的条目上限（master 183c98b3d 起 internal：PluginPackageOwnership 同序扫描复用）。 */
+    /** lib 目录下插件 jar 内嵌描述符扫描的条目上限（包内可见：PluginPackageOwnershipKt 同序扫描复用）。 */
     static final int MAX_INNER_ENTRIES = 2000;
 
     /** plugin.xml 读取上限（实测 KB 级，×100 余量；超限即异常包）。 */

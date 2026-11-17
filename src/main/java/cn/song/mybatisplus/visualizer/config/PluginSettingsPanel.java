@@ -624,8 +624,6 @@ public class PluginSettingsPanel implements Disposable {
             }
         }
         agentStatusConnection = null;
-        // T-LocalUpdateDir：停更新分区的本地目录防抖定时器（防销毁后回调写 UI）
-        updateSection.disposeUiResources();
     }
 
     @Override
@@ -813,9 +811,6 @@ public class PluginSettingsPanel implements Disposable {
 
     /** 通用 XML 内嵌 SQL 检测开关（O-72 T-XmlInlineSql，默认开）。 */
     public final JBCheckBox xmlInlineSqlCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.xmlInlineSql"));
-
-    /** iBatis 2.x {@code <sqlMap>} 语句预览开关（T-Ibatis2Support 券 A，默认开）。 */
-    public final JBCheckBox ibatisXmlCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.ibatisXml"));
 
     /** mapper XML 语法高亮注入开关（T-XmlSynHi D4=T-PerfSweep16 F46 补 UI）：State.xmlSynHiEnabled 字段原有，此前无面板入口。 */
     public final JBCheckBox xmlSynHiCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.xmlSynHi"));
@@ -1343,11 +1338,9 @@ public class PluginSettingsPanel implements Disposable {
 
     /**
      * T-ShortcutSettings：打开平台 MCP Server 设置（定位到 SQL Visualizer 工具）。
-     * 寻址与回退已收归 {@code McpSettingsNavigationKt.openMcpServerSettingsPage} 单一真相源
-     * （T-McpSettingsJump 20261111）：平台实现类名会搬（263 起设置页进 content module
-     * {@code intellij.mcpserver.frontend} 并换包名），按类名写死单点探测就会把「页面搬走了」
-     * 误报成「IDEA 版本不够」。本方法当前无调用方（MCP 已提升为独立子设置页），
-     * 保留为「关于」节历史入口的等价实现。
+     * 平台 Configurable 类名 = com.intellij.mcpserver.settings.McpServerSettingsConfigurable
+     * （262 mcpserver.jar 常量池实证；注意包名 mcpserver 全小写）。
+     * MCP Server 插件未安装时（243 / 未启用）提示并返回。
      */
     private void openMcpServerSettings() {
         Project project = null;
@@ -1358,14 +1351,26 @@ public class PluginSettingsPanel implements Disposable {
         if (project == null) {
             return;
         }
-        if (cn.song.mybatisplus.visualizer.mcp.McpSettingsNavigationKt.openMcpServerSettingsPage(project)
-            != cn.song.mybatisplus.visualizer.mcp.McpSettingsOpenResult.UNAVAILABLE) {
+        Class<? extends com.intellij.openapi.options.Configurable> configurableClass = null;
+        try {
+            configurableClass = Class.forName("com.intellij.mcpserver.settings.McpServerSettingsConfigurable")
+                .asSubclass(com.intellij.openapi.options.Configurable.class);
+        } catch (Throwable ignored) {
+            // runCatching().getOrNull() 等价：类缺失 = MCP Server 插件未安装
+        }
+        if (configurableClass == null) {
+            Messages.showWarningDialog(
+                project,
+                MpSqlVisualizerBundle.message("settings.mcp.unavailable"),
+                MpSqlVisualizerBundle.message("settings.mcp.title"));
             return;
         }
-        Messages.showWarningDialog(
-            project,
-            MpSqlVisualizerBundle.message("settings.mcp.unavailable"),
-            MpSqlVisualizerBundle.message("settings.mcp.title"));
+        try {
+            com.intellij.openapi.options.ShowSettingsUtil.getInstance()
+                .showSettingsDialog(project, configurableClass);
+        } catch (Throwable ignored) {
+            // runCatching<Unit> 等价：打开失败不影响设置页
+        }
     }
 
     /**
@@ -1605,8 +1610,7 @@ public class PluginSettingsPanel implements Disposable {
             || (sections.contains(SECTION_UI) && isModifiedUi(s))
             || (sections.contains(SECTION_SHORTCUTS) && isModifiedShortcuts())
             || (sections.contains(SECTION_UPDATE_DIAGNOSTICS)
-                && (updateSection.getAutoCheckCheck().isSelected() != s.getAutoCheckUpdate()
-                    || !updateSection.getLocalDirField().getText().trim().equals(s.getLocalUpdateDir())));
+                && updateSection.getAutoCheckCheck().isSelected() != s.getAutoCheckUpdate());
     }
 
     private boolean isModifiedPreview(PluginSettings.State s) {
@@ -1722,8 +1726,6 @@ public class PluginSettingsPanel implements Disposable {
             // T-MapperNavCoexistYield：让位开关漏挂 isModified 会让勾选后 Apply 不启用（假开关回潮）
             || mapperNavYieldCheck.isSelected() != s.getMapperNavYieldToCodeHelper()
             || xmlInlineSqlCheck.isSelected() != s.getXmlInlineSqlEnabled()
-            // T-Ibatis2Support 券 A：iBatis sqlMap 预览开关（漏挂 isModified → 勾选后 Apply 不启用）
-            || ibatisXmlCheck.isSelected() != s.getIbatisXmlEnabled()
             // T-PagesHql：源语言档变更即为 modified（漏挂会让下拉改了 Apply 不启用）
             || selectedPagesSourceValue() != null && !selectedPagesSourceValue().equals(s.getPagesXmlSourceMode())
             || selectedPagesSourceValue() == null && s.getPagesXmlSourceMode() != null
@@ -1911,8 +1913,6 @@ public class PluginSettingsPanel implements Disposable {
             s.setGutterGroupOther(gutterGroupOtherCheck.isSelected());
             s.setMapperNavYieldToCodeHelper(mapperNavYieldCheck.isSelected());
             s.setXmlInlineSqlEnabled(xmlInlineSqlCheck.isSelected());
-            // T-Ibatis2Support 券 A：iBatis sqlMap 预览开关写回（随 UI 分区，读写判定同归属）
-            s.setIbatisXmlEnabled(ibatisXmlCheck.isSelected());
             // T-PagesHql：maintainPage 源语言档写回（随 UI 分区，读写判定同归属）
             s.setPagesXmlSourceMode(selectedPagesSourceValue() != null
                     ? selectedPagesSourceValue()
@@ -1948,10 +1948,6 @@ public class PluginSettingsPanel implements Disposable {
         }
         if (sections.contains(SECTION_UPDATE_DIAGNOSTICS)) {
             s.setAutoCheckUpdate(updateSection.getAutoCheckCheck().isSelected());
-            // T-LocalUpdateDir：可解析则存归一路径（~ 展开后 normalize），错误态存 trim 原文；
-            // 回写同步到输入框，保证 apply 后 isModified 归零（归一值 ≠ 原文时平台 Apply 会常亮）
-            s.setLocalUpdateDir(updateSection.normalizedDirForPersist());
-            updateSection.getLocalDirField().setText(s.getLocalUpdateDir());
         }
         languagePending = false;
         // 强制触发持久化：原地修改 state 属性后，框架可能不检测引用变化导致 XML 未写入（实证：
@@ -2038,8 +2034,6 @@ public class PluginSettingsPanel implements Disposable {
             gutterGroupOtherCheck.setSelected(s.getGutterGroupOther());
             mapperNavYieldCheck.setSelected(s.getMapperNavYieldToCodeHelper());
             xmlInlineSqlCheck.setSelected(s.getXmlInlineSqlEnabled());
-            // T-Ibatis2Support 券 A：iBatis sqlMap 预览开关回填
-            ibatisXmlCheck.setSelected(s.getIbatisXmlEnabled());
             // T-PagesHql：maintainPage 源语言档回填
             {
                 PagesSourceOption match = pagesSourceOptionByValue(s.getPagesXmlSourceMode());

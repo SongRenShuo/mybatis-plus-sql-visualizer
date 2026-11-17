@@ -7,17 +7,18 @@ public enum SqlSource {
     /** MyBatis-Plus 控制台日志（Preparing: / Parameters: 格式）。 */
     MYBATIS,
     /**
-     * iBatis 2.x 控制台日志（T-Ibatis2Support 券 H）：{@code {pstm-N}} / {@code {conn-N}} 标记的<b>三行组</b>——
-     * {@code {pstm-N} Executing Statement:}（SQL）+ {@code {pstm-N} Parameters:}（{@code [v1, null, v2]} 列表形态）+
-     * {@code {pstm-N} Types:}（逐位置 JDBC 类型），产出点见 {@link MyBatisLogParser} 的 iBatis 分支。
+     * iBatis 2.x 控制台日志（T-Ibatis2Support 券 H）：{@code {pstm-N}} / {@code {conn-N}} 标记的
+     * <b>三行组</b>——{@code {pstm-N} Executing Statement:}（SQL）+ {@code {pstm-N} Parameters:}
+     * （{@code [v1, null, v2]} 列表形态）+ {@code {pstm-N} Types:}（逐位置 JDBC 类型），
+     * 产出点见 MyBatisLogParser 的 iBatis 分支。
      *
-     * <p>与 {@link #MYBATIS} 的分工：两者同为「MyBatis 家族控制台日志」，但 iBatis 2.x 是<b>独立框架</b>
-     * （{@code com.ibatis.*} 命名空间，{@code #name#} 占位符，非 MyBatis 3 的 {@code #{}}），日志形态与参数行格式
-     * 都不同——2026-11-06 T-IbatisPanwei 为控扩散面曾复用本枚举的 MYBATIS 值（决策 D-3），
-     * 本值即为该欠账的兑现（用户需要按来源区分/筛选）。</p>
+     * <p>与 MYBATIS 的分工：两者同为「MyBatis 家族控制台日志」，但 iBatis 2.x 是<b>独立框架</b>
+     * （{@code com.ibatis.*} 命名空间，{@code #name#} 占位符，非 MyBatis 3 的 {@code #{}}），
+     * 日志形态与参数行格式都不同——2026-11-06 T-IbatisPanwei 为控扩散面曾复用本枚举的 MYBATIS 值
+     * （决策 D-3），本值即为该欠账的兑现（用户需要按来源区分/筛选）。</p>
      *
-     * <p><b>不落盘</b>（与 MYBATIS 同口径）：{@link SqlLogParamCodec} 只对 MCP / SHARDINGSPHERE 写 {@code s} 键，
-     * 历史读回一律 UNKNOWN（见 {@code cn.song.mybatisplus.visualizer.mcp.HistorySearchService} 的来源维度说明）。</p>
+     * <p><b>不落盘</b>（与 MYBATIS 同口径）：SqlLogParamCodec 只对 MCP / SHARDINGSPHERE 写 {@code s} 键，
+     * 历史读回一律 UNKNOWN。</p>
      */
     IBATIS,
     /** Hibernate/JPA 控制台日志（Hibernate: / binding parameter 格式）。 */

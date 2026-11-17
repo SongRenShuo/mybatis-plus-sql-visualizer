@@ -407,31 +407,7 @@ public final class XmlSynHiGate {
         return true;
     }
 
-    /**
-     * 属性值守卫：属性名 ∈ 注入白名单 + 长度熔断。
-     *
-     * <h2>白名单<b>有意不扩到 iBatis 属性</b>（T-Ibatis2Support 券 D 的决定，勿按「补齐」直觉回退）</h2>
-     *
-     * <p>券 D 曾拟把 iBatis 动态标签属性（{@code property}/{@code compareProperty}/{@code compareValue}/{@code prepend}/{@code refid}/
-     * {@code parameterClass}/{@code resultClass}/{@code jdbcType}/{@code javaType}/{@code mode}/{@code type}/{@code column}/{@code select}/…）并进本表。
-     * 实测否决，两条独立理由：</p>
-     * <ol>
-     * <li><b>本表只按属性名取值、不含文件上下文</b>——而 iBatis 属性名与 MyBatis 属性名大面积重叠
-     *     （{@code MyBatisXmlCompletionData.kt:52/146/151-152/157/170-188/189}：{@code javaType}/{@code jdbcType}/{@code mode}/
-     *     {@code numericScale}/{@code resultMap}/{@code refid}/{@code resultSetType}/{@code fetchSize}/{@code timeout}/{@code keyProperty}/
-     *     {@code property}/{@code column}/{@code select}/{@code type} 全是 MyBatis 侧在册属性）。并进来 = 在 MyBatis {@code <mapper>}
-     *     文件里<b>新增</b>这些属性值的注入（词法上色），直接违反券 D 的「绝不改变 MyBatis 路径行为」。</li>
-     * <li><b>iBatis 属性值的语义与本注入语言不匹配</b>：本注入语言 {@code MpSqlMapper} 的属性值通道是为
-     *     MyBatis 的 OGNL 表达式设计的（{@code SqlMapperInjector} D3 段 + {@code XmlSqlCompletionContributor.
-     *     addAttributeValueCompletions} 的 {@code test}/{@code value}/{@code collection} → OGNL 分流）。iBatis 属性值
-     *     是<b>属性名/字面量</b>（{@code property="orgName"}、{@code compareValue="1"}），没有表达式语言；给它接上
-     *     OGNL/MyBatis 符号源只会产出错误候选（且 {@code resolveXml} 走根 {@code namespace} 找 Mapper 接口，
-     *     iBatis 无 namespace ⇒ 上下文恒空）。</li>
-     * </ol>
-     *
-     * <p>结论：<b>属性白名单一个 iBatis 属性都不加</b>，iBatis 只放宽 {@link #inMapperFile}（语句文本注入）。
-     * 现表白名单是 MyBatis 原样（{@code open}/{@code close} 是 MyBatis {@code <foreach>}/{@code <trim>} 既有项，非本券新增）。</p>
-     */
+    /** 属性值守卫：属性名 ∈ 注入白名单（test/value/collection/item/open/close/separator/prefix/overrides）+ 长度熔断。 */
     public static boolean allowAttributeValue(String name, String value) {
         if (value.length() > 4096) return false;
         return ATTRIBUTE_WHITELIST.contains(name);
@@ -441,70 +417,15 @@ public final class XmlSynHiGate {
             "test", "value", "collection", "item", "index",
             "open", "close", "separator", "prefix", "prefixOverrides", "suffixOverrides");
 
-    /**
-     * 祖先链是否<b>语句宿主</b>文件（MyBatis {@code mapper} 或 iBatis {@code sqlMap}）。
-     *
-     * <p>T-Ibatis2Support 券 D 放宽（原形态只认 {@code mapper}）：iBatis 的语句映射文件根元素是 {@code <sqlMap>}
-     * （{@code IbatisXmlRecognizer.IBATIS_ROOT_TAGS} 的语句映射侧；{@code <sqlMapConfig>} 是全局配置、不含语句，
-     * <b>不</b>在此列）。</p>
-     *
-     * <h2>二次判定（券 D 硬要求）</h2>
-     *
-     * <p>本放宽<b>自带</b>一条廉价二次判据：<b>根标签名恰为 {@code sqlMap}</b>（大小写不敏感，O(1) 字符串比较）。
-     * 它与 MyBatis 的 {@code mapper} 根名<b>不相交</b>，故对任何 MyBatis {@code <mapper>} 文件本函数的判定结果
-     * 与放宽前逐字节一致（{@code contains("mapper")} 宽松线原样保留）。</p>
-     *
-     * <p><b>热路径约束（勿改）</b>：注入是<b>每文件/每元素级</b>调用，这里<b>不得</b>调
-     * {@code IbatisXmlRecognizer.sqlMapClientOnClasspath}（{@code JavaPsiFacade.findClass} 索引查询），也不得读
-     * DOCTYPE/文档 prolog——只用已到手的根标签名。更严的三选二识别（classpath + DOCTYPE）属
-     * gutter/预览接管链的口径（{@code IbatisXmlRecognizer.recognize(file)}），不属注入热路径。</p>
-     *
-     * <p>放宽口径的误差面（如实登记）：一个<b>非 iBatis</b> 的 XML 若恰以 {@code <sqlMap>} 为根且含
-     * {@code select/insert/update/delete} 标签，其语句文本会获得本插件的 SQL 注入着色。该形态在真实
-     * 工程中不存在（{@code sqlMap} 根即 iBatis 语句映射文件的定义），且后果仅为「多着色」而非「改语义」。</p>
-     */
+    /** 祖先链是否 mapper（含根标签首元素 name 含 mapper 的宽松口径——友商/自研 mapper 形态）。 */
     public static boolean inMapperFile(XmlTag tag) {
         XmlTag cur = tag;
         while (cur != null) {
             if (cur.getName().equalsIgnoreCase("mapper")) return true;
             cur = cur.getParentTag();
         }
-        XmlTag root = rootTagOf(tag);
-        return root != null && (root.getName().toLowerCase(Locale.ROOT).contains("mapper")
-                || isSqlMapRootName(root.getName()));
-    }
-
-    /**
-     * 语句宿主的<b>根标签名</b>判定（O(1)，廉价）：MyBatis {@code mapper} 或 iBatis {@code sqlMap}。
-     * 与 {@link #inMapperFile} 同一口径的「文件级」入口，供 §2.3 表里除 {@code inMapperFile} 之外的根判定共用。
-     * 现用方：折叠 / 反缩进 / 变更局部性 / 模板上下文（四个文件的文件级判定）与补全的 iBatis 分支——
-     * 这些判定只看文件根名，不走祖先链（它们的作用对象本身就是语句标签/文本）。
-     */
-    public static boolean isStatementHostRootName(@Nullable String rootTagName) {
-        return MYBATIS_MAPPER_ROOT_TAG.equals(rootTagName) || isSqlMapRootName(rootTagName);
-    }
-
-    /**
-     * <b>iBatis 语句映射文件</b>判定（根名 {@code sqlMap}）。供「MyBatis 形态能力」显式排除 iBatis 用——
-     * 例如 {@code ParamBraceTypedHandler} 敲 {@code #} 自动补 {@code {}}（{@code #{}} 是 MyBatis 语法；iBatis 用 {@code #name#}，
-     * 在 iBatis 文件里补 {@code {}} 是<b>写入错误语法</b>，必须排除）。
-     */
-    public static boolean isIbatisSqlMapRoot(XmlTag tag) {
-        XmlTag root = rootTagOf(tag);
-        return isSqlMapRootName(root != null ? root.getName() : null);
-    }
-
-    /** iBatis 语句映射文件根元素名（{@code sqlMap}）。<b>不</b>含 {@code sqlMapConfig}（全局配置，无语句体）。 */
-    public static final String IBATIS_SQL_MAP_ROOT_TAG = "sqlMap";
-
-    private static final String MYBATIS_MAPPER_ROOT_TAG = "mapper";
-
-    private static boolean isSqlMapRootName(@Nullable String name) {
-        return name != null && IBATIS_SQL_MAP_ROOT_TAG.equalsIgnoreCase(name);
-    }
-
-    private static XmlTag rootTagOf(XmlTag tag) {
         PsiFile containingFile = tag.getContainingFile();
-        return containingFile instanceof XmlFile ? ((XmlFile) containingFile).getRootTag() : null;
+        XmlTag root = containingFile instanceof XmlFile ? ((XmlFile) containingFile).getRootTag() : null;
+        return root != null && root.getName().toLowerCase(Locale.ROOT).contains("mapper");
     }
 }

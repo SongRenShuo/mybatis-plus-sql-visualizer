@@ -1107,51 +1107,50 @@ public final class SqlFormatter {
     // ------------------------------------------------------------------
 
     /**
-     * {@code #x#} / {@code #{x}} / {@code ${x}} 参数占位是<b>原子段</b>——三条格式化路径（format / formatClauseLine /
-     * formatVertical）同源分词，一处合并三处生效。
+     * {@code #x#} / {@code #{x}} / {@code ${x}} 参数占位是<b>原子段</b>——三条格式化路径
+     * （format / formatClauseLine / formatVertical）同源分词，一处合并三处生效。
      *
-     * <p>iBatis 的 {@code #username#}（含 {@code #x:TYPE:null#} 三段）与 MyBatis 的 {@code #{x}} / {@code ${x}} 在 {@link SqlLexer}
-     * 下被拆成 {@code #} + 标识符 + {@code #}（{@code {}/{}} 各为运算符、{@code $} 是标识符首字符）多个 token，格式化时按
-     * 运算符空格规则拼出 {@code # username #} / {@code # { x }}（用户 2026.3 截图实证）——占位符必须整体保留：
-     * 内容原样拼接（不做大小写改写、不插空格），前后按既有 token 间距规则走。</p>
+     * <p>iBatis 的 {@code #username#}（含 {@code #x:TYPE:null#} 三段）与 MyBatis 的 {@code #{x}} /
+     * {@code ${x}} 在 {@link SqlLexer} 下被拆成 {@code #} + 标识符 + {@code #}（{@code {}{@code }}
+     * 各为运算符、{@code $} 是标识符首字符）多个 token，格式化时按运算符空格规则拼出
+     * {@code # username #} / {@code # { x }}（用户 2026.3 截图实证）——占位符必须整体保留：
+     * 内容原样拼接（不做大小写改写、不插空格），前后按既有 token 间距规则走。
      *
-     * <p>合并判据（token 流上做，词法器不吐偏移）：</p>
-     * <ul>
-     * <li>{@code #}（运算符）后随 {@code {}（运算符）→ MyBatis 花括号形态，合并到配对 {@code }}（嵌套计数）；</li>
-     * <li>{@code $}（单字符标识符）后随 {@code {} → MyBatis {@code ${}} 形态，同上；</li>
-     * <li>{@code #}（运算符）→ 中间只含标识符/数字/{@code :} {@code [} {@code ]}（iBatis 的 {@code #x:TYPE:null#} 与 {@code #ids[0]#}）
-     *     → 闭合 {@code #}：iBatis 内联参数；{@code ##} 转义（空内容）同样合并、原样保留。</li>
-     * </ul>
-     *
-     * <p>闭合/配对找不到时<b>整段不动</b>（未闭合残段按原 token 展示，与渲染器「未闭合」告警口径一致）。
-     * 合并产物标 {@link SqlTokenTypes#IDENTIFIER}——三条路径的「原文保留」分支（token 文本原样输出）。</p>
+     * <p>合并判据（token 流上做，词法器不吐偏移）：
+     * {@code #}（运算符）后随 {@code {}（运算符）→ MyBatis 花括号形态，合并到配对 {@code }}
+     * （嵌套计数）；{@code $}（单字符标识符）后随 {@code {} → MyBatis ${} 形态，同上；
+     * {@code #}（运算符）→ 中间只含标识符/数字/{@code :} {@code [} {@code ]}
+     * （iBatis 的 {@code #x:TYPE:null#} 与 {@code #ids[0]#}）→ 闭合 {@code #}：iBatis 内联参数；
+     * {@code ##} 转义（空内容）同样合并、原样保留。闭合/配对找不到时<b>整段不动</b>
+     * （未闭合残段按原 token 展示，与渲染器「未闭合」告警口径一致）。合并产物标
+     * {@link SqlTokenTypes#IDENTIFIER}——三条路径的「原文保留」分支（token 文本原样输出）。
      */
     private static List<Pair<IElementType, String>> mergeParamPlaceholders(List<Pair<IElementType, String>> tokens) {
-        boolean hasCandidate = false;
+        boolean present = false;
         for (Pair<IElementType, String> token : tokens) {
             IElementType type = token.getFirst();
             String text = token.getSecond();
-            if ((type == SqlTokenTypes.OPERATOR && "#".equals(text))
-                || ("$".equals(text) && (type == SqlTokenTypes.IDENTIFIER || type == SqlTokenTypes.TABLE))) {
-                hasCandidate = true;
+            if ((type == SqlTokenTypes.OPERATOR && text.equals("#"))
+                    || (text.equals("$") && (type == SqlTokenTypes.IDENTIFIER || type == SqlTokenTypes.TABLE))) {
+                present = true;
                 break;
             }
         }
-        if (!hasCandidate) {
+        if (!present) {
             return tokens;
         }
-        List<Pair<IElementType, String>> out = new java.util.ArrayList<>(tokens.size());
+        List<Pair<IElementType, String>> out = new ArrayList<>(tokens.size());
         int i = 0;
         while (i < tokens.size()) {
             IElementType type = tokens.get(i).getFirst();
             String text = tokens.get(i).getSecond();
             Integer mergedEnd = null;
-            if (type == SqlTokenTypes.OPERATOR && "#".equals(text)) {
-                mergedEnd = i + 1 < tokens.size() && "{".equals(tokens.get(i + 1).getSecond())
-                    ? matchBraceClose(tokens, i + 1)
-                    : matchHashClose(tokens, i);
-            } else if ("$".equals(text) && (type == SqlTokenTypes.IDENTIFIER || type == SqlTokenTypes.TABLE)
-                && i + 1 < tokens.size() && "{".equals(tokens.get(i + 1).getSecond())) {
+            if (type == SqlTokenTypes.OPERATOR && text.equals("#")) {
+                mergedEnd = i + 1 < tokens.size() && tokens.get(i + 1).getSecond().equals("{")
+                        ? matchBraceClose(tokens, i + 1)
+                        : matchHashClose(tokens, i);
+            } else if (text.equals("$") && (type == SqlTokenTypes.IDENTIFIER || type == SqlTokenTypes.TABLE)
+                    && i + 1 < tokens.size() && tokens.get(i + 1).getSecond().equals("{")) {
                 mergedEnd = matchBraceClose(tokens, i + 1);
             }
             if (mergedEnd == null) {
@@ -1159,8 +1158,8 @@ public final class SqlFormatter {
                 i++;
             } else {
                 StringBuilder merged = new StringBuilder();
-                for (int j = i; j <= mergedEnd; j++) {
-                    merged.append(tokens.get(j).getSecond());
+                for (Pair<IElementType, String> part : tokens.subList(i, mergedEnd + 1)) {
+                    merged.append(part.getSecond());
                 }
                 out.add(new Pair<>(SqlTokenTypes.IDENTIFIER, merged.toString()));
                 i = mergedEnd + 1;
@@ -1174,9 +1173,13 @@ public final class SqlFormatter {
         for (int j = openIdx + 1; j < tokens.size(); j++) {
             IElementType type = tokens.get(j).getFirst();
             String text = tokens.get(j).getSecond();
-            if (type == SqlTokenTypes.OPERATOR && "#".equals(text)) return j;
+            if (type == SqlTokenTypes.OPERATOR && text.equals("#")) {
+                return j;
+            }
             boolean innerOperator = type == SqlTokenTypes.OPERATOR && HASH_INNER_OPERATORS.contains(text);
-            if (type != SqlTokenTypes.IDENTIFIER && type != SqlTokenTypes.NUMBER && !innerOperator) return null;
+            if (type != SqlTokenTypes.IDENTIFIER && type != SqlTokenTypes.NUMBER && !innerOperator) {
+                return null;
+            }
         }
         return null;
     }
@@ -1185,13 +1188,18 @@ public final class SqlFormatter {
     private static Integer matchBraceClose(List<Pair<IElementType, String>> tokens, int openIdx) {
         int depth = 0;
         for (int j = openIdx; j < tokens.size(); j++) {
-            IElementType type = tokens.get(j).getFirst();
-            String text = tokens.get(j).getSecond();
-            if (type != SqlTokenTypes.OPERATOR) continue;
-            if ("{".equals(text)) depth++;
-            if ("}".equals(text)) {
+            Pair<IElementType, String> token = tokens.get(j);
+            if (token.getFirst() != SqlTokenTypes.OPERATOR) {
+                continue;
+            }
+            if (token.getSecond().equals("{")) {
+                depth++;
+            }
+            if (token.getSecond().equals("}")) {
                 depth--;
-                if (depth == 0) return j;
+                if (depth == 0) {
+                    return j;
+                }
             }
         }
         return null;

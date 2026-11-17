@@ -149,6 +149,16 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         private boolean showGutterIcon = true;
 
         /**
+         * T-PreviewExecWriteDefer：预览打开时「是否立即准备执行控制台」。
+         *
+         * <p>取值（{@code cn.song.mybatisplus.visualizer.ui.PreviewConsoleEager} 解析）：
+         * {@code LAZY}（默认）：不建控制台（不写带方言映射的 exec 文件 ⇒ 不进 dumb），绑定行给
+         * 「显示执行控制台」入口；{@code LAZY_SILENT}：同上但不放入口（极简派）；
+         * {@code EAGER}：打开即准备控制台（旧行为，每次预览会写 exec 文件）。</p>
+         */
+        private String consolePrepMode = "LAZY";
+
+        /**
          * 通用 XML 内嵌 SQL 检测开关（O-72 T-XmlInlineSql，默认开）：
          * 叶子标签文本首词命中 SQL 关键字即认领（不限根元素/标签名）；
          * 关闭后 gutter 与 Alt+Shift+Q 兜底均不生效（mapper/pages/hbm 三套白名单不受影响）。
@@ -163,7 +173,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
          * 参数识别），不经通用兜底通道的实体探针。
          *
          * <p>关闭后本 provider 零产出；对应标签同时<b>不再被通用兜底通道认领</b>
-         * （{@code XmlInlineSqlDetector.isClaimedByKnownStructure} 的让位是无条件的结构判定）——
+         * （XmlInlineSqlDetector.isClaimedByKnownStructure 的让位是无条件的结构判定）——
          * 即该类语句整体零图标，与「mapper 组开关关闭」同款语义。</p>
          */
         private boolean ibatisXmlEnabled = true;
@@ -270,11 +280,11 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         /**
          * 本地安装包目录（T-LocalUpdateDir）：把内网/共享盘构建的插件 zip 放这里，设置页与
          * 启动检测自动识别最高版本并可直接安装（平台允许则热生效，243 等回退重启脚本）。
-         * 空字符串 = 关闭。已做 {@code ~} 展开与 {@code Path} 归一
-         * （{@code cn.song.mybatisplus.visualizer.update.LocalUpdateDir}）；
+         * 空字符串 = 关闭。已做 {@code ~} 展开与 {@code Path} 归一（LocalUpdateDir）；
          * 机器相关，不进设置导出/导入（SettingsIO 硬编码清单，天然不含）。
          */
         private String localUpdateDir = "";
+
         private String reverseWrapperFormat = REVERSE_AUTO;
 
         /**
@@ -473,13 +483,6 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
          * <p>T-DevAcceptFix ②（20261006 验收，计划 D67 采 B 案）：<b>默认关</b>——EXPLAIN 默认走原生
          * 数据库控制台执行与呈现（用户实测表格形态交互不如原生控制台）；结构化通道整体保留
          * 一个版本周期（设置项显式开启即恢复），下版再定摘除。存量用户已显式开启的值不受影响。</p>
-         *
-         * <p>R45 拍板收口（2026-11-11 用户定案）：<b>转正保留、维持默认关</b>——「保留一个版本周期，
-         * 下版再定摘除」的到期裁决就此关闭：结构化通道转正为常驻能力，摘除案废止；dev 侧 G4
-         * （project-dev-batch-20261031）曾试的「默认开」案同批废止（未回流 master，不追认）。
-         * 设置页开关行自 2026-10-01（0df4a311）起在册（组 1 SQL 预览，{@code explainStructuredCheck}），
-         * 「启用结构化并重试」通知写入 true 后用户可在设置页关回——单向门不存在，设置文案
-         * 同步去「实验特性」口径（转正后该说法失真）。</p>
          */
         private boolean explainStructuredRender = false;
 
@@ -592,6 +595,33 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
          */
         private boolean onboardingAnchorTipShown = false;
 
+        // ---------- T-NotifyTune：主动通知触点调优（券 A 方言死路提示 / 券 B 首次捕获引导降频） ----------
+
+        /**
+         * 券 A：SQL 方言死路主动提示开关（默认开）——智能推断结果为 {@code UNAVAILABLE} 且无方言名时，
+         * 打开 SQL 承载文件经预览组弹一次「方言未能确定」指路；关闭后全程静默。
+         */
+        private boolean dialectTipEnabled = true;
+
+        /** 券 A：已对本项目永久抑制的方言提示集合（按项目路径哈希，见 DialectGapTip.projectKey）。 */
+        private java.util.List<String> dialectTipSuppressedProjects = new java.util.ArrayList<>();
+
+        /** 券 A：方言提示已展示（每安装一次性持久化记忆，跨项目/跨会话不再出现）。 */
+        private boolean dialectTipShown = false;
+
+        /**
+         * 券 B：首次捕获引导开关（默认开）——关闭后首次捕获指路全程静默。
+         * 红线准入五问第 3 问要求「插件主动触点是带开关或一次性」，本开关与
+         * firstCaptureGuideShown 共同补齐该门禁。
+         */
+        private boolean firstCaptureGuideEnabled = true;
+
+        /**
+         * 券 B：首次捕获引导已展示（每安装一次性持久化记忆）。
+         * 取代此前「会话级 object 记忆」——那样每重启 IDE / 每拉起一次沙盒就再弹一次，属于高频。
+         */
+        private boolean firstCaptureGuideShown = false;
+
         /**
          * T-ExplainConsoleFirst W6（2026-10-24 用户实测「为什么我点击执行计划还是弹窗了」）：
          * 「启用结构化并重试」推荐通知<b>只提示一次</b>。
@@ -648,13 +678,19 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public boolean getShowGutterIcon() { return showGutterIcon; }
         public void setShowGutterIcon(boolean showGutterIcon) { this.showGutterIcon = showGutterIcon; }
 
+        /** T-PreviewExecWriteDefer：执行控制台准备档（LAZY/LAZY_SILENT/EAGER，默认 LAZY）。 */
+        public String getConsolePrepMode() { return consolePrepMode; }
+        public void setConsolePrepMode(String consolePrepMode) { this.consolePrepMode = consolePrepMode; }
+
+        /** iBatis 2.x {@code <sqlMap>} 语句预览开关（T-Ibatis2Support 券 A，默认开）。 */
+        public boolean getIbatisXmlEnabled() { return ibatisXmlEnabled; }
+        public void setIbatisXmlEnabled(boolean ibatisXmlEnabled) { this.ibatisXmlEnabled = ibatisXmlEnabled; }
+
         /** 通用 XML 内嵌 SQL 检测开关（O-72 T-XmlInlineSql，默认开）。 */
         public boolean getXmlInlineSqlEnabled() { return xmlInlineSqlEnabled; }
         public void setXmlInlineSqlEnabled(boolean xmlInlineSqlEnabled) { this.xmlInlineSqlEnabled = xmlInlineSqlEnabled; }
 
-        public boolean getIbatisXmlEnabled() { return ibatisXmlEnabled; }
-        public void setIbatisXmlEnabled(boolean ibatisXmlEnabled) { this.ibatisXmlEnabled = ibatisXmlEnabled; }
-
+        /** T-LocalUpdateDir：本地安装包目录（空 = 关闭；机器相关，不进设置导出/导入）。 */
         public String getLocalUpdateDir() { return localUpdateDir; }
         public void setLocalUpdateDir(String localUpdateDir) { this.localUpdateDir = localUpdateDir; }
 
@@ -958,6 +994,26 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public boolean getOnboardingAnchorTipShown() { return onboardingAnchorTipShown; }
         public void setOnboardingAnchorTipShown(boolean onboardingAnchorTipShown) { this.onboardingAnchorTipShown = onboardingAnchorTipShown; }
 
+        /** T-NotifyTune 券 A：方言死路提示开关（默认开）。 */
+        public boolean getDialectTipEnabled() { return dialectTipEnabled; }
+        public void setDialectTipEnabled(boolean dialectTipEnabled) { this.dialectTipEnabled = dialectTipEnabled; }
+
+        /** T-NotifyTune 券 A：本项目永久抑制的方言提示集合（按项目路径哈希）。 */
+        public java.util.List<String> getDialectTipSuppressedProjects() { return dialectTipSuppressedProjects; }
+        public void setDialectTipSuppressedProjects(java.util.List<String> dialectTipSuppressedProjects) { this.dialectTipSuppressedProjects = dialectTipSuppressedProjects; }
+
+        /** T-NotifyTune 券 A：方言提示已展示（每安装一次性）。 */
+        public boolean getDialectTipShown() { return dialectTipShown; }
+        public void setDialectTipShown(boolean dialectTipShown) { this.dialectTipShown = dialectTipShown; }
+
+        /** T-NotifyTune 券 B：首次捕获引导开关（默认开）。 */
+        public boolean getFirstCaptureGuideEnabled() { return firstCaptureGuideEnabled; }
+        public void setFirstCaptureGuideEnabled(boolean firstCaptureGuideEnabled) { this.firstCaptureGuideEnabled = firstCaptureGuideEnabled; }
+
+        /** T-NotifyTune 券 B：首次捕获引导已展示（每安装一次性）。 */
+        public boolean getFirstCaptureGuideShown() { return firstCaptureGuideShown; }
+        public void setFirstCaptureGuideShown(boolean firstCaptureGuideShown) { this.firstCaptureGuideShown = firstCaptureGuideShown; }
+
         public boolean getExplainStructuredOfferedShown() { return explainStructuredOfferedShown; }
         public void setExplainStructuredOfferedShown(boolean explainStructuredOfferedShown) { this.explainStructuredOfferedShown = explainStructuredOfferedShown; }
 
@@ -980,9 +1036,9 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.autoFoldEnabled = autoFoldEnabled;
             c.autoFoldFieldThreshold = autoFoldFieldThreshold;
             c.showGutterIcon = showGutterIcon;
+            c.consolePrepMode = consolePrepMode;
             c.xmlInlineSqlEnabled = xmlInlineSqlEnabled;
             c.ibatisXmlEnabled = ibatisXmlEnabled;
-            c.localUpdateDir = localUpdateDir;
             c.pagesXmlSourceMode = pagesXmlSourceMode;
             c.sampleLimit = sampleLimit;
             c.xmlSynHiEnabled = xmlSynHiEnabled;
@@ -1009,6 +1065,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.columnCalibrationEnabled = columnCalibrationEnabled;
             c.autoCheckUpdate = autoCheckUpdate;
             c.ignoredUpdateVersions = ignoredUpdateVersions;
+            c.localUpdateDir = localUpdateDir;
             c.reverseWrapperFormat = reverseWrapperFormat;
             c.embeddedColumnNaming = embeddedColumnNaming;
             c.reverseManualEntitySelection = reverseManualEntitySelection;
@@ -1078,6 +1135,11 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.enhancedCaptureStackMaxFrames = enhancedCaptureStackMaxFrames;
             c.onboardingAnchorTipEnabled = onboardingAnchorTipEnabled;
             c.onboardingAnchorTipShown = onboardingAnchorTipShown;
+            c.dialectTipEnabled = dialectTipEnabled;
+            c.dialectTipSuppressedProjects = new java.util.ArrayList<>(dialectTipSuppressedProjects);
+            c.dialectTipShown = dialectTipShown;
+            c.firstCaptureGuideEnabled = firstCaptureGuideEnabled;
+            c.firstCaptureGuideShown = firstCaptureGuideShown;
             c.explainStructuredOfferedShown = explainStructuredOfferedShown;
             c.sourceFrameSkipPrefixes = sourceFrameSkipPrefixes;
             c.sourceFrameBizJarPrefixes = sourceFrameBizJarPrefixes;
@@ -1095,6 +1157,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && verticalPairAnnotation == that.verticalPairAnnotation
                     && autoFoldEnabled == that.autoFoldEnabled
                     && showGutterIcon == that.showGutterIcon
+                    && consolePrepMode.equals(that.consolePrepMode)
                     && xmlInlineSqlEnabled == that.xmlInlineSqlEnabled
                     && ibatisXmlEnabled == that.ibatisXmlEnabled
                     && sampleLimit == that.sampleLimit
@@ -1142,6 +1205,10 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && mcpToolsEnabled == that.mcpToolsEnabled
                     && onboardingAnchorTipEnabled == that.onboardingAnchorTipEnabled
                     && onboardingAnchorTipShown == that.onboardingAnchorTipShown
+                    && dialectTipEnabled == that.dialectTipEnabled
+                    && dialectTipShown == that.dialectTipShown
+                    && firstCaptureGuideEnabled == that.firstCaptureGuideEnabled
+                    && firstCaptureGuideShown == that.firstCaptureGuideShown
                     && explainStructuredOfferedShown == that.explainStructuredOfferedShown
                     && enhancedCaptureEnabled == that.enhancedCaptureEnabled
                     && enhancedCaptureConfirmed == that.enhancedCaptureConfirmed
@@ -1165,6 +1232,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && columnCalibrationEnabled == that.columnCalibrationEnabled
                     && Objects.equals(ignoredUpdateVersions, that.ignoredUpdateVersions)
                     && Objects.equals(localUpdateDir, that.localUpdateDir)
+                    && Objects.equals(dialectTipSuppressedProjects, that.dialectTipSuppressedProjects)
                     && Objects.equals(reverseWrapperFormat, that.reverseWrapperFormat)
                     && Objects.equals(embeddedColumnNaming, that.embeddedColumnNaming)
                     && Objects.equals(reverseManualEntitySelection, that.reverseManualEntitySelection)
@@ -1205,14 +1273,15 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public int hashCode() {
             return Objects.hash(
                     dialectAuto, dialect, replaceParams, formatSql, emptyParamFill, verticalPairAnnotation, autoFoldEnabled, autoFoldFieldThreshold,
-                    showGutterIcon, xmlInlineSqlEnabled, ibatisXmlEnabled, editorShowWhitespaces, language, injectLogicDelete,
+                    showGutterIcon, consolePrepMode, xmlInlineSqlEnabled, ibatisXmlEnabled, localUpdateDir, editorShowWhitespaces, language, injectLogicDelete,
+                    dialectTipEnabled, dialectTipSuppressedProjects, dialectTipShown, firstCaptureGuideEnabled, firstCaptureGuideShown,
                     sampleLimit, xmlSynHiEnabled, pagesXmlSourceMode,
                     gutterGroupMapperXml, gutterGroupAnnotation, gutterGroupJpaHql, gutterGroupJdbc,
                     gutterGroupOther, gutterGroupInlineFallback,
                     logicDeleteValue, injectTenantLine, tenantColumnName, tenantColumnDefault, injectTenantOnInsert,
                     tablePrefix, tableSuffix, tableNameInference, ignoredFields, removeTablePrefix, removeTableSuffix,
                     columnCalibrationEnabled,
-                    autoCheckUpdate, ignoredUpdateVersions, localUpdateDir, reverseWrapperFormat, embeddedColumnNaming, reverseManualEntitySelection,
+                    autoCheckUpdate, ignoredUpdateVersions, reverseWrapperFormat, embeddedColumnNaming, reverseManualEntitySelection,
                     libraryEntitySweepEnabled, sqlListPreviewHintSeen,
                     logSqlPrefix, logParamPrefix, logMixedPrefix, logAutoCaptureOnStart, logAutoCaptureSuppressed,
                     logStopOnToolWindowClose, logAutoOpenOnCapture, logTimestampEnabled, logTimestampFormat, logTimestampSource,

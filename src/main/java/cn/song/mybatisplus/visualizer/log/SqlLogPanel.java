@@ -1587,8 +1587,6 @@ public class SqlLogPanel extends JPanel implements Disposable {
                 }
                 cn.song.mybatisplus.visualizer.log.agent.AgentManager am =
                         cn.song.mybatisplus.visualizer.log.agent.AgentManager.getInstance(project);
-                // T-PanweiInsertCapture F2/F3：最近一次 agent 心跳上报（组装失败 / 门禁抑制 / 登记盲区），
-                // 留一个本地引用，避免状态栏每个字段各取一次原子读
                 cn.song.mybatisplus.visualizer.log.agent.AgentAttachStats attachStats =
                         cn.song.mybatisplus.visualizer.log.agent.AgentAttachReport.latest();
                 texts = CaptureStatusBar.captureStatusLineText(new CaptureStatusBar.CaptureStatusLine(
@@ -1610,17 +1608,17 @@ public class SqlLogPanel extends JPanel implements Disposable {
                         // T-PanweiInsertCapture F1：让位期间被丢弃的可解析 SQL 行——「控制台明明有、
                         // 面板就是没有」这类现场的唯一读数（此前两条通道都没有证据）
                         manager.getConsoleBridge().getSuppressedSqlLines(),
-                        // T-PanweiInsertCapture F2/F3：agent 侧三条静默路径的透出（组装失败 / 门禁抑制 /
-                        // 登记盲区）；旧版 agent 无这些键时恒 0，不挂段
+                        // T-PanweiInsertCapture F2/F3：agent 侧静默路径透出（组装失败/门禁抑制/盲区）；
+                        // 旧版 agent 无这些键时恒 0，不挂段
                         attachStats != null ? attachStats.assembleFailures() : 0L,
                         attachStats != null ? attachStats.nestSuppressed() : 0L,
                         // T-NestGateObserve：陈旧嵌套（深度泄漏的确诊读数；正常嵌套恒 0）
                         attachStats != null ? attachStats.nestStale() : 0L,
                         attachStats != null ? attachStats.unresolvedBlind() : 0L,
                         attachStats != null ? attachStats.blindClasses() : List.of(),
-                        // T-PanweiInsertCapture F6：iBatis 批处理在框架层不打印 SQL 行——只在「已识别到
-                        // iBatis 形态 且 增强捕获未开启」时提示（已开启时由 agent 侧的 BATCH 形态兜住）
-                        LogParseDiag.sawIbatisForm()));
+                        // T-PanweiInsertCapture F6：iBatis 批处理在框架层不打印 SQL 行——只在
+                        // 「已识别到 iBatis 形态 且 增强捕获未开启」时提示（已开启时由 agent 侧兜住）
+                        LogParseDiag.sawIbatisForm));
             } catch (Throwable ignored) {
                 texts = null; // runCatching().getOrNull() 等价
             }
@@ -2252,7 +2250,13 @@ public class SqlLogPanel extends JPanel implements Disposable {
         refreshSortAction();
     }
 
-    /** 刷新排序动作的 presentation（工具窗工具栏只渲染图标，当前方式由 tooltip 承载）。 */
+    /**
+     * 刷新排序动作的 presentation（工具窗工具栏只渲染图标，当前方式由 tooltip「排序：<方式>」承载）。
+     *
+     * <p>只用于<b>已上屏</b>的调用点（用户改排序方式后）。<b>禁止在构造期调用</b>——此时工具栏还没
+     * addNotify，平台会忽略这次刷新并记一条 WARN + Throwable（T-DebugLogNoise，2026-11-16 真机取证）。
+     * 文案本身由 sortModeAction 的 update 输出，首次 addNotify 更新即正确。</p>
+     */
     private void refreshSortAction() {
         if (_toolbarRef != null) {
             _toolbarRef.updateActionsImmediately();

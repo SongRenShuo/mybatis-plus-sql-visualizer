@@ -75,40 +75,30 @@ public final class CaptureStatusBar {
             long agentDropped,
             /**
              * T-PanweiInsertCapture F1：让位（agent 接管）期间<b>被丢弃的可解析 SQL 行</b>累计
-             * （{@code SqlLogConsoleBridge.suppressedSqlLines}）。
-             *
-             * <p>立项动因＝本次真机现场：控制台里明明有一条标准形态的 {@code INSERT}（{@code {pstm-N} Executing Statement:}），
-             * 面板一条都没有——因为 agent 在线、桥按设计让位，那一行被直接丢掉，<b>两条通道都没有任何读数</b>
-             * 能说明「有 SQL 行被让位吃掉」。本字段让这类现场一眼可判。0 时不挂段。</p>
+             * （SqlLogConsoleBridge.suppressedSqlLines）。0 时不挂段。
              */
             long suppressedSqlLines,
-            /** T-PanweiInsertCapture F2：agent 出口路径组装失败累计（心跳 {@code assembleFailures}）。0 时不挂段。 */
+            /** T-PanweiInsertCapture F2：agent 出口路径组装失败累计（心跳 assembleFailures）。0 时不挂段。 */
             long agentAssembleFailures,
-            /** T-PanweiInsertCapture F2：被 NestGate 抑制的外层帧累计（心跳 {@code nestSuppressed}）。0 时不挂段。 */
+            /** T-PanweiInsertCapture F2：被 NestGate 抑制的外层帧累计（心跳 nestSuppressed）。0 时不挂段。 */
             long agentNestSuppressed,
             /**
-             * T-NestGateObserve：<b>陈旧嵌套</b>累计（心跳 {@code nestStale}）。0 时不挂段。
-             *
-             * <p>与 {@code agentNestSuppressed} 的分工是深度泄漏的确诊面：后者只计「被内层挤掉的外层帧」，泄漏时
-             * 被抑制的是最外层自己（恒为 0）；本字段 &gt;0 直接说明某条线程有一条活过阈值（默认 5s）的嵌套链，
-             * 即 NestGate 深度未归零——磐维 A 模式「前几条有、之后整类消失」的现场读数。</p>
+             * T-NestGateObserve：<b>陈旧嵌套</b>累计（心跳 nestStale）。0 时不挂段。
+             * 与 agentNestSuppressed 的分工是深度泄漏的确诊面：后者只计「被内层挤掉的外层帧」。
              */
             long agentNestStale,
-            /** T-PanweiInsertCapture F3：登记盲区累计（心跳 {@code unresolved}）。 */
+            /** T-PanweiInsertCapture F3：登记盲区累计（心跳 unresolved）。 */
             long agentUnresolvedBlind,
-            /** T-PanweiInsertCapture F3：登记盲区的 PS 实现类名（心跳 {@code blind}，有界 ≤8）。 */
+            /** T-PanweiInsertCapture F3：登记盲区的 PS 实现类名（心跳 blind，有界 ≤8）。 */
             @NotNull List<String> agentBlindClasses,
             /**
              * T-PanweiInsertCapture F6：iBatis 批处理提示——本会话<b>已识别到 iBatis 日志形态</b>且增强捕获未开启。
-             *
-             * <p>为什么必须可见：iBatis 2.3.4 的 {@code BaseLogProxy.EXECUTE_METHODS} 不含 {@code executeBatch}，
-             * 批处理语句在控制台<b>一行日志都不产生</b>（框架事实，控制台侧无法补救）。此时用户看到的是
-             * 「批量写语句一条都不见」，而面板此前对此零解释。</p>
+             * BaseLogProxy.EXECUTE_METHODS 不含 executeBatch，批处理在控制台一行日志都不产生。
              */
             boolean ibatisBatchHint
     ) {
 
-        /** 便捷构造器：unregisteredImplementations/catchUpBehind/agentDropped 及 T-PanweiInsertCapture 各缺省字段缺省（Kotlin 默认参数）。 */
+        /** 便捷构造器：unregisteredImplementations/catchUpBehind/agentDropped 缺省（Kotlin 默认参数）。 */
         public CaptureStatusLine(boolean capturing, int consolesAttached, long linesSeen,
                 @Nullable String agentStatus, @NotNull List<Long> agentLivePids, boolean agentPaused,
                 long agentEventsReceived) {
@@ -206,28 +196,21 @@ public final class CaptureStatusBar {
                 : agentWithDrivers;
         // T-PanweiInsertCapture F3：登记盲区（>0 才挂；类名有则带括号后缀）——「哪个 PS 类取不到 SQL」
         // 【反向验证探针锚点】注释掉下面 if 块 = 摘除盲区可见化，CaptureStatusBarTest 盲区用例必红。
-        String agentWithBlind;
-        if (d.agentStatus() != null && d.agentUnresolvedBlind() > 0L) {
-            String suffix = d.agentBlindClasses().isEmpty()
-                    ? ""
-                    : MpSqlVisualizerBundle.message("log.statusbar.agent.blind.classes",
-                            String.join(", ", d.agentBlindClasses()));
-            agentWithBlind = MpSqlVisualizerBundle.message("log.statusbar.agent.blind",
-                    agentWithDropped, d.agentUnresolvedBlind(), suffix);
-        } else {
-            agentWithBlind = agentWithDropped;
-        }
+        String agentWithBlind = d.agentStatus() != null && d.agentUnresolvedBlind() > 0L
+                ? MpSqlVisualizerBundle.message("log.statusbar.agent.blind", agentWithDropped,
+                        d.agentUnresolvedBlind(),
+                        d.agentBlindClasses().isEmpty() ? "" : MpSqlVisualizerBundle.message(
+                                "log.statusbar.agent.blind.classes",
+                                String.join(", ", d.agentBlindClasses())))
+                : agentWithDropped;
         // T-PanweiInsertCapture F2：两条静默路径的计数（>0 才挂——正常嵌套会产生少量门禁抑制，持续增长才异常）
-        // 【反向验证探针锚点】注释掉下面 if 块 = 摘除组装失败可见化，CaptureStatusBarTest 对应用例必红。
         String agentWithAssemble = d.agentStatus() != null && d.agentAssembleFailures() > 0L
                 ? MpSqlVisualizerBundle.message("log.statusbar.agent.assemble", agentWithBlind, d.agentAssembleFailures())
                 : agentWithBlind;
         String agentWithNest = d.agentStatus() != null && d.agentNestSuppressed() > 0L
                 ? MpSqlVisualizerBundle.message("log.statusbar.agent.nest", agentWithAssemble, d.agentNestSuppressed())
                 : agentWithAssemble;
-        // T-NestGateObserve：陈旧嵌套（深度泄漏的确诊读数）——只在 >0 时挂；正常嵌套链存活不足阈值，
-        // 该计数恒 0，不产生噪音。
-        // 【反向验证探针锚点】注释掉下面 if 块 = 摘除陈旧嵌套可见化，CaptureStatusBarTest 对应用例必红。
+        // T-NestGateObserve：陈旧嵌套（深度泄漏的确诊读数）——只在 >0 时挂。
         String agentWithStale = d.agentStatus() != null && d.agentNestStale() > 0L
                 ? MpSqlVisualizerBundle.message("log.statusbar.agent.nestStale", agentWithNest, d.agentNestStale())
                 : agentWithNest;

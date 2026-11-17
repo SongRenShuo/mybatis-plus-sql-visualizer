@@ -32,10 +32,9 @@ public class XmlSqlRenderer {
     }
 
     /**
-     * master 侧默认参量便捷重载后的全参入口。
+     * 全参渲染（T-MbgExamplePreview R1）。
      *
-     * @param emptyDollarPlaceholder T-MbgExamplePreview R1：{@code ${}} 空值输出 {@code {{表达式}}}
-     *                               占位（预览链开启，默认关）。
+     * @param emptyDollarPlaceholder `${}` 空值输出 {@code {{表达式}}} 占位（预览链开启，默认关）
      */
     public RenderedXmlSql render(
             SqlNode node,
@@ -46,7 +45,8 @@ public class XmlSqlRenderer {
             Set<String> bindNames,
             boolean emptyDollarPlaceholder
     ) {
-        DynamicContext context = new DynamicContext(bindings, conditionOverrides, protectedNames, staticFieldValues, emptyDollarPlaceholder);
+        DynamicContext context = new DynamicContext(bindings, conditionOverrides, protectedNames,
+                staticFieldValues, emptyDollarPlaceholder);
         node.apply(context);
         // T-M25.5：渲染完成后提取 bind 求值结果（含覆盖值）——参数行自动回填显示
         Map<String, String> bindValues = new HashMap<>();

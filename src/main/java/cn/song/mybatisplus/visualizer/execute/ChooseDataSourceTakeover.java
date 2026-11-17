@@ -73,51 +73,6 @@ public final class ChooseDataSourceTakeover {
     }
 
     /**
-     * T-DsListAddSource（20261111）：两路数据源合并的<b>纯函数</b>（测试直测）。
-     *
-     * <ol>
-     * <li>每个条目先投影成 {@code LocalDataSource}（{@code DbDataSource.getDelegate()} 解包，见
-     * {@link DataSourceSettings#resolveLocalDataSource}——{@code getAllDataSourcesForExec} 返回的是 PSI 层
-     * {@code DbDataSource}，投影失败丢弃）；</li>
-     * <li>名字解析失败丢弃——<b>控制台下拉末尾「unknown」死项的根因</b>（名字回落 {@code "Unknown"} 被直接
-     * 渲染进条目），宁缺毋滥，不再漏出 unknown；</li>
-     * <li>按 uniqueId 去重（取不到 id 才按显示名兜底），registered 先入、native 补集在后。</li>
-     * </ol>
-     *
-     * <p>投影/取名以函数入参注入：单测传桩即可（默认实现走反射，平台缺席时返回 null，行为一致）。
-     * master 侧默认参（{@code resolve/uniqueIdOf/nameOf}）落双重载；函数类型落 {@code Function1}。</p>
-     */
-    public static List<Object> mergeLocalDataSources(List<Object> registered, List<Object> fromNative) {
-        return mergeLocalDataSources(registered, fromNative,
-                DataSourceSettings::resolveLocalDataSource,
-                DataSourceSettings::getUniqueId,
-                DataSourceSettings::nameOrNull);
-    }
-
-    /** {@link #mergeLocalDataSources(List, List)} 全参形态（master 全参签名，投影/取名可注入）。 */
-    public static List<Object> mergeLocalDataSources(
-            List<Object> registered, List<Object> fromNative,
-            kotlin.jvm.functions.Function1<Object, Object> resolve,
-            kotlin.jvm.functions.Function1<Object, String> uniqueIdOf,
-            kotlin.jvm.functions.Function1<Object, String> nameOf) {
-        java.util.Set<String> seen = new java.util.HashSet<>();
-        List<Object> out = new ArrayList<>(registered.size() + fromNative.size());
-        List<Object> both = new ArrayList<>(registered.size() + fromNative.size());
-        both.addAll(registered);
-        both.addAll(fromNative);
-        for (Object ds : both) {
-            Object local = resolve.invoke(ds);
-            if (local == null) continue;
-            String name = nameOf.invoke(local);
-            if (name == null) continue;
-            String uid = uniqueIdOf.invoke(local);
-            String key = uid != null ? uid : "name:" + name;
-            if (seen.add(key)) out.add(local);
-        }
-        return out;
-    }
-
-    /**
      * 接管包装组：事件文件是本插件 exec 文件时子项改为「每数据源一项」，其它场景逐字委托原生组。
      */
     public static final class ChooseDataSourceTakeoverGroup extends ActionGroup {
@@ -240,21 +195,28 @@ public final class ChooseDataSourceTakeover {
             // T-DsListAddSource：列表为空但平台新建入口在位时，仍单独给「添加数据源…」出口——
             // 空列表什么都不给＝用户没有任何出路（计划 §七 用例 4）。
             if (sources.isEmpty() && !withAddEntry) return delegateChildren(e);
-            List<AnAction> actions = new ArrayList<>(sources.size() + 1);
+            List<AnAction> items = new ArrayList<>(sources.size() + 1);
             for (Object ds : sources) {
-                String name = DataSourceSettings.nameOrNull(ds);
-                Icon icon = null;
+                String name;
+                try {
+                    name = DataSourceSettings.nameOrNull(ds);
+                    if (name == null) name = "";
+                } catch (Throwable ignored) {
+                    name = "";
+                }
+                Icon icon;
                 try {
                     icon = DataSourceSettings.getIcon(ds);
                 } catch (Throwable ignored) {
+                    icon = null;
                 }
-                actions.add(new SwitchToDataSourceAction(project, name != null ? name : "", icon));
+                items.add(new SwitchToDataSourceAction(project, name, icon));
             }
             // T-DsListAddSource：末尾「添加数据源…」（D-3 平台不可用时隐藏，不做置灰死项）
             if (withAddEntry) {
-                actions.add(new AddDataSourceAction());
+                items.add(new AddDataSourceAction());
             }
-            return actions.toArray(new AnAction[0]);
+            return items.toArray(new AnAction[0]);
         }
 
         private AnAction @NotNull [] delegateChildren(@Nullable AnActionEvent e) {
@@ -305,9 +267,10 @@ public final class ChooseDataSourceTakeover {
                 LOG.warn("[M36][Takeover] native source enumeration FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage());
                 fromNative = List.of();
             }
-            if (fromNative.isEmpty()) return all;
-            if (all.isEmpty()) return fromNative;
-            List<Object> merged = mergeLocalDataSources(all, fromNative);
+            List<Object> merged = mergeLocalDataSources(all, fromNative,
+                    DataSourceSettings::resolveLocalDataSource,
+                    DataSourceSettings::getUniqueId,
+                    DataSourceSettings::nameOrNull);
             // T-DsListAddSource W1 取证：被丢弃条目数逐次点开记一条（unknown 死项根因），真机读数以此为准。
             int rawTotal = all.size() + fromNative.size();
             if (merged.size() < rawTotal) {
@@ -316,6 +279,44 @@ public final class ChooseDataSourceTakeover {
                         + ", clean=" + merged.size() + ", file=" + (vf != null ? vf.getPath() : null));
             }
             return merged;
+        }
+
+        /**
+         * T-DsListAddSource（20261111）：两路数据源合并的<b>纯函数</b>（测试直测）。
+         *
+         * <ol>
+         * <li>每个条目先投影成 LocalDataSource（DbDataSource.getDelegate() 解包——PSI 层 DbDataSource
+         *     投影失败丢弃）；</li>
+         * <li>名字解析失败丢弃——<b>控制台下拉末尾「unknown」死项的根因</b>（名字回落 "Unknown" 被直接
+         *     渲染进条目），宁缺毋滥，不再漏出 unknown；</li>
+         * <li>按 uniqueId 去重（取不到 id 才按显示名兜底），registered 先入、native 补集在后。</li>
+         * </ol>
+         */
+        static List<Object> mergeLocalDataSources(@NotNull List<Object> registered,
+                                                  @NotNull List<Object> nativeSources,
+                                                  @NotNull java.util.function.Function<Object, Object> resolve,
+                                                  @NotNull java.util.function.Function<Object, String> uniqueIdOf,
+                                                  @NotNull java.util.function.Function<Object, String> nameOf) {
+            java.util.Set<String> seen = new java.util.HashSet<>();
+            List<Object> out = new ArrayList<>(registered.size() + nativeSources.size());
+            List<Object> combined = new ArrayList<>(registered);
+            combined.addAll(nativeSources);
+            for (Object ds : combined) {
+                Object local = resolve.apply(ds);
+                if (local == null) {
+                    continue;
+                }
+                String name = nameOf.apply(local);
+                if (name == null) {
+                    continue;
+                }
+                String id = uniqueIdOf.apply(local);
+                String key = id != null ? id : "name:" + name;
+                if (seen.add(key)) {
+                    out.add(local);
+                }
+            }
+            return out;
         }
 
         /** 展示形态（图标/文案/可用性）交给原生动作，并把结果镜像进模板（工具栏按钮读模板）。 */
@@ -340,14 +341,18 @@ public final class ChooseDataSourceTakeover {
             // 262 字节码实证：原生 `update` 会 setPopop/setPerformGroup(true) 等——`setPerformGroup`
             // 正是工具栏把这个组渲染成「图标+文案」按钮（而非纯图标组）的开关。本类不能覆写 final 的
             // getTemplatePresentation，于是把原生每次算好的呈现写回模板，按钮才会显示数据源名。
-            // master 侧 runCatching 降级：模板镜像失败不阻断 update 主流程。
+            //
+            // T-TemplatePresentationWarn：镜像**不能**直接 `templatePresentation.setEnabled/setVisible`——
+            // 243 平台（app-client.jar 字节码实证）这两个 setter 开头就 `assertNotTemplatePresentation`，
+            // 检查 TEMPLATE 位（myFlags & 4096）后 `warnInProduction`：每次 update 打两条 WARN 带全栈，
+            // 263 有升级为 error 的风险。平台自己的 `copyFrom(Presentation)` 是合规通道：私有实现直接
+            // `BitUtil.set(myFlags, …)` 写 enabled/visible 位、不经断言，且补发 enabled/visible 属性变化
+            // 事件（工具栏按钮据事件重绘，比手写镜像还多一层正规通知）。文本/图标/描述/客户端属性也一并
+            // 镜像进来；performGroup 位不在 copyFrom 的复制面里，仍单独设。
             try {
                 e.getPresentation().setPerformGroup(true);
                 getTemplatePresentation().setPerformGroup(true);
-                getTemplatePresentation().setText(e.getPresentation().getText() != null ? e.getPresentation().getText() : "", false);
-                getTemplatePresentation().setIcon(e.getPresentation().getIcon());
-                getTemplatePresentation().setEnabled(e.getPresentation().isEnabled());
-                getTemplatePresentation().setVisible(e.getPresentation().isVisible());
+                getTemplatePresentation().copyFrom(e.getPresentation());
             } catch (Throwable ignored) {
             }
         }
@@ -376,60 +381,59 @@ public final class ChooseDataSourceTakeover {
             }
             List<Object> sources = dataSourcesFor(project, file);
             boolean withAddEntry = NewDataSourceEntry.isAvailable(project);
-            // T-DsListAddSource：条目模型与 B 侧（Runner 弹窗）共用 RunnerItem；sources 已在
-            // dataSourcesFor 里收口成「可解析名字的 LocalDataSource」，此处名字必非空。
-            List<DataSourceSelector.RunnerItem> items = new ArrayList<>();
+            // T-DsListAddSource：条目模型与 B 侧（Runner 弹窗）共用；sources 已在 dataSourcesFor 里
+            // 收口成「可解析名字的 LocalDataSource」，此处名字必非空。
+            List<com.intellij.openapi.util.Pair<String, Icon>> items = new ArrayList<>();
             for (Object ds : sources) {
                 String name = DataSourceSettings.nameOrNull(ds);
-                Icon icon = null;
+                if (name == null || name.isBlank()) continue;
+                Icon icon;
                 try {
                     icon = DataSourceSettings.getIcon(ds);
                 } catch (Throwable ignored) {
+                    icon = null;
                 }
-                items.add(new DataSourceSelector.RunnerItem(ds, name != null ? name : "", icon));
+                items.add(com.intellij.openapi.util.Pair.create(name, icon));
             }
+            // T-DsListAddSource：末尾「添加数据源…」条目（D-3 平台不可用时隐藏）
             if (withAddEntry) {
-                items.add(new DataSourceSelector.RunnerItem(
-                        null,
-                        MpSqlVisualizerBundle.message("execute.datasource.add"),
-                        null,
-                        true));
+                items.add(com.intellij.openapi.util.Pair.create(
+                        MpSqlVisualizerBundle.message("execute.datasource.add"), (Icon) null));
             }
             if (items.isEmpty()) {
                 original.actionPerformed(e);
                 return;
             }
             LOG.info("[M36][Takeover] actionPerformed -> own popup (sources=" + items.size() + ")");
-            Component anchorComp = e.getInputEvent() != null ? e.getInputEvent().getComponent() : null;
             try {
                 // 用 BaseListPopupStep 而不是 createActionGroupPopup：后者会把数据源名里的 `_`
                 // 当助记符吃掉（真机 `mpj_demo@localhost` 显示成缺少下划线），且带搜索框、位置跟着
                 // 焦点组件漂。纯列表 + showUnderneathOf 才与原生控制台那个下拉一致。
-                com.intellij.openapi.ui.popup.util.BaseListPopupStep<DataSourceSelector.RunnerItem> step =
+                com.intellij.openapi.ui.popup.util.BaseListPopupStep<com.intellij.openapi.util.Pair<String, Icon>> step =
                         new com.intellij.openapi.ui.popup.util.BaseListPopupStep<>(
                                 MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource"),
                                 items) {
                             @Override
-                            public String getTextFor(DataSourceSelector.RunnerItem value) {
-                                return value.name;
+                            public String getTextFor(com.intellij.openapi.util.Pair<String, Icon> value) {
+                                return value.first;
                             }
 
                             @Override
-                            public Icon getIconFor(DataSourceSelector.RunnerItem value) {
-                                return value.icon;
+                            public Icon getIconFor(com.intellij.openapi.util.Pair<String, Icon> value) {
+                                return value.second;
                             }
 
                             @Override
                             public com.intellij.openapi.ui.popup.PopupStep<?> onChosen(
-                                    DataSourceSelector.RunnerItem selectedValue, boolean finalChoice) {
-                                // T-DsListAddSource：末尾「添加数据源…」→ 平台原生新建数据源流（不换源不执行）
-                                if (selectedValue != null && selectedValue.addNew) {
-                                    return doFinalStep(() ->
-                                            NewDataSourceEntry.openCreatePopup(project, anchorComp));
-                                }
-                                String picked = selectedValue != null && selectedValue.name != null
-                                        ? selectedValue.name : "";
+                                    com.intellij.openapi.util.Pair<String, Icon> selectedValue, boolean finalChoice) {
+                                String picked = selectedValue.first;
                                 return doFinalStep((Runnable) () -> {
+                                    // T-DsListAddSource：「添加数据源…」条目走平台原生新建流（不走换源链）
+                                    if (MpSqlVisualizerBundle.message("execute.datasource.add").equals(picked)) {
+                                        LOG.info("[M36][Takeover] popup picked: <add-new>");
+                                        NewDataSourceEntry.openCreatePopup(project, null);
+                                        return;
+                                    }
                                     LOG.info("[M36][Takeover] popup picked: " + picked);
                                     SqlPreviewPanel panel = SqlPreviewService.activePreviewPanel(project);
                                     if (panel != null) {
@@ -440,8 +444,9 @@ public final class ChooseDataSourceTakeover {
                         };
                 com.intellij.openapi.ui.popup.JBPopup popup =
                         com.intellij.openapi.ui.popup.JBPopupFactory.getInstance().createListPopup(step);
-                if (anchorComp != null && anchorComp.isShowing()) {
-                    popup.showUnderneathOf(anchorComp);
+                Component comp = e.getInputEvent() != null ? e.getInputEvent().getComponent() : null;
+                if (comp != null && comp.isShowing()) {
+                    popup.showUnderneathOf(comp);
                 } else {
                     popup.showInBestPositionFor(e.getDataContext());
                 }
@@ -458,7 +463,7 @@ public final class ChooseDataSourceTakeover {
 
         /**
          * T-DsListAddSource：末尾「添加数据源…」——弹平台原生新建数据源流（驱动列表 → 原生属性
-         * 对话框，见 {@link NewDataSourceEntry}）。工具栏下拉的子项形态。
+         * 对话框，见 NewDataSourceEntry）。工具栏下拉的子项形态。
          */
         private static final class AddDataSourceAction extends AnAction {
 
@@ -540,7 +545,8 @@ public final class ChooseDataSourceTakeover {
             }
             if (originalAction instanceof ChooseDataSourceTakeoverGroup) return;
             ChooseDataSourceTakeoverGroup takeover = new ChooseDataSourceTakeoverGroup(originalAction);
-            manager.replaceAction(ACTION_ID, takeover);
+            // T-CommentShortcutKeymap：换入全局动作前先把快捷键集合置 EMPTY（走公共 API 通道）
+            cn.song.mybatisplus.visualizer.util.ActionReplaceSilentlyKt.replaceActionSilently(manager, ACTION_ID, takeover);
             installed = takeover;
             log.info("[M36][Takeover] installed: " + ACTION_ID + " -> original=" + originalAction.getClass().getName());
             BarrierRegistry.register(new BarrierRegistry.Entry(
@@ -559,7 +565,9 @@ public final class ChooseDataSourceTakeover {
             try {
                 ActionManager manager = ActionManager.getInstance();
                 if (manager.getAction(ACTION_ID) == takeover) {
-                    manager.replaceAction(ACTION_ID, takeover.originalActionForRestore());
+                    // T-CommentShortcutKeymap：换回全局动作前同样预置 EMPTY（换回触发一次注册）
+                    cn.song.mybatisplus.visualizer.util.ActionReplaceSilentlyKt.replaceActionSilently(
+                            manager, ACTION_ID, takeover.originalActionForRestore());
                 }
             } catch (Throwable ignored) {
             }

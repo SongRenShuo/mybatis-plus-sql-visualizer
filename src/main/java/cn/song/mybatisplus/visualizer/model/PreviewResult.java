@@ -82,6 +82,73 @@ public final class PreviewResult {
     private final List<PagesColumn> pagesColumns;
     /** JDBC 命名参数（NamedParameterJdbcTemplate `:name`）：参数名 → 引号提示；空 map = 纯 `?` 顺序回填。 */
     private final Map<String, ParamHint> namedParamHints;
+
+    /**
+     * T-PreviewOpenPerfM2 M9：本次预览因<b>索引未就绪</b>（dumb mode）跳过了 M2 调用点检索，
+     * 这里是「索引就绪后重算一次」的闭包；面板据此挂 {@code DumbService.runWhenSmart} 自动刷新，
+     * 让冷态首次打开既秒出骨架、又能在索引就绪后补上真实 Criterion。
+     * null = 无需重试（未跳过 / 非 XML 链）。
+     */
+    private final Function0<PreviewResult> retryWhenIndexReady;
+
+    /**
+     * T-StartupReadLockFreeze §14.8：本次预览的 M2 调用点检索<b>转后台</b>了（首开同步走太慢，
+     * 真机 2500 表工程一次检索 2.4s 且无法在引擎内部打断），这里是等待就绪的 key；
+     * 面板据此挂 {@code MbgExampleCallResolver.whenResolved}，解析落地后重算并刷新。
+     *
+     * <p>与 retryWhenIndexReady 的区别：后者语义是「等 smart mode」（已就绪时会立即触发，
+     * 拿来等 M2 会空转），前者等的是<b>具体一次解析完成</b>。null = 无需等待。</p>
+     */
+    private final String m2AwaitKey;
+
+    /**
+     * UI-001：warning 是否为<b>信息性说明</b>（非渲染失败）。
+     *
+     * <p>true 时面板横幅/元信息行用 ℹ 信息级前缀（panel.banner.renderNote），不再冒充
+     * 「⚠ 预览未完整还原」。判据由产出链自证（iBatis 链：parameterMap 的「（引擎行为）」说明、
+     * iterate 未供值的「待填值」降级提示）；其余链路默认 false，横幅语义零变化。</p>
+     */
+    private final boolean informationalWarning;
+
+    /**
+     * T-Ibatis2Gap 券 A：iBatis 语句的参数/条件行清单（IbatisParamModelBuilder 产物）。面板据此建
+     * 条件开关行 / 参数值行 / iterate 值列表行 / {@code $x$} 风险行。
+     * null = 非 iBatis 预览（MyBatis/Wrapper/JPA 链零感知）。
+     */
+    private final IbatisParamModel ibatisParamModel;
+
+    /**
+     * T-Ibatis2Gap 券 A：模型级重渲染回调（渲染接缝选型 A——面板参数/勾选变化时调用它拿新结果）。
+     * 闭包由 ui/IbatisXmlPreviewService 用<b>同一 statement</b> 创建，装配 Map 后走既有
+     * {@code SqlMapSqlRenderer.render(statement, params)}——渲染器与 MyBatis 链零改动。
+     * null = 无模型级重渲染能力（既有构造点零影响）。
+     */
+    private final Function1<PreviewRerenderInput, PreviewResult> rerender;
+
+    /**
+     * T-PreviewStmtTypeScope：本次判型命中的消费调用——语句类型为什么是 UPDATE/DELETE/COUNT/EXISTS
+     * 的来历。null = 该链上没有消费调用，按默认 SELECT 渲染。面板 meta 行据此显示
+     * 「类型依据: remove() 第 120 行」，悬停列全部候选（otherConsumptions）。
+     */
+    private final WrapperConsumption decidingConsumption;
+
+    /** T-PreviewStmtTypeScope：该 wrapper 上识别到的<b>全部</b>消费调用（D-2 作用域收窄前的候选集）。 */
+    private final List<WrapperConsumption> otherConsumptions;
+
+    /**
+     * T-PreviewStmtTypeScope D-3：可切换的预览目标——该 wrapper 上出现过的消费档位（按分派优先级
+     * 去重排序）。长度 ≥ 2 表示「同一段代码在运行时可能产出多种语句」；面板给出切换入口，
+     * 默认落在判型依据命中的那一档（D-2），其余由用户按需切换。
+     */
+    private final List<ConsumptionKind> statementTypeOptions;
+
+    /**
+     * T-PreviewStmtTypeScope D-3：按指定档位重算本次预览（同一锚点、强制判型）。
+     * 只有 statementTypeOptions 长度 ≥ 2 时才挂；闭包内做 PSI 读取，调用方必须经
+     * previewAsync 在后台线程执行。返回 null = 该档位不可用（链/表不可解析）。
+     */
+    private final Function1<ConsumptionKind, PreviewResult> statementTypeSwitch;
+
     /**
      * T-SourceJumpFunnel P2-2：调用栈快照「类#方法:行 ← …」（栈顶在左；agent 通道产出，
      * 日志/历史条目双击预览透传）。null = 无（桥通道 / 旧条目），面板不显示栈节点。
@@ -98,21 +165,6 @@ public final class PreviewResult {
      * 复制可执行 SQL 据此给产物加标记注释。非 XML 链（Wrapper/JPA/日志还原）无 `${}` 语义恒 false。
      */
     private final boolean hasDollarRawSegments;
-    /**
-     * T-PreviewOpenPerfM2 M9：本次预览因<b>索引未就绪</b>（dumb mode）跳过了 M2 调用点检索，
-     * 这里是「索引就绪后重算一次」的闭包；面板据此挂 {@code DumbService.runWhenSmart} 自动刷新，
-     * 让冷态首次打开既秒出骨架、又能在索引就绪后补上真实 Criterion。
-     * null = 无需重试（未跳过 / 非 XML 链）。
-     */
-    private final Function0<PreviewResult> retryWhenIndexReady;
-    /**
-     * UI-001：{@code warning} 是否为<b>信息性说明</b>（非渲染失败）。
-     *
-     * <p>true 时面板横幅/元信息行用 {@code ℹ} 信息级前缀（{@code panel.banner.renderNote}），不再冒充
-     * 「⚠ 预览未完整还原」。判据由产出链自证（iBatis 链：parameterMap 的「（引擎行为）」说明、
-     * iterate 未供值的「待填值」降级提示）；其余链路默认 false，横幅语义零变化。</p>
-     */
-    private final boolean informationalWarning;
     /**
      * R12 T-PaginationSim：分页 COUNT 包裹 SQL（D1=A 预览附第二条语句，面板在主 SQL 后并列渲染；
      * D2=A 基础形态 {@code SELECT COUNT(*) FROM (原SQL) TOTAL}，MP 3.5.17 反编译逐字节形态）。
@@ -203,20 +255,6 @@ public final class PreviewResult {
      * 那段注释（券 B）。空表 = 无运行期占位，或没有可填的值（纯说明性注释放不进本表）。</p>
      */
     private final List<RuntimeSlot> runtimeSlots;
-    /**
-     * T-Ibatis2Gap 券 A：iBatis 语句的参数/条件行清单
-     * （{@code cn.song.mybatisplus.visualizer.xml.ibatis.IbatisParamModelBuilder} 产物）。
-     * 面板据此建条件开关行 / 参数值行 / iterate 值列表行 / {@code $x$} 风险行。
-     * null = 非 iBatis 预览（MyBatis/Wrapper/JPA 链零感知）。
-     */
-    private final IbatisParamModel ibatisParamModel;
-    /**
-     * T-Ibatis2Gap 券 A：模型级重渲染回调（渲染接缝选型 A——面板参数/勾选变化时调用它拿新结果，
-     * 不把 {@code xmlModel} 抽成接口）。闭包由 {@code ui/IbatisXmlPreviewService} 用<b>同一 statement</b> 创建，
-     * 装配 Map 后走既有 {@code SqlMapSqlRenderer.render(statement, params)}——渲染器与 MyBatis 链零改动。
-     * null = 无模型级重渲染能力（既有构造点零影响）。
-     */
-    private final Function1<PreviewRerenderInput, PreviewResult> rerender;
 
     public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
                          WrapperType wrapperType, String tableName, String warning, List<String> columns,
@@ -362,11 +400,11 @@ public final class PreviewResult {
     }
 
     /**
-     * K2J 互操作：39 参历史形态（T-SyncK2JMaster183 前的规范构造器）——master T-PreviewOpenPerfM2 M9 / UI-001 /
-     * T-Ibatis2Gap 券 A 新增 {@code retryWhenIndexReady}/{@code informationalWarning}（插在
-     * {@code hasDollarRawSegments} 与 {@code countSql} 之间）与 {@code ibatisParamModel}/{@code rerender}
-     * （尾参）四个带默认值字段，Kotlin 调用方（具名实参）天然合法——Java 侧本 39 参形态保留，
-     * 四新参取默认值（null / false，与 master 默认值等价），委托 43 参规范构造器。
+     * 规范构造器（39 参）：35 参历史序 + 四个 T-PagesHql / T-RuntimeSlotFill 券 A 尾参
+     * （sourceLanguage/originalSql/degradations/runtimeSlots）。K2J 侧 {@code threadName}/
+     * {@code countSql}/{@code paginationLimitLine}/{@code diagramStatement}/{@code historyFingerprintSeed}
+     * 为更早的带默认值后置字段（Kotlin 默认参），历史短参形态在 Kotlin 调用方天然合法——
+     * Java 侧保留对应重载（见上/下）委托本构造器、新参取默认值（null，与 master 默认值等价）。
      */
     public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
                          WrapperType wrapperType, String tableName, String warning, List<String> columns,
@@ -386,20 +424,16 @@ public final class PreviewResult {
         this(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
                 columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
                 initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns,
-                namedParamHints, stackDigest, threadName, hasDollarRawSegments, null, false,
-                countSql, paginationLimitLine, placeholderParamNames, duplicateParamNames,
-                diagramStatement, historyFingerprintSeed, paginationParamSources, renderedDialect,
-                dialectDecision, historyEntryId, actualSql, sourceLanguage, originalSql,
-                degradations, runtimeSlots, null, null);
+                namedParamHints, stackDigest, threadName, hasDollarRawSegments, countSql, paginationLimitLine,
+                placeholderParamNames, duplicateParamNames, diagramStatement, historyFingerprintSeed,
+                paginationParamSources, renderedDialect, dialectDecision, historyEntryId, actualSql,
+                sourceLanguage, originalSql, degradations, runtimeSlots,
+                null, null, false, null, null, null, List.<WrapperConsumption>of(), List.<ConsumptionKind>of(), null);
     }
 
     /**
-     * 规范构造器（43 参）：39 参历史序 + T-PreviewOpenPerfM2 M9 / UI-001 / T-Ibatis2Gap 券 A 四新参
-     * （retryWhenIndexReady/informationalWarning 插在 hasDollarRawSegments 与 countSql 之间；
-     * ibatisParamModel/rerender 尾参，与 master Kotlin 声明序一致）。K2J 侧 {@code threadName}/
-     * {@code countSql}/{@code paginationLimitLine}/{@code diagramStatement}/{@code historyFingerprintSeed}
-     * 为更早的带默认值后置字段（Kotlin 默认参），历史短参形态在 Kotlin 调用方天然合法——
-     * Java 侧保留对应重载（见上/下）委托本构造器、新参取默认值（null，与 master 默认值等价）。
+     * 全参规范构造器（48 参）：39 参历史序 + 本轮九个 T-Ibatis2Gap / T-PreviewStmtTypeScope /
+     * T-StartupReadLockFreeze 新尾参（Kotlin 默认参语义，既有调用点经 39 参重载取默认值零影响）。
      */
     public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
                          WrapperType wrapperType, String tableName, String warning, List<String> columns,
@@ -409,7 +443,6 @@ public final class PreviewResult {
                          List<FillClause> fillClauses, String previousSql, List<PagesColumn> pagesColumns,
                          Map<String, ParamHint> namedParamHints, String stackDigest, String threadName,
                          boolean hasDollarRawSegments,
-                         Function0<PreviewResult> retryWhenIndexReady, boolean informationalWarning,
                          String countSql, String paginationLimitLine,
                          List<String> placeholderParamNames, Set<String> duplicateParamNames,
                          SelectStatement diagramStatement, String historyFingerprintSeed,
@@ -417,8 +450,14 @@ public final class PreviewResult {
                          DialectDecisionEngine.Decision dialectDecision, String historyEntryId, String actualSql,
                          SourceLanguage sourceLanguage, String originalSql,
                          List<String> degradations, List<RuntimeSlot> runtimeSlots,
+                         Function0<PreviewResult> retryWhenIndexReady, String m2AwaitKey,
+                         boolean informationalWarning,
                          IbatisParamModel ibatisParamModel,
-                         Function1<PreviewRerenderInput, PreviewResult> rerender) {
+                         Function1<PreviewRerenderInput, PreviewResult> rerender,
+                         WrapperConsumption decidingConsumption,
+                         List<WrapperConsumption> otherConsumptions,
+                         List<ConsumptionKind> statementTypeOptions,
+                         Function1<ConsumptionKind, PreviewResult> statementTypeSwitch) {
         this.sql = sql;
         this.compactSql = compactSql;
         this.unresolvedParams = unresolvedParams;
@@ -443,8 +482,6 @@ public final class PreviewResult {
         this.stackDigest = stackDigest;
         this.threadName = threadName;
         this.hasDollarRawSegments = hasDollarRawSegments;
-        this.retryWhenIndexReady = retryWhenIndexReady;
-        this.informationalWarning = informationalWarning;
         this.countSql = countSql;
         this.paginationLimitLine = paginationLimitLine;
         this.placeholderParamNames = placeholderParamNames != null ? placeholderParamNames : List.of();
@@ -460,8 +497,15 @@ public final class PreviewResult {
         this.originalSql = originalSql;
         this.degradations = degradations != null ? degradations : List.of();
         this.runtimeSlots = runtimeSlots != null ? runtimeSlots : List.of();
+        this.retryWhenIndexReady = retryWhenIndexReady;
+        this.m2AwaitKey = m2AwaitKey;
+        this.informationalWarning = informationalWarning;
         this.ibatisParamModel = ibatisParamModel;
         this.rerender = rerender;
+        this.decidingConsumption = decidingConsumption;
+        this.otherConsumptions = otherConsumptions != null ? List.copyOf(otherConsumptions) : List.of();
+        this.statementTypeOptions = statementTypeOptions != null ? List.copyOf(statementTypeOptions) : List.of();
+        this.statementTypeSwitch = statementTypeSwitch;
     }
 
     /** K2J 互操作：master 新五参取默认值的 29 参形态（既有调用点零改动）。 */
@@ -630,20 +674,6 @@ public final class PreviewResult {
         return hasDollarRawSegments;
     }
 
-    /**
-     * T-PreviewOpenPerfM2 M9：索引就绪后重算一次的闭包（null = 无需重试——未跳过 / 非 XML 链）。
-     */
-    public Function0<PreviewResult> getRetryWhenIndexReady() {
-        return retryWhenIndexReady;
-    }
-
-    /**
-     * UI-001：warning 是否为信息性说明（非渲染失败）；true 时面板横幅用信息级前缀，不冒充「预览未完整还原」。
-     */
-    public boolean isInformationalWarning() {
-        return informationalWarning;
-    }
-
     public List<String> getPlaceholderParamNames() {
         return placeholderParamNames;
     }
@@ -728,20 +758,6 @@ public final class PreviewResult {
         return runtimeSlots;
     }
 
-    /**
-     * T-Ibatis2Gap 券 A：iBatis 语句的参数/条件行清单（null = 非 iBatis 预览，MyBatis/Wrapper/JPA 链零感知）。
-     */
-    public IbatisParamModel getIbatisParamModel() {
-        return ibatisParamModel;
-    }
-
-    /**
-     * T-Ibatis2Gap 券 A：模型级重渲染回调（null = 无模型级重渲染能力；由 ui/IbatisXmlPreviewService 创建）。
-     */
-    public Function1<PreviewRerenderInput, PreviewResult> getRerender() {
-        return rerender;
-    }
-
     /** effectiveDialect：previewModel/batchModel 方言优先，缺省取本次渲染瞬态方言。 */
     public Dialect getEffectiveDialect() {
         if (previewModel != null && previewModel.getDialect() != null) {
@@ -781,6 +797,88 @@ public final class PreviewResult {
                 duplicateParamNames, diagramStatement, historyFingerprintSeed);
     }
 
+    // ------------------------------------------------------------------
+    // 本轮新增字段的定向派生（Kotlin data class copy 的具名实参等价）
+    // ------------------------------------------------------------------
+
+    /**
+     * T-Ibatis2Gap 券 A：挂 iBatis 参数模型与重渲染回调的派生（其余字段全量保留）。
+     */
+    public PreviewResult withIbatisExtras(IbatisParamModel paramModel,
+                                          Function1<PreviewRerenderInput, PreviewResult> rerenderFn) {
+        return new PreviewResult(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning,
+                columns, columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel,
+                xmlModel, initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns,
+                namedParamHints, stackDigest, threadName, hasDollarRawSegments, countSql, paginationLimitLine,
+                placeholderParamNames, duplicateParamNames, diagramStatement, historyFingerprintSeed,
+                paginationParamSources, renderedDialect, dialectDecision, historyEntryId, actualSql,
+                sourceLanguage, originalSql, degradations, runtimeSlots,
+                retryWhenIndexReady, m2AwaitKey, informationalWarning,
+                paramModel, rerenderFn, decidingConsumption, otherConsumptions,
+                statementTypeOptions, statementTypeSwitch);
+    }
+
+    /**
+     * UI-001：替换告警行并显式指定信息级档位的派生（T-IbatisFix2 修复三的失败档产物）。
+     */
+    public PreviewResult withWarning(String newWarning, boolean newInformational) {
+        return new PreviewResult(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, newWarning,
+                columns, columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel,
+                xmlModel, initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns,
+                namedParamHints, stackDigest, threadName, hasDollarRawSegments, countSql, paginationLimitLine,
+                placeholderParamNames, duplicateParamNames, diagramStatement, historyFingerprintSeed,
+                paginationParamSources, renderedDialect, dialectDecision, historyEntryId, actualSql,
+                sourceLanguage, originalSql, degradations, runtimeSlots,
+                retryWhenIndexReady, m2AwaitKey, newInformational,
+                ibatisParamModel, rerender, decidingConsumption, otherConsumptions,
+                statementTypeOptions, statementTypeSwitch);
+    }
+
+    /** T-PreviewOpenPerfM2 M9：索引未就绪时的重试闭包（null = 无需重试）。 */
+    public Function0<PreviewResult> getRetryWhenIndexReady() {
+        return retryWhenIndexReady;
+    }
+
+    /** T-StartupReadLockFreeze §14.8：M2 转后台的等待 key（null = 无需等待）。 */
+    public String getM2AwaitKey() {
+        return m2AwaitKey;
+    }
+
+    /** UI-001：warning 是否为信息性说明（非渲染失败）。 */
+    public boolean isInformationalWarning() {
+        return informationalWarning;
+    }
+
+    /** T-Ibatis2Gap 券 A：iBatis 参数/条件行清单（null = 非 iBatis 预览）。 */
+    public IbatisParamModel getIbatisParamModel() {
+        return ibatisParamModel;
+    }
+
+    /** T-Ibatis2Gap 券 A：模型级重渲染回调（null = 无该能力）。 */
+    public Function1<PreviewRerenderInput, PreviewResult> getRerender() {
+        return rerender;
+    }
+
+    /** T-PreviewStmtTypeScope：本次判型命中的消费调用（null = 该链上没有消费）。 */
+    public WrapperConsumption getDecidingConsumption() {
+        return decidingConsumption;
+    }
+
+    /** T-PreviewStmtTypeScope：全部消费调用候选集。 */
+    public List<WrapperConsumption> getOtherConsumptions() {
+        return otherConsumptions;
+    }
+
+    /** T-PreviewStmtTypeScope D-3：可切换的预览档位。 */
+    public List<ConsumptionKind> getStatementTypeOptions() {
+        return statementTypeOptions;
+    }
+
+    /** T-PreviewStmtTypeScope D-3：按档位重算的闭包（null = 不可切换）。 */
+    public Function1<ConsumptionKind, PreviewResult> getStatementTypeSwitch() {
+        return statementTypeSwitch;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -814,8 +912,6 @@ public final class PreviewResult {
                 && Objects.equals(stackDigest, that.stackDigest)
                 && Objects.equals(threadName, that.threadName)
                 && hasDollarRawSegments == that.hasDollarRawSegments
-                && Objects.equals(retryWhenIndexReady, that.retryWhenIndexReady)
-                && informationalWarning == that.informationalWarning
                 && Objects.equals(countSql, that.countSql)
                 && Objects.equals(paginationLimitLine, that.paginationLimitLine)
                 && Objects.equals(placeholderParamNames, that.placeholderParamNames)
@@ -825,9 +921,7 @@ public final class PreviewResult {
                 && sourceLanguage == that.sourceLanguage
                 && Objects.equals(originalSql, that.originalSql)
                 && Objects.equals(degradations, that.degradations)
-                && Objects.equals(runtimeSlots, that.runtimeSlots)
-                && Objects.equals(ibatisParamModel, that.ibatisParamModel)
-                && Objects.equals(rerender, that.rerender);
+                && Objects.equals(runtimeSlots, that.runtimeSlots);
     }
 
     @Override
@@ -835,10 +929,9 @@ public final class PreviewResult {
         return Objects.hash(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
                 columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
                 initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, namedParamHints,
-                stackDigest, threadName, hasDollarRawSegments, retryWhenIndexReady, informationalWarning,
-                countSql, paginationLimitLine, placeholderParamNames,
+                stackDigest, threadName, hasDollarRawSegments, countSql, paginationLimitLine, placeholderParamNames,
                 duplicateParamNames, diagramStatement, historyFingerprintSeed,
-                sourceLanguage, originalSql, degradations, runtimeSlots, ibatisParamModel, rerender);
+                sourceLanguage, originalSql, degradations, runtimeSlots);
     }
 
     @Override
@@ -853,8 +946,6 @@ public final class PreviewResult {
                 + ", namedParamHints=" + namedParamHints + ", stackDigest=" + stackDigest
                 + ", threadName=" + threadName
                 + ", hasDollarRawSegments=" + hasDollarRawSegments
-                + ", retryWhenIndexReady=" + retryWhenIndexReady
-                + ", informationalWarning=" + informationalWarning
                 + ", countSql=" + countSql
                 + ", paginationLimitLine=" + paginationLimitLine
                 + ", placeholderParamNames=" + placeholderParamNames
@@ -864,8 +955,6 @@ public final class PreviewResult {
                 + ", sourceLanguage=" + sourceLanguage
                 + ", originalSql=" + originalSql
                 + ", degradations=" + degradations
-                + ", runtimeSlots=" + runtimeSlots
-                + ", ibatisParamModel=" + ibatisParamModel
-                + ", rerender=" + rerender + ")";
+                + ", runtimeSlots=" + runtimeSlots + ")";
     }
 }

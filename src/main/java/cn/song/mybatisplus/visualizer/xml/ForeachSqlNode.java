@@ -197,7 +197,8 @@ public final class ForeachSqlNode implements SqlNode {
                 // D7：单词分隔符（`or` / `and` / `union all`）后补一个空格——否则与下一段的
                 // 起始 `(` 粘成 `or(`（真机 `WHERE ( a ) or( b )`）。标点分隔符（`,`）保持原样，
                 // `IN (?,?)` 的紧凑形态不动。
-                String sep = !prefix.isEmpty() && Character.isLetterOrDigit(prefix.charAt(prefix.length() - 1))
+                String sep = (!prefix.isEmpty()
+                        && Character.isLetterOrDigit(prefix.charAt(prefix.length() - 1)))
                         ? prefix + " " : prefix;
                 delegate.appendSql(sep);
                 prefixApplied = true;
@@ -205,7 +206,7 @@ public final class ForeachSqlNode implements SqlNode {
             delegate.appendSql(sql);
         }
 
-        /** 本轮迭代是否产出过内容（separator 顺延判据，见 {@link ForeachSqlNode#apply}）。 */
+        /** 本轮迭代是否产出过内容（separator 顺延判据，见 ForeachSqlNode.apply）。 */
         boolean hasContent() {
             return prefixApplied;
         }
@@ -240,6 +241,12 @@ public final class ForeachSqlNode implements SqlNode {
             return delegate.getStaticFieldValues();
         }
 
+        // T-MbgExamplePreview R1：占位模式必须转发——否则 foreach 体内的 `${}` 仍按空串输出
+        @Override
+        public boolean isEmptyDollarPlaceholder() {
+            return delegate.isEmptyDollarPlaceholder();
+        }
+
         @Override
         public Map<String, Object> getBindings() {
             return delegate.getBindings();
@@ -255,12 +262,6 @@ public final class ForeachSqlNode implements SqlNode {
         @Override
         public Map<String, Boolean> getConditionOutcomes() {
             return delegate.getConditionOutcomes();
-        }
-
-        // T-MbgExamplePreview R1：占位模式必须转发——否则 foreach 体内的 ${} 仍按空串输出
-        @Override
-        public boolean getEmptyDollarPlaceholder() {
-            return delegate.getEmptyDollarPlaceholder();
         }
     }
 
@@ -298,7 +299,7 @@ public final class ForeachSqlNode implements SqlNode {
                 return "#{" + newContent + "}";
             });
             // 迭代内容 trim——mapper 里 foreach 体的换行缩进原样输出会使 IN 每项换行一行；
-            // trim 后预览紧凑（SQL 语义不变，MyBatis 原样保留）
+            // trim 后预览紧凑（SQL 语义不变）。
             //
             // T-MbgExamplePreview R2：段间分隔改由下游缓冲负责（DynamicContext.appendSql 恒补空格；
             // TrimSqlNode 的 filtered 缓冲仅在粘连会拼成词时补）——此处再加空格会叠加成双空格。
@@ -335,6 +336,12 @@ public final class ForeachSqlNode implements SqlNode {
             return delegate.getStaticFieldValues();
         }
 
+        // T-MbgExamplePreview R1：占位模式必须转发——否则 foreach 体内的 `${}` 仍按空串输出
+        @Override
+        public boolean isEmptyDollarPlaceholder() {
+            return delegate.isEmptyDollarPlaceholder();
+        }
+
         @Override
         public Map<String, Object> getBindings() {
             return delegate.getBindings();
@@ -350,12 +357,6 @@ public final class ForeachSqlNode implements SqlNode {
         @Override
         public Map<String, Boolean> getConditionOutcomes() {
             return delegate.getConditionOutcomes();
-        }
-
-        // T-MbgExamplePreview R1：占位模式必须转发——否则 foreach 体内的 ${} 仍按空串输出
-        @Override
-        public boolean getEmptyDollarPlaceholder() {
-            return delegate.getEmptyDollarPlaceholder();
         }
     }
 }

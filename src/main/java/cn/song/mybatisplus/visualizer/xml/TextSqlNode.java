@@ -60,7 +60,7 @@ public final class TextSqlNode implements SqlNode {
                         // T-MbgExamplePreview R1：预览占位模式——把缺段显式写进产物。
                         // MBG 的 `and ${criterion.condition}` 在模拟参数下会退化成裸 `and`，
                         // 产物看着像插件识别错；占位后是 `( {{criterion.condition}} )`，缺什么一目了然。
-                        if (context.getEmptyDollarPlaceholder()) {
+                        if (context.isEmptyDollarPlaceholder()) {
                             return "{{" + content + "}}";
                         }
                     }

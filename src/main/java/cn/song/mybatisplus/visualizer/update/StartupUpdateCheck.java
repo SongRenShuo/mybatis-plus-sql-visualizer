@@ -14,7 +14,6 @@ import com.intellij.openapi.progress.Task;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.startup.ProjectActivity;
 import com.intellij.util.ui.RestartDialogImpl;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
@@ -50,125 +49,21 @@ public class StartupUpdateCheck implements ProjectActivity {
     private static final int MAX_TITLE_VERSIONS = 8;
     private static final int MAX_TITLE_LENGTH = 60;
 
-    /** 本地目录通道的应用级单次守卫（T-LocalUpdateDir：会话内只检测一次）。 */
-    private static volatile boolean alreadyCheckedLocal = false;
-
     @Override
     public Object execute(Project project, Continuation<? super Unit> continuation) {
-        PluginSettings settings = PluginSettings.getInstance();
-        // 忽略版本快照：远端与本地两通道共用同一份（启动时定格，避免检查途中配置漂移）
-        ignoredVersions = settings.getState().getIgnoredUpdateVersions();
-        // 远端通道（M28 既有：autoCheckUpdate 门）
-        if (shouldStartupCheck(settings.getState().getAutoCheckUpdate(), alreadyChecked)) {
-            alreadyChecked = true;
-            ApplicationManager.getApplication().invokeLater(() -> checkAndNotify(project));
-        }
-        // 本地目录通道（T-LocalUpdateDir，D-2：配置目录即 opt-in；与远端并行独立，
-        // autoCheckUpdate 关闭不影响本地检测）
-        String localDir = settings.getState().getLocalUpdateDir();
-        if (shouldStartupCheckLocal(localDir, alreadyCheckedLocal)) {
-            alreadyCheckedLocal = true;
-            ApplicationManager.getApplication().invokeLater(() -> checkLocalAndNotify(project, localDir));
-        }
-        return Unit.INSTANCE;
-    }
-
-    /**
-     * 本地目录静默检测（T-LocalUpdateDir）：仅 Available 且版本未被忽略时弹通知；
-     * 目录非法/为空/全是旧版本/列举失败一律静默（页面状态行承载原因，启动链不打扰）。
-     */
-    private static void checkLocalAndNotify(Project project, String dirRaw) {
-        ProgressManager.getInstance().run(new Task.Backgroundable(
-            null,
-            MpSqlVisualizerBundle.message("update.task.check"),
-            true) {
-            @Override
-            public void run(ProgressIndicator indicator) {
-                ScanResult result;
-                Path pluginsDir;
-                try { // master runCatching 语义
-                    pluginsDir = com.intellij.openapi.application.PathManager.getPluginsDir();
-                } catch (Throwable t) {
-                    pluginsDir = null;
-                }
-                result = LocalPackageScanner.scan(
-                    dirRaw,
-                    PluginVersion.current(),
-                    LocalPackageScanner.sharedCache,
-                    pluginsDir);
-                if (!(result instanceof ScanResult.Available available)) return;
-                // 忽略守卫：该版本已被用户忽略 → 静默（与远端共用 ignoredUpdateVersions，D-7）
-                if (VersionIgnore.isVersionIgnored(available.latest().version(), ignoredVersions)) return;
-                ApplicationManager.getApplication().invokeLater(() -> {
-                    // T-Perf-21：后台检查完成时项目可能已关闭——不向 disposed project 弹通知
-                    if (project.isDisposed()) return;
-                    showLocalAvailable(project, available.latest());
-                });
-            }
-        });
-    }
-
-    /**
-     * 「本地目录发现可用更新」通知（T-LocalUpdateDir）：立即安装（装本地文件，不走下载）/
-     * 忽略此版本 / 稍后；无「查看发布页」动作（与网络来源无关）。
-     */
-    private static void showLocalAvailable(Project project, LocalPackage pkg) {
-        String pluginName = MpSqlVisualizerBundle.message("plugin.name");
-        Notification notification = NotificationGroupManager.getInstance()
-            .getNotificationGroup(NOTIFICATION_GROUP_ID)
-            .createNotification(
-                MpSqlVisualizerBundle.message("update.notification.title", pluginName),
-                MpSqlVisualizerBundle.message("update.notification.local.content", pkg.version(), pkg.fileName()),
-                NotificationType.INFORMATION);
-        // 点击先过期本通知：动作闭包持有旧 classloader 强引用（与远端 showAvailable 同纪律，T-DynUpdate）
-        notification.addAction(NotificationAction.createSimple(
-            MpSqlVisualizerBundle.message("update.notification.installNow"),
-            () -> {
-                notification.expire();
-                installLocalNow(project, pkg);
-            }));
-        notification.addAction(NotificationAction.createSimple(
-            MpSqlVisualizerBundle.message("update.notification.ignore"),
-            () -> {
-                PluginSettings.State copy = PluginSettings.getInstance().getState().copy();
-                copy.setIgnoredUpdateVersions(
-                    VersionIgnore.ignoreVersion(pkg.version(), ignoredVersions));
-                PluginSettings.getInstance().loadState(copy);
-                notification.expire();
-            }));
-        notification.addAction(NotificationAction.createSimpleExpiring(
-            MpSqlVisualizerBundle.message("update.notification.later"),
-            () -> {
-            }));
-        try { // master runCatching 语义
-            notification.notify(project);
+        // T-HotUpdateSettingsGuard：借启动活动把热更新兜底服务拉起来（应用级单例，重复取无副作用）——
+        // 动态装载时平台会对已开工程重跑启动活动，新代际据此订阅 DynamicPluginListener。
+        try {
+            HotUpdateSettingsGuard.getInstance();
         } catch (Throwable ignored) {
-            // 通知失败不打扰用户
+            // 守卫是兜底非必需：初始化失败不影响启动检查主链
         }
-    }
-
-    /** 本地包后台安装（无下载段；三态收尾复用远端通道的完成/重启/失败通知）。 */
-    private static void installLocalNow(Project project, LocalPackage pkg) {
-        ProgressManager.getInstance().run(new Task.Backgroundable(
-            null,
-            MpSqlVisualizerBundle.message("update.task.download"),
-            true) {
-            @Override
-            public void run(ProgressIndicator indicator) {
-                PluginUpdateRunner.InstallResult result = PluginUpdateRunner.INSTANCE.installFromLocal(pkg, indicator);
-                ApplicationManager.getApplication().invokeLater(() -> {
-                    if (result instanceof PluginUpdateRunner.InstallResult.InstalledDynamic dynamic) {
-                        showInstalledLive(project, dynamic.version());
-                    } else if (result instanceof PluginUpdateRunner.InstallResult.InstalledRestartRequired) {
-                        showInstalled(project);
-                    } else if (result instanceof PluginUpdateRunner.InstallResult.Failed failed) {
-                        showInstallFailed(project, failed.message());
-                    } else if (result instanceof PluginUpdateRunner.InstallResult.NotPublished) {
-                        // 本地通道不存在「包未发布」态（无 HTTP）——sealed 全覆盖占位
-                    }
-                });
-            }
-        });
+        PluginSettings settings = PluginSettings.getInstance();
+        if (!shouldStartupCheck(settings.getState().getAutoCheckUpdate(), alreadyChecked)) return Unit.INSTANCE;
+        alreadyChecked = true;
+        ignoredVersions = settings.getState().getIgnoredUpdateVersions();
+        ApplicationManager.getApplication().invokeLater(() -> checkAndNotify(project));
+        return Unit.INSTANCE;
     }
 
     /** 静默检查：仅 Available 且未被忽略时弹通知（UpToDate/Failure/忽略 → 静默）。 */
@@ -330,14 +225,6 @@ public class StartupUpdateCheck implements ProjectActivity {
     /** 启动检查决策（纯函数，单测覆盖）：开关关或本会话已检查 → 跳过。 */
     public static boolean shouldStartupCheck(boolean autoCheck, boolean alreadyChecked) {
         return autoCheck && !alreadyChecked;
-    }
-
-    /**
-     * 启动本地检测决策（纯函数，T-LocalUpdateDir）：目录未配置或本会话已检测 → 跳过。
-     * D-2：配置目录即视为开启（无独立开关）；远端 autoCheckUpdate 与此互不影响。
-     */
-    public static boolean shouldStartupCheckLocal(String dirRaw, boolean alreadyCheckedLocal) {
-        return dirRaw != null && !dirRaw.isBlank() && !alreadyCheckedLocal;
     }
 
     /**

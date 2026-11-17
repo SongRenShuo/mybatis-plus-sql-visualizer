@@ -7,7 +7,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * 解析期静默失效计数（T-LogParseConc S5）：这些失效过去<b>完全无痕</b>——用户只能靠肉眼发现
  * 「参数没了」「SQL 里混进日志行」。计数暴露给面板/日志侧周期上报，排障时一眼看到是哪一类。
  *
- * 纯静态计数（无 IDE 依赖，可在纯逻辑用例中断言）；上报由调用方（控制台桥，已持有 Logger）完成。
+ * <p>纯静态计数（无 IDE 依赖，可在纯逻辑用例中断言）；上报由调用方（控制台桥，已持有 Logger）完成。</p>
  *
  * <p>master 的 {@code internal object LogParseDiag} 的 Java 承载（全 static 形态）。</p>
  */
@@ -31,38 +31,30 @@ public final class LogParseDiag {
     /**
      * T-PanweiInsertCapture F7：<b>SQL 形态行未被任何分支消费</b>的累计。
      *
-     * <p>判据：行内含 {@code Executing:} 或 {@code pstm-} / {@code conn-} / {@code stmt-} 标记之一，但走完
-     * {@link MyBatisLogParser} 全部分支后落到噪声档。典型来源：{@code mixedPrefix=false}（只认用户配置的行首前缀）时的
-     * MyBatis {@code ==>  Executing:} 行。它为「某类语句整类不见」提供最小证据——「有 N 行 SQL 日志
-     * 没被识别」，而不是零信息。</p>
+     * <p>判据：行内含 {@code Executing:} / {@code {pstm-} / {@code {conn-} / {@code {stmt-} 之一，
+     * 但走完 MyBatisLogParser 全部分支后落到噪声档。典型来源：mixedPrefix=false（只认用户配置的
+     * 行首前缀）时的 MyBatis {@code ==>  Executing:} 行。它为「某类语句整类不见」提供最小证据——
+     * 「有 N 行 SQL 日志没被识别」，而不是零信息。</p>
      */
     public static final AtomicLong unrecognizedSqlLine = new AtomicLong();
 
     /**
-     * T-PanweiInsertCapture F6：本会话是否出现过 <b>iBatis 2.x 日志形态</b>（{@code {pstm-}/{conn-}/{stmt-}}
-     * 标记行被消费过）。
+     * T-PanweiInsertCapture F6：本会话是否出现过 <b>iBatis 2.x 日志形态</b>
+     * （{@code {pstm-}/{conn-}/{stmt-}} 标记行被消费过）。
      *
-     * <p>用途：iBatis 的批处理（{@code executeBatch}）在框架层<b>不打印任何 SQL 行</b>（{@code BaseLogProxy.EXECUTE_METHODS}
-     * 不含该名），控制台通道结构性不可见。面板据此在「iBatis 工程 + 增强捕获未开启」时给出具名提示，
-     * 而不是让用户以为插件坏了。</p>
+     * <p>用途：iBatis 的批处理（executeBatch）在框架层<b>不打印任何 SQL 行</b>（BaseLogProxy 的
+     * EXECUTE_METHODS 不含该名），控制台通道结构性不可见。面板据此在「iBatis 工程 + 增强捕获
+     * 未开启」时给出具名提示，而不是让用户以为插件坏了。</p>
      */
-    private static volatile boolean sawIbatisForm;
-
-    /** {@code sawIbatisForm} 的读取口（Kotlin {@code @Volatile var} 的属性访问形态）。 */
-    public static boolean sawIbatisForm() {
-        return sawIbatisForm;
-    }
-
-    /** {@code sawIbatisForm} 的写入口（仅解析器消费 iBatis 标记行时置位）。 */
-    public static void setSawIbatisForm(boolean value) {
-        sawIbatisForm = value;
-    }
+    public static volatile boolean sawIbatisForm = false;
 
     /** 上次已上报的计数快照（仅上报增量，避免刷屏）。 */
     private static long[] reported = new long[]{0, 0, 0, 0, 0};
 
-    /** 当前各计数（{@link #paramWithoutContext}, {@link #swallowedLineBlocked}, {@link #partialMultilineClosed},
-     * {@link #paramWithLogMarker}, {@link #unrecognizedSqlLine}）。 */
+    /**
+     * 当前各计数（{@link #paramWithoutContext}, {@link #swallowedLineBlocked},
+     * {@link #partialMultilineClosed}, {@link #paramWithLogMarker}, {@link #unrecognizedSqlLine}）。
+     */
     public static long[] counts() {
         return new long[]{
                 paramWithoutContext.get(),
@@ -73,9 +65,7 @@ public final class LogParseDiag {
         };
     }
 
-    /**
-     * 返回「自上次上报以来的增量」描述；无增量返回 null（调用方按周期调用，零增量零输出）。
-     */
+    /** 返回「自上次上报以来的增量」描述；无增量返回 null（调用方按周期调用，零增量零输出）。 */
     public static synchronized String takeDeltaReport() {
         long[] now = counts();
         if (Arrays.equals(now, reported)) {

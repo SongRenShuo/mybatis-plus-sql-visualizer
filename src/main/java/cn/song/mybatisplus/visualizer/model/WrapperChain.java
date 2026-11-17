@@ -22,6 +22,10 @@ import java.util.Objects;
  *                              true 时用实体字段展开 SET 列（值占位）
  * @param pageLimit             分页消费解析产物（service.page(Page, wrapper) / selectPage / 链式 page()，
  *                              T-M29-02/03）；null 表示无分页消费或 Page 实参不可解析（不渲染 LIMIT）
+ * @param decidingConsumption   T-PreviewStmtTypeScope：本次判型命中的那次消费调用——上面四个标志由它**单点**决定；
+ *                              null = 该链上没有消费，按默认 SELECT 渲染。面板据此显示「类型 ← 第 N 行的 xxx() 消费」。
+ * @param allConsumptions       T-PreviewStmtTypeScope：该 wrapper 上识别到的**全部**消费调用（D-2 作用域收窄前的候选集）。
+ *                              长度 > 1 意味「同一个 wrapper 有多种消费写法」，面板在悬停里列出，用户不必猜。
  */
 public final class WrapperChain {
     private final WrapperType wrapperType;
@@ -39,10 +43,23 @@ public final class WrapperChain {
      * → 预览不产出 COUNT 包裹；标志不可静态判定时保守取 true）。
      */
     private final boolean pageSearchCount;
+    /** T-PreviewStmtTypeScope：本次判型命中的那次消费调用（null = 该链上没有消费）。 */
+    private final WrapperConsumption decidingConsumption;
+    /** T-PreviewStmtTypeScope：该 wrapper 上识别到的全部消费调用（候选集）。 */
+    private final List<WrapperConsumption> allConsumptions;
 
     public WrapperChain(WrapperType wrapperType, String entityClass, List<WrapperCall> calls, String constructorAlias,
                         boolean deleteConsumed, boolean countConsumed, boolean existsConsumed,
                         boolean updateEntityConsumed, LimitClause pageLimit, boolean pageSearchCount) {
+        this(wrapperType, entityClass, calls, constructorAlias, deleteConsumed, countConsumed, existsConsumed,
+                updateEntityConsumed, pageLimit, pageSearchCount, null, List.of());
+    }
+
+    /** T-PreviewStmtTypeScope 全参形态（判型消费 + 全部候选）。 */
+    public WrapperChain(WrapperType wrapperType, String entityClass, List<WrapperCall> calls, String constructorAlias,
+                        boolean deleteConsumed, boolean countConsumed, boolean existsConsumed,
+                        boolean updateEntityConsumed, LimitClause pageLimit, boolean pageSearchCount,
+                        WrapperConsumption decidingConsumption, List<WrapperConsumption> allConsumptions) {
         this.wrapperType = wrapperType;
         this.entityClass = entityClass;
         this.calls = calls;
@@ -53,6 +70,8 @@ public final class WrapperChain {
         this.updateEntityConsumed = updateEntityConsumed;
         this.pageLimit = pageLimit;
         this.pageSearchCount = pageSearchCount;
+        this.decidingConsumption = decidingConsumption;
+        this.allConsumptions = List.copyOf(allConsumptions);
     }
 
     /** Kotlin 默认参数等价重载：pageSearchCount 缺省 true（MP Page 默认语义）。 */
@@ -135,6 +154,16 @@ public final class WrapperChain {
         return pageSearchCount;
     }
 
+    /** T-PreviewStmtTypeScope：本次判型命中的消费调用（null = 该链上没有消费）。 */
+    public WrapperConsumption getDecidingConsumption() {
+        return decidingConsumption;
+    }
+
+    /** T-PreviewStmtTypeScope：该 wrapper 上识别到的全部消费调用（候选集）。 */
+    public List<WrapperConsumption> getAllConsumptions() {
+        return allConsumptions;
+    }
+
     public WrapperChain copy(WrapperType wrapperType, String entityClass, List<WrapperCall> calls, String constructorAlias,
                              boolean deleteConsumed, boolean countConsumed, boolean existsConsumed,
                              boolean updateEntityConsumed, LimitClause pageLimit) {
@@ -160,13 +189,16 @@ public final class WrapperChain {
                 && Objects.equals(entityClass, that.entityClass)
                 && Objects.equals(calls, that.calls)
                 && Objects.equals(constructorAlias, that.constructorAlias)
-                && Objects.equals(pageLimit, that.pageLimit);
+                && Objects.equals(pageLimit, that.pageLimit)
+                && Objects.equals(decidingConsumption, that.decidingConsumption)
+                && Objects.equals(allConsumptions, that.allConsumptions);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(wrapperType, entityClass, calls, constructorAlias, deleteConsumed, countConsumed,
-                existsConsumed, updateEntityConsumed, pageLimit, pageSearchCount);
+                existsConsumed, updateEntityConsumed, pageLimit, pageSearchCount, decidingConsumption,
+                allConsumptions);
     }
 
     @Override
@@ -174,6 +206,7 @@ public final class WrapperChain {
         return "WrapperChain(wrapperType=" + wrapperType + ", entityClass=" + entityClass + ", calls=" + calls
                 + ", constructorAlias=" + constructorAlias + ", deleteConsumed=" + deleteConsumed + ", countConsumed="
                 + countConsumed + ", existsConsumed=" + existsConsumed + ", updateEntityConsumed=" + updateEntityConsumed
-                + ", pageLimit=" + pageLimit + ", pageSearchCount=" + pageSearchCount + ")";
+                + ", pageLimit=" + pageLimit + ", pageSearchCount=" + pageSearchCount
+                + ", decidingConsumption=" + decidingConsumption + ", allConsumptions=" + allConsumptions + ")";
     }
 }

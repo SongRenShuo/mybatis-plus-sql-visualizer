@@ -9,6 +9,7 @@ import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.util.Disposer;
 
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 /**
@@ -45,6 +46,18 @@ public final class DocWriteContext {
 
     /** 投递计数（测试观察点：断言「没有同步写，而是投递了一拍」）。 */
     public static final AtomicInteger deferredCount = new AtomicInteger(0);
+
+    /**
+     * 测试缝：单测环境也按<b>生产形态</b>执行 {@link #invokeLaterWriteSafeAndWait}（投递 + 有界等待 +
+     * EDT 自等保护）。
+     *
+     * <p>默认单测里走「就地执行」等价路径：单测的线程模型是退化的（BasePlatformTestCase 把用例体
+     * 直接跑在 EDT 线程上、isUnitTestMode 恒放行），而 invokeLaterWriteSafeAndWait 在调用线程
+     * 被 latch 阻塞期间<b>没有线程能泵那一拍</b>，等待必然烧满预算，既有用例（ExecDocSyncTest 等）
+     * 又依赖「EDT 直调当场落盘」。置 true 后按生产形态执行，供 DocWriteDispatchSafetyTest
+     * 观测「EDT 分支不再就地写」。</p>
+     */
+    public static volatile boolean deferEvenInUnitTestMode = false;
 
     public static final DocWriteContext INSTANCE = new DocWriteContext();
     private DocWriteContext() {}
@@ -93,5 +106,64 @@ public final class DocWriteContext {
             return;
         }
         invokeLaterWriteSafe(expireWith, reason, block);
+    }
+
+    /**
+     * <b>投递一拍（nonModal，恒 write-safe）并（在非 EDT 线程上）有界等待其结果</b>——
+     * T-StartupReadLockFreeze S4-a 的派发口：调用方永远不在自己的活动里就地写文档，
+     * 因此不会把「写意图读锁 → 写锁升级」带进当前这一拍（类头第三条纪律）。
+     *
+     * <p>线程分流：BGT——投递后等 waitBudgetMs，超时返回 false 并记 WARN（不自锁、不无限等）；
+     * 已在 EDT——投递后<b>立即交还</b>（本拍等本拍排出去的事件只能烧满预算，写体在下一次事件泵执行）。</p>
+     *
+     * <p>写体仍过 {@link #runWriteSafe} 闸：投递拍本身虽已 write-safe，但保留「判为不安全 → 转二次投递」
+     * 的既有语义，也让写体始终只在可写上下文落笔。</p>
+     *
+     * @return true = block 已执行；调用方是 EDT 时 = 已受理（下一拍执行）；false = 超时 / owner 已销毁 /
+     *         写体判定不可写而转二次投递。调用方不得把返回值当作「写完即可读回」的凭据。
+     */
+    public static boolean invokeLaterWriteSafeAndWait(@org.jetbrains.annotations.Nullable Disposable expireWith,
+                                                      @org.jetbrains.annotations.NotNull String reason,
+                                                      long waitBudgetMs,
+                                                      @org.jetbrains.annotations.NotNull BooleanSupplier block) {
+        com.intellij.openapi.application.Application app = ApplicationManager.getApplication();
+        if (app == null) return false;
+        if (app.isUnitTestMode() && !deferEvenInUnitTestMode) {
+            // 单测退化形态，见 deferEvenInUnitTestMode：就地语义与 runWriteSafe 等价。
+            boolean[] inline = {false};
+            runWriteSafe(expireWith, reason, () -> inline[0] = block.getAsBoolean());
+            return inline[0];
+        }
+        deferredCount.incrementAndGet();
+        LOG.info("[T-WSC] write deferred to nonModal + bounded wait " + waitBudgetMs + "ms (S4-a): " + reason);
+        java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+        boolean[] ok = {false};
+        app.invokeLater(() -> {
+            try {
+                if (expireWith != null && Disposer.isDisposed(expireWith)) {
+                    return;
+                }
+                runWriteSafe(expireWith, reason, () -> ok[0] = block.getAsBoolean());
+            } finally {
+                done.countDown();
+            }
+        }, ModalityState.nonModal());
+        if (app.isDispatchThread()) {
+            // 自等保护：EDT 等自己排队的事件 = 保证烧满预算且写体仍未执行。
+            LOG.info("[T-WSC] dispatch accepted without waiting (caller is EDT, S4-a): " + reason);
+            return true;
+        }
+        boolean signaled;
+        try {
+            signaled = done.await(waitBudgetMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            signaled = false;
+        }
+        if (!signaled) {
+            // 日志口径沿用 exec doc sync 的既有形态（真机排查按 dispatch timeout / EDT busy 检索）
+            LOG.warn("[M36] exec doc write nonModal dispatch timeout after " + waitBudgetMs
+                    + "ms (EDT busy?): " + reason);
+        }
+        return signaled && ok[0];
     }
 }

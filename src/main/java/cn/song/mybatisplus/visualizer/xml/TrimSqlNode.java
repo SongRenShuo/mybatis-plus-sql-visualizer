@@ -79,7 +79,7 @@ public non-sealed class TrimSqlNode implements SqlNode {
          *
          * <p>理由：本引擎的 foreach 会把每轮迭代 trim 成紧凑段（T-M25.5），两次迭代的 {@code and}
          * 在此处直接相接就成了单词 {@code andand}，{@code <trim prefixOverrides="and">} 只裁掉首个，
-         * 残余成了括号里的幽灵条件。真实 MyBatis 因 XML 换行保留空白而不会粘词。</p>
+         * 残余成了括号里的幽灵条件。真实 MyBatis 因 XML 换行保留空白而不会粘词。
          *
          * <p>收窄到「会拼成词」是必须的：R2 首版对任何「两侧都无空白」的相邻段一律补空格，
          * 于是 foreach 的 {@code open}/{@code separator}/{@code close}（{@code (}、{@code ,}、{@code )}）
@@ -87,7 +87,7 @@ public non-sealed class TrimSqlNode implements SqlNode {
          * 而真实 MyBatis 的 trim 缓冲是裸 append（其根上下文才按 StringJoiner(" ") 补空格），
          * 该形态本应保持紧凑。判据只取「左收尾 ∈ {标识符字符, {@code )}, {@code ]}, {@code ?}, 引号} 且
          * 右起笔 = 标识符字符」，故 {@code (}/{@code ,} 之后的段、以及右起笔为标点的段一律不补——
-         * {@code IN (?,?)}/{@code IN (1,2,4,5)} 原样保留。</p>
+         * {@code IN (?,?)}/{@code IN (1,2,4,5)} 原样保留。
          */
         @Override
         public void appendSql(String sql) {
@@ -104,17 +104,17 @@ public non-sealed class TrimSqlNode implements SqlNode {
          * 两个相邻段之间是否需要一个空格。
          *
          * <ol>
-         * <li><b>粘连成词才补</b>（{@code 6212f24e0} 收窄后的口径，也是 {@code IN (?,?)} 保持紧凑的约束）：
-         * 左侧以操作数收尾且右侧以标识符起笔时补，否则不补。</li>
+         * <li><b>粘连成词才补</b>（6212f24e0 收窄后的口径，也是 {@code IN (?,?)} 保持紧凑的约束）：
+         *     左侧以操作数收尾且右侧以标识符起笔时补，否则不补。</li>
          * <li><b>操作符与左括号之间补</b>（T-MbgPreviewParityAndOpenPerf P2）：{@code = (} 而不是 {@code =(}。
-         * 只认「左侧是操作符字符」这一种情形，所以 {@code count(*)}（左为标识符）、{@code ( ?}（左为左括号）
-         * 都不受影响——MBG 的 {@code and ${condition}} 与内层 {@code <foreach open="(">} 会被撑成
-         * {@code CUSTOMERNUMBER = (?)}，与真实 MyBatis 保留 XML 换行的形态一致。</li>
+         *     只认「左侧是操作符字符」这一种情形，所以 {@code count(*)}（左为标识符）、{@code ( ?}
+         *     （左为左括号）都不受影响——MBG 的 {@code and ${condition}} 与内层 {@code <foreach open="(">}
+         *     会被撑成 {@code CUSTOMERNUMBER = (?)}，与真实 MyBatis 保留 XML 换行的形态一致。</li>
          * </ol>
          */
-        private boolean needsSeparator(char last, char first) {
+        private static boolean needsSeparator(char last, char first) {
             return (endsOperand(last) && startsIdentifier(first))
-                    || (OPERATOR_CHARS.indexOf(last) > -1 && first == '(');
+                    || (OPERATOR_CHARS.indexOf(last) >= 0 && first == '(');
         }
 
         /** 运算符字符（{@code = < > ! + - * / % | & ^}：其后紧跟 {@code (} 属于「条件 + 列表/分组」形态）。 */
@@ -130,13 +130,13 @@ public non-sealed class TrimSqlNode implements SqlNode {
          * 含右括号/右方括号/引号（子表达式、字面量、反引号标识符）、绑定占位 {@code ?}，
          * 以及 {@code }}（T-MbgPreviewParityAndOpenPerf R1）。
          *
-         * <p><b>{@code }} 为什么必须在</b>：本缓冲里放的是<b>渲染前文本</b>——{@code #{criterion.value}} 的收尾是
-         * {@code }}，而 {@code #{}} → {@code ?} 的替换发生在渲染最后一步
+         * <p><b>{@code }} 为什么必须在</b>：本缓冲里放的是<b>渲染前文本</b>——{@code #{criterion.value}}
+         * 的收尾是 {@code }}，而 {@code #{} → {@code ?} 的替换发生在渲染最后一步
          * （{@code XmlSqlRenderer.parseParameterMappings} 扫全文），所以判据里那个 {@code ?} 在这一层
-         * <b>永远不可能出现</b>。漏掉 {@code }} 时两轮 foreach 迭代会拼成 {@code ?and}（真跑不了的错 SQL），
-         * 比 {@code andand} 更隐蔽。</p>
+         * <b>永远不可能出现</b>。漏掉 {@code }} 时两轮 foreach 迭代会拼成 {@code ?and}
+         * （真跑不了的错 SQL），比 {@code andand} 更隐蔽。
          *
-         * <p>左括号、逗号、运算符、空白仍不在内：它们本身就是分隔符，补空格是多余噪音。</p>
+         * <p>左括号、逗号、运算符、空白仍不在内：它们本身就是分隔符，补空格是多余噪音。
          */
         private static boolean endsOperand(char c) {
             return startsIdentifier(c) || c == ')' || c == ']' || c == '}' || c == '?'
@@ -173,6 +173,12 @@ public non-sealed class TrimSqlNode implements SqlNode {
             return delegate.getStaticFieldValues();
         }
 
+        // T-MbgExamplePreview R1：占位模式必须转发——否则 trim/where/set 体内的 `${}` 仍按空串输出
+        @Override
+        public boolean isEmptyDollarPlaceholder() {
+            return delegate.isEmptyDollarPlaceholder();
+        }
+
         @Override
         public Map<String, Object> getBindings() {
             return delegate.getBindings();
@@ -189,12 +195,6 @@ public non-sealed class TrimSqlNode implements SqlNode {
         @Override
         public Map<String, Boolean> getConditionOutcomes() {
             return delegate.getConditionOutcomes();
-        }
-
-        // T-MbgExamplePreview R1：占位模式必须转发——否则 trim/where/set 体内的 ${} 仍按空串输出
-        @Override
-        public boolean getEmptyDollarPlaceholder() {
-            return delegate.getEmptyDollarPlaceholder();
         }
 
         void applyAll() {

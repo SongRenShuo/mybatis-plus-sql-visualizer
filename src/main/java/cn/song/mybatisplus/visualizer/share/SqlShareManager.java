@@ -3,7 +3,6 @@ package cn.song.mybatisplus.visualizer.share;
 import cn.song.mybatisplus.visualizer.share.format.ExecutableSqlFormatter;
 import cn.song.mybatisplus.visualizer.share.format.MarkdownFormatter;
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel;
-import cn.song.mybatisplus.visualizer.ui.components.CopyExecutableSqlAction;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard;
 import com.intellij.notification.NotificationGroupManager;
@@ -128,9 +127,9 @@ public final class SqlShareManager {
                 panel.paramValuesSnapshot(),
                 List.of()
         );
-        // T-CopyPlaceholderMarker：产物里残留的 {{…}} 模拟占位会跟着走——补一条带计数的头部注释，
+                // T-CopyPlaceholderMarker：产物里残留的 {{…}} 模拟占位会跟着走——补一条带计数的头部注释，
         // 与预览面板复制链同源（分享面板此前一条标记都没有）
-        copyToClipboard(CopyExecutableSqlAction.withPlaceholderMarker(executable));
+        copyToClipboard(cn.song.mybatisplus.visualizer.ui.components.CopyExecutableSqlAction.withPlaceholderMarker(executable));
         showToast(MpSqlVisualizerBundle.message("share.executableSql.copied"));
     }
 

@@ -765,7 +765,7 @@ public final class SqlPreviewPanelExecutionKt {
                     p.lastDialectGateMessage = null;
                 },
                 consoleEditor -> onNativeEditorReady(p, consoleEditor),
-                errorMsg -> showTempFileError(p, errorMsg),
+                errorMsg -> p.resultPanel.showError(errorMsg),
                 null,
                 gateRequest,
                 verdict -> onExecutionDialectGate(p, verdict),
@@ -987,131 +987,6 @@ public final class SqlPreviewPanelExecutionKt {
         }
     }
 
-    /** 设置 → 编辑器 → 文件类型（EP id 由平台声明，2026.3 实证：{@code preferences.fileTypes}）。 */
-    private static final String FILE_TYPES_SETTING_ID = "preferences.fileTypes";
-
-    /** 13.10：打开「设置 → 编辑器 → 文件类型」（用户在那里能看到/改「忽略的文件和文件夹」）。 */
-    public static void openFileTypesSettings(@NotNull Project proj) {
-        boolean opened;
-        try {
-            com.intellij.ide.actions.ShowSettingsUtilImpl.showSettingsDialog(proj, FILE_TYPES_SETTING_ID, null);
-            opened = true;
-        } catch (Throwable t) {
-            opened = false;
-        }
-        if (!opened) {
-            com.intellij.openapi.options.ShowSettingsUtil.getInstance()
-                    .showSettingsDialog(proj, FILE_TYPES_SETTING_ID);
-        }
-    }
-
-    /**
-     * T-ExecPsiGate 13.10：临时 SQL 文件失败的<b>富呈现</b>——红字 + 蓝色可点入口。
-     *
-     * <p>用户 2026-11-11 定案：「针对这两个问题做智能错误信息提示，精准识别原因并提供蓝色字体可以点击
-     * 调整到对应设置页」。三种成因在报错上长得一模一样（都是 {@code findFile} 返回 null），过去的处理只能
-     * 给一句笼统失败；现在按
-     * {@link cn.song.mybatisplus.visualizer.execute.ExecPsiFailureHint.ExecPsiFailureCause} 把用户直接
-     * 送到修复点：</p>
-     *
-     * <table>
-     *   <caption>成因 → 蓝字入口</caption>
-     *   <tr><th>成因</th><th>蓝字入口</th></tr>
-     *   <tr><td>文件类型忽略模式</td><td>打开 设置 → 编辑器 → 文件类型</td></tr>
-     *   <tr><td>目录被忽略（含 VCS 忽略）</td><td>打开 设置 → 编辑器 → 文件类型（<b>不引导改 .gitignore</b>，见下）</td></tr>
-     *   <tr><td>Excluded + Registry</td><td>打开 项目结构</td></tr>
-     *   <tr><td>方言不可用 / 未识别语言</td><td>打开 SQL 方言设置</td></tr>
-     *   <tr><td>落点目录不被内容模型接管</td><td>打开 文件类型 设置（+ 兜底落点）</td></tr>
-     *   <tr><td>判不出成因</td><td>兜底落点（<b>不允许只剩红字</b>）</td></tr>
-     * </table>
-     *
-     * <p>入口口径（2026-11-11 用户定案）：<b>不引导用户改 {@code .gitignore}</b>——{@code .gitignore} 里忽略 {@code .idea/}
-     * 是正常设置，让用户去删它是错误引导；忽略模式的可控入口统一指向 Settings → Editor → File Types。</p>
-     *
-     * <p>没有 hint（普通 SQL 执行错误）时逐字退回 {@link SqlResultPanel#showError}，不干扰既有文案。</p>
-     */
-    public static void showTempFileError(@NotNull SqlPreviewPanel p, @NotNull String errorMsg) {
-        // F8：成因**从文案本身**取（` [hint=XXX]`）。前几轮靠共享字段传递，被三种机制各打掉一次
-        //（预热入口清空 / 并发覆盖 / 第二次渲染时读方清空），动态重载后还可能是两份类实例。
-        // 文案怎么走成因就怎么走；产物里把标记剥掉，日志与「复制错误信息」里保留。
-        cn.song.mybatisplus.visualizer.execute.ExecPsiFailureHint.ExecPsiFailureCause cause =
-                cn.song.mybatisplus.visualizer.execute.ExecPsiFailureHint.resolveTempFileHintCause(errorMsg);
-        String shown = cn.song.mybatisplus.visualizer.execute.ExecPsiFailureHint.parseExecHintMessage(errorMsg).text();
-        Project proj = p.project;
-        if (cause == null || proj == null) {
-            p.resultPanel.showError(shown);
-            return;
-        }
-        String settingsLabel = null;
-        String settingsTip = null;
-        Runnable settingsAction = null;
-        // 兜底只在「换落点真能解决」的成因上给——方言不可用时挪目录没用，给了等于误导
-        boolean allowFallback = true;
-        String hint;
-        switch (cause) {
-            case IGNORED_BY_FILE_TYPES: {
-                hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.fileTypes");
-                settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes");
-                settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes.tip");
-                settingsAction = () -> openFileTypesSettings(proj);
-                break;
-            }
-            case IGNORED_BY_VCS: {
-                // 2026-11-11 用户定案：**不引导改 `.gitignore`**——`.gitignore` 里忽略 `.idea/` 是正常设置，
-                // 让人去删它是错误引导。忽略模式的可控入口统一指向 Settings → Editor → File Types。
-                hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.vcs");
-                settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes");
-                settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes.tip");
-                settingsAction = () -> openFileTypesSettings(proj);
-                break;
-            }
-            case EXCLUDED_ROOT: {
-                // 「项目结构」对话框在 243 / 2026.3 都已无稳定公开入口（ProjectStructureDialog 已移除），
-                // 故不给设置页链接（宁可指不出也不指错）；改用项目根落点这一支仍然有效。
-                hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.excluded");
-                break;
-            }
-            case DIALECT_UNAVAILABLE:
-            case NO_LANGUAGE: {
-                hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.dialect");
-                settingsLabel = MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings");
-                settingsTip = MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings.tip");
-                settingsAction = () -> openSqlDialectSettings(proj);
-                allowFallback = false;
-                break;
-            }
-            case DIR_NOT_INDEXED: {
-                // F5（2026-11-11 用户验收）：文件级谓词全绿、平台照样不建 PSI 的唯一形态——真实原因在
-                // **父目录**的待遇上。入口同样指向「忽略模式」的设置页（用户 2026-11-11 定案：
-                // 不引导改 .gitignore），兜底落点仍由用户点。
-                hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.dirNotIndexed");
-                settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes");
-                settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes.tip");
-                settingsAction = () -> openFileTypesSettings(proj);
-                break;
-            }
-            default: {
-                // UNKNOWN——**不再只丢红字**（2026-11-11 用户验收：「没有引导用户调整配置信息」）。
-                // 判不出成因不等于没有出路：兜底落点一定能用，文案把可自查的两个入口写出来。
-                hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.unknown");
-                break;
-            }
-        }
-        p.resultPanel.showErrorWithActions(
-                shown + " — " + hint,
-                allowFallback ? MpSqlVisualizerBundle.message("execute.tempFile.action.useProjectRoot") : null,
-                allowFallback ? MpSqlVisualizerBundle.message("execute.tempFile.action.useProjectRoot.tip") : null,
-                allowFallback ? (Runnable) () -> {
-                    // 用户显式选了兜底：记住该项目（本会话内后续执行直接走备用落点），然后立刻重试一次
-                    cn.song.mybatisplus.visualizer.execute.DataSourceSelector.INSTANCE
-                            .execRootFallbackProjects().add(proj);
-                    executeSql(p);
-                } : null,
-                settingsLabel,
-                settingsTip,
-                settingsAction);
-    }
-
     /**
      * 按 configurable EP <b>id</b> 取方言设置页，不实例化整棵设置树。
      *
@@ -1259,11 +1134,9 @@ public final class SqlPreviewPanelExecutionKt {
         ExecutionDialectGate.Request dialectGateRequest = ExecutionDialectGate.rawSqlRequest(sql);
         // O-64/T-RollbackIdentityParse（P19/D2=A）：identity 包装产物整批直跑。识别特征=
         // 含 `SET IDENTITY_INSERT … ON|OFF` 语句（本插件自产回滚批次的封闭形态）；普通多语句
-        // 产物保持现态（Statements 选择层默认行为不变），避免行为突变。
-        // T-DateLiteralBackfill R10：单语句产物同样整批提交（绕开光标/选区把类型字面量片段
-        // 当独立语句提交的 PG 回归）；executeSql 的用户编辑器执行链同口径（见 shouldExecWholeScript）。
-        boolean wholeScriptExec = cn.song.mybatisplus.visualizer.execute.ExecutionScriptScopeKt.shouldExecWholeScript(
-                sql, cn.song.mybatisplus.visualizer.sql.IdentityInsertStatements.containsStatement(sql));
+        // 产物保持现态（Statements 选择层默认行为不变），避免行为突变。生产入口仅本函数
+        // （回滚弹窗「执行回滚/执行快照查询」），executeSql 的用户编辑器执行链不接旗标。
+        boolean wholeScriptExec = cn.song.mybatisplus.visualizer.sql.IdentityInsertStatements.containsStatement(sql);
         if (!isQuery && !dmlConfirmed) {
             String keyword = SqlTypeClassifier.getFirstKeyword(sql);
             if (keyword == null) keyword = "SQL";
@@ -1291,7 +1164,7 @@ public final class SqlPreviewPanelExecutionKt {
                             proj, sql, null, isQuery,
                             consoleComponent -> embedConsole(p, consoleComponent, ConsoleEmbedMode.EXECUTE),
                             consoleEditor -> onNativeEditorReady(p, consoleEditor),
-                            errorMsg -> showTempFileError(p, errorMsg),
+                            errorMsg -> p.resultPanel.showError(errorMsg),
                             info -> showErrorRichWithLocate(p, info),
                             wholeScriptExec,
                             dialectGateRequest, null, receipt, false,
@@ -1311,7 +1184,7 @@ public final class SqlPreviewPanelExecutionKt {
             boolean executed = SqlExecutor.executePrepared(
                     proj,
                     fullConsole -> embedConsole(p, fullConsole, ConsoleEmbedMode.EXECUTE),
-                    errorMsg -> showTempFileError(p, errorMsg),
+                    errorMsg -> p.resultPanel.showError(errorMsg),
                     info -> showErrorRichWithLocate(p, info),
                     wholeScriptExec,
                     dialectGateRequest, null, receipt);
@@ -1321,7 +1194,7 @@ public final class SqlPreviewPanelExecutionKt {
                 proj, sql, null, isQuery,
                 consoleComponent -> embedConsole(p, consoleComponent, ConsoleEmbedMode.EXECUTE),
                 consoleEditor -> onNativeEditorReady(p, consoleEditor),
-                errorMsg -> showTempFileError(p, errorMsg),
+                errorMsg -> p.resultPanel.showError(errorMsg),
                 info -> showErrorRichWithLocate(p, info),
                 wholeScriptExec,
                 dialectGateRequest, null, receipt, false,
@@ -1436,17 +1309,11 @@ public final class SqlPreviewPanelExecutionKt {
      * @return true = 放行（无 raw 段 / 已确认过 / 本次确认通过）
      */
     public static boolean confirmDollarRawSegments(@NotNull SqlPreviewPanel p, @NotNull Project proj) {
-        // T-MbgExamplePreview T1：产物含 {{表达式}} 占位时用更强的文案——那一段不是「模拟值」，
-        // 而是运行期才知道的拼接片段，直接执行必报语法错
-        boolean placeholder = p.hasSimulationPlaceholders();
-        if ((p.current == null || !p.current.isHasDollarRawSegments()) && !placeholder) return true;
+        if (p.current == null || !p.current.isHasDollarRawSegments()) return true;
         if (p.dollarRawConfirmedInSession) return true;
-        String messageKey = placeholder
-                ? "execute.confirm.simPlaceholder.message"
-                : "execute.confirm.dollarRaw.message";
         int confirm = Messages.showYesNoDialog(
                 proj,
-                MpSqlVisualizerBundle.message(messageKey, SqlPreviewPanel.DOLLAR_TOKEN),
+                MpSqlVisualizerBundle.message("execute.confirm.dollarRaw.message", SqlPreviewPanel.DOLLAR_TOKEN),
                 MpSqlVisualizerBundle.message("execute.confirm.dml"),
                 Messages.getWarningIcon());
         if (confirm != Messages.YES) return false;
@@ -1531,9 +1398,6 @@ public final class SqlPreviewPanelExecutionKt {
 
         // 1. SQL 类型分类 → 非查询语句二次确认
         boolean isQuery = SqlTypeClassifier.isQuery(sql);
-        // T-DateLiteralBackfill R10：单语句预览整批提交——绕开 DBN「光标所在语句/选区」把
-        // `TIMESTAMP '…'` 折行片段当独立语句提交的 PG 回归（见 shouldExecWholeScript KDoc）
-        boolean wholeScript = cn.song.mybatisplus.visualizer.execute.ExecutionScriptScopeKt.shouldExecWholeScript(sql);
         if (!isQuery) {
             String keyword = SqlTypeClassifier.getFirstKeyword(sql);
             if (keyword == null) keyword = "SQL";
@@ -1576,9 +1440,9 @@ public final class SqlPreviewPanelExecutionKt {
                             proj, sql, null, isQuery,
                             consoleComponent -> embedConsole(p, consoleComponent, ConsoleEmbedMode.EXECUTE),
                             consoleEditor -> onNativeEditorReady(p, consoleEditor),
-                            errorMsg -> showTempFileError(p, errorMsg),
+                            errorMsg -> p.resultPanel.showError(errorMsg),
                             info -> showErrorRichWithLocate(p, info),
-                            wholeScript,
+                            false,
                             dialectGateRequest,
                             verdict -> onExecutionDialectGate(p, verdict),
                             null,
@@ -1602,10 +1466,9 @@ public final class SqlPreviewPanelExecutionKt {
                     proj,
                     // M36.5.2：执行触发成功后换入完整控制台（结果区执行后才出现）
                     fullConsole -> embedConsole(p, fullConsole, ConsoleEmbedMode.EXECUTE),
-                    // F9：同上——执行回调统一走 showTempFileError（无成因时行为等价于 showError）
-                    errorMsg -> showTempFileError(p, errorMsg),
+                    errorMsg -> p.resultPanel.showError(errorMsg),
                     info -> showErrorRichWithLocate(p, info),
-                    wholeScript,
+                    false,
                     dialectGateRequest,
                     verdict -> onExecutionDialectGate(p, verdict),
                     null,
@@ -1616,12 +1479,10 @@ public final class SqlPreviewPanelExecutionKt {
                 proj, sql, null, isQuery,
                 consoleComponent -> embedConsole(p, consoleComponent, ConsoleEmbedMode.EXECUTE),
                 consoleEditor -> onNativeEditorReady(p, consoleEditor),
-                // F9：本路径此前直接 resultPanel.showError，从未经过 showTempFileError——
-                // 临时文件失败的成因与蓝字入口因此在「直接点执行」上永远不出现（切源那条走的是
-                // 另一个已接线的调用点，所以那边有）。统一走 showTempFileError：无成因时行为等价。
-                errorMsg -> showTempFileError(p, errorMsg),
+                // M36.3：错误回调——执行链任何环节失败时从「执行中」状态恢复并显示错误
+                errorMsg -> p.resultPanel.showError(errorMsg),
                 info -> showErrorRichWithLocate(p, info),
-                wholeScript,
+                false,
                 dialectGateRequest,
                 verdict -> onExecutionDialectGate(p, verdict),
                 null,
@@ -1870,12 +1731,9 @@ public final class SqlPreviewPanelExecutionKt {
                             proj, explainSql, null, true,
                             consoleComponent -> embedConsole(p, consoleComponent, ConsoleEmbedMode.EXECUTE),
                             consoleEditor -> onNativeEditorReady(p, consoleEditor),
-                            errorMsg -> showTempFileError(p, errorMsg),
+                            errorMsg -> p.resultPanel.showError(errorMsg),
                             info -> showErrorRichWithLocate(p, info),
-                            // T-DateLiteralBackfill R10：EXPLAIN 包装产物是单语句，整批提交绕开
-                            // 「光标所在语句/选区」把类型字面量片段当独立语句提交的回归
-                            cn.song.mybatisplus.visualizer.execute.ExecutionScriptScopeKt.shouldExecWholeScript(
-                                    explainSql, true),
+                            false,
                             dialectGateRequest,
                             verdict -> onExecutionDialectGate(p, verdict),
                             null, false);
@@ -2321,8 +2179,7 @@ public final class SqlPreviewPanelExecutionKt {
                     proj, previewSql, null, null,
                     message -> {
                         errorShown.set(true);
-                        // F9：同样可能是临时文件失败（同一准备链），统一交给 showTempFileError
-                        showTempFileError(p, message);
+                        p.resultPanel.showError(message);
                     },
                     null, null, null, false);
         }

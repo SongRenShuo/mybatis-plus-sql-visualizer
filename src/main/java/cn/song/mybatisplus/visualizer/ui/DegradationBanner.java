@@ -36,18 +36,13 @@ import java.awt.BorderLayout;
 public class DegradationBanner extends JBPanel<DegradationBanner> {
 
     /** 消息类别（同类别「恢复即清除」；高优先类别不被低优先类别清除）。 */
-    public enum Kind { RENDER_WARNING, WRITE_RISK, DEGRADED, DOLLAR_INJECT }
+    public enum Kind { RENDER_WARNING, DEGRADED, DOLLAR_INJECT }
 
     /** 类别优先级（数值大者优先——show 低优先不覆盖高优先）。 */
     private static int priority(Kind kind) {
         switch (kind) {
             case DEGRADED:
                 return 2;
-            // T-FullTableWriteRisk：与 RENDER_WARNING **同档**——两者都在讲产物本身有问题，故按
-            // 「谁后写谁占位」定序；调用方先挂渲染警示、后挂写风险 ⇒ 同时存在时写风险优先展示。
-            // 降级（编辑器尚未就绪，产物可能还不是最终形态）仍高于两者。
-            case WRITE_RISK:
-                return 1;
             case RENDER_WARNING:
                 return 1;
             case DOLLAR_INJECT:
@@ -130,25 +125,14 @@ public class DegradationBanner extends JBPanel<DegradationBanner> {
         setVisible(false);
     }
 
-    /** 显示提示（文案由调用方按 i18n 键组装三要素）。Kotlin 默认参数 {@code tooltip = null} 的等价重载。 */
-    public void show(Kind kind, String message) {
-        show(kind, message, null);
-    }
-
     /** 显示提示（文案由调用方按 i18n 键组装三要素）。 */
-    public void show(Kind kind, String message, @Nullable String tooltip) {
+    public void show(Kind kind, String message) {
         // 高优先类别挂起期间，低优先提示不覆盖（DEGRADED 常驻语义的泛化——
         // RENDER_WARNING 挂起时 DOLLAR_INJECT 信息提示同样让位，警示清除后下次更新再回）
         Kind current = currentKind;
         if (current != null && priority(current) > priority(kind)) return;
         currentKind = kind;
         label.setText(message);
-        // T-DegradedPreviewUx P2：降级=提示色、渲染警示=错误色（同一 label 按类别切换）
-        label.setForeground(kind == Kind.DEGRADED
-                ? JBColor.namedColor("WarningForeground", new JBColor(0xB26A00, 0xE0A94D))
-                : JBColor.namedColor("ErrorForeground", JBColor.RED));
-        // 宽度不足时正文会被裁：调用方传入完整文案作 tooltip（不新造「详情」控件）
-        label.setToolTipText(tooltip);
         dismissButton.setVisible(kind == Kind.DOLLAR_INJECT);
         dismissButton.setToolTipText(message);
         // T-PrewarmLateRecover F2：动作只在「有回调的降级提示」上出现

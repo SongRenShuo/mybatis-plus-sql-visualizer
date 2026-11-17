@@ -35,6 +35,15 @@ public class DynamicContext {
     private final Map<String, Object> staticFieldValues;
 
     /**
+     * 空值占位模式（T-MbgExamplePreview R1）：`${}` 求值为 null 且表达式含变量引用时，输出
+     * {@code {{表达式}}} 而不是空串——缺段在产物里可见，不会被误读成「插件把 SQL 识别错了」。
+     *
+     * <p>默认 false：真实 SQL 产物与全仓既有断言零影响；只有预览渲染链
+     * （{@code XmlPreviewModel.renderSql}）开启。
+     */
+    private final boolean emptyDollarPlaceholder;
+
+    /**
      * 变量上下文（_parameter / _databaseId / bind 变量 / foreach item·index / 模拟值）。
      *
      * 注意：用属性初始化器而非 init 块填充——子类（Trim/Foreach 的过滤上下文）覆写本属性
@@ -66,15 +75,6 @@ public class DynamicContext {
      * 否则体内条件的判定结果被丢弃）。
      */
     private final Map<String, Boolean> conditionOutcomes = new LinkedHashMap<>();
-
-    /**
-     * 空值占位模式（T-MbgExamplePreview R1）：{@code ${}} 求值为 null 且表达式含变量引用时，输出
-     * {@code {{表达式}}} 而不是空串——缺段在产物里可见，不会被误读成「插件把 SQL 识别错了」。
-     *
-     * <p>默认 false：真实 SQL 产物与全仓既有断言零影响；只有预览渲染链
-     * （{@code XmlPreviewModel.renderSql}）开启。</p>
-     */
-    private final boolean emptyDollarPlaceholder;
 
     /**
      * ${} 直替计数（T-DollarInjectMark）：TextSqlNode 每求值一个 ${} token 经
@@ -112,6 +112,11 @@ public class DynamicContext {
         this.staticFieldValues = staticFieldValues;
         this.emptyDollarPlaceholder = emptyDollarPlaceholder;
         this.bindings = new HashMap<>(initialBindings);
+    }
+
+    /** 空值占位模式是否开启（T-MbgExamplePreview R1，见字段 KDoc）。 */
+    public boolean isEmptyDollarPlaceholder() {
+        return emptyDollarPlaceholder;
     }
 
     /** 变量上下文。 */
@@ -195,14 +200,6 @@ public class DynamicContext {
     /** 静态字段值（T-M25.2）：@class@field → 值。 */
     public Map<String, Object> getStaticFieldValues() {
         return staticFieldValues;
-    }
-
-    /**
-     * 空值占位模式（T-MbgExamplePreview R1，master 侧 {@code open val}——可覆写转发）：
-     * true 时 {@code ${}} 求值为 null 且含变量引用输出 {@code {{表达式}}} 占位。
-     */
-    public boolean getEmptyDollarPlaceholder() {
-        return emptyDollarPlaceholder;
     }
 
     /**

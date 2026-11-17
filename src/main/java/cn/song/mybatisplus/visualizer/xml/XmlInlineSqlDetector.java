@@ -25,8 +25,7 @@ import org.jetbrains.annotations.Nullable;
  *  <li>认领条件（{@link #isSqlCarrierTag}）：无子标签 + 首段非空文本的前缀词 ∈ {@link #SQL_KEYWORDS}；</li>
  *  <li>排除既有认领（{@link #isClaimedByKnownStructure}）：mapper 语句 / hbm 命名查询 /
  *      pages 的 {@code <datasource>}（图标在 maintainPage 上）/ iBatis {@code <sqlMap>} 语句
- *      （T-Ibatis2Support 券 A：由 {@code cn.song.mybatisplus.visualizer.ui.gutter.IbatisXmlGutterLineMarkerProvider}
- *      接管，本通道让位）——防止既有文件双图标；</li>
+ *      （T-Ibatis2Support 券 A：由 IbatisXmlGutterLineMarkerProvider 接管，本通道让位）——防止既有文件双图标；</li>
  *  <li>HQL 判别（{@link #queryTypeOf}）：自身或祖先标签的 {@code type} 属性 ∈ {hql, jpql}
  *      （就近优先），仅预览链（后台线程）调用，不进 gutter 快速路径。</li>
  * </ul>

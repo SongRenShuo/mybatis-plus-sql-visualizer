@@ -28,15 +28,9 @@ import cn.song.mybatisplus.visualizer.xml.ExprReason;
 import cn.song.mybatisplus.visualizer.xml.ExprSupport;
 import cn.song.mybatisplus.visualizer.xml.ParamKind;
 import cn.song.mybatisplus.visualizer.xml.RenderedXmlSql;
-import cn.song.mybatisplus.visualizer.xml.MockObject;
 import cn.song.mybatisplus.visualizer.xml.XmlConditionView;
 import cn.song.mybatisplus.visualizer.xml.XmlForEachView;
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel;
-import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisParamModel.IbatisConditionRow;
-import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisParamModel.IbatisDollarRow;
-import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisParamModel.IbatisIterateRow;
-import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisParamModel;
-import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisParamModel.IbatisPlaceholderRow;
 import com.intellij.notification.Notification;
 import com.intellij.notification.NotificationType;
 import com.intellij.openapi.application.ApplicationManager;
@@ -59,7 +53,6 @@ import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
-import javax.swing.border.Border;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import java.awt.BorderLayout;
@@ -67,7 +60,6 @@ import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.FontMetrics;
-import java.awt.Insets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -93,9 +85,6 @@ public final class SqlPreviewPanelParamPanelKt {
         p.paramPanel.removeAll();
         p.paramFields.clear();
         p.paramWarnLabels.clear();
-        // T-ParamNameTruncation：标签/复选框截断态登记随本轮重建清场（控件引用不能跨预览复用）
-        p.paramLabelRefs.clear();
-        p.paramCheckRefs.clear();
         // T-RuntimeSlotFill 券 C：占位行随本轮重建清场（控件引用不能跨预览复用）
         p.runtimeSlotRows.clear();
         p.runtimeSlotWarningLabel = null;
@@ -105,7 +94,6 @@ public final class SqlPreviewPanelParamPanelKt {
         p.batchCheckBoxes.clear();
         p.xmlForEachNullBoxes.clear();
         p.xmlForEachValueFields.clear();
-        p.xmlForEachInertLabels.clear();
         // T-M26.3：按钮随场景重建（标题行右侧）——先清空上次场景的残留引用
         p.toggleSelectButton = null;
         p.clearButton = null;
@@ -123,8 +111,7 @@ public final class SqlPreviewPanelParamPanelKt {
                         || !xmlModelForSchemeRow.getForEachViews().isEmpty());
 
         if (views.isEmpty() && result.getUnresolvedParams().isEmpty() && batchModel == null && !xmlHasControls
-                && result.getRuntimeSlots().isEmpty()
-                && (result.getIbatisParamModel() == null || !result.getIbatisParamModel().hasControls())) {
+                && result.getRuntimeSlots().isEmpty()) {
             // T-DevAcceptFix ①：绑定指示行已迁顶部常驻行——无参数早退不再重复建行
             JBLabel none = new JBLabel(MpSqlVisualizerBundle.message("panel.param.none"));
             none.setBorder(JBUI.Borders.empty(6, 8));
@@ -175,137 +162,25 @@ public final class SqlPreviewPanelParamPanelKt {
             for (String s : result.getUnresolvedParams()) {
                 if (!s.startsWith("__frch_") && !ordinarySources.contains(s)) ordinarySources.add(s);
             }
-            // D11：MBG 注入时占位符来源全是 `__frch_criterion_N.*`，上面那步会把它们全滤掉——
-            // 左栏因此没有可填行。这里按真实占位键补行，标签用该 Criterion 的条件文本。
-            List<Pair<String, String>> mbgRows = mbgParamRows(result, xmlModel);
             // T-M26.3：两列行标签列宽统一（foreach/参数按最长可见标签自适应 140~260）
             // T-M26.5：foreach 行标签即集合表达式（分区标题已含「foreach 集合」语义）
-            // T-LabelInset：foreach 行的标签带左缩进边框（见 buildXmlForEachRow），预算必须把该内边距
-            // 算进去——否则最宽的标签恰好差这一截、被 Swing 截尾成 `criteria.crit...`；其余行无边框补 0。
-            int foreachInset = borderLeftInsetPx(indentedLabelBorder());
             List<String> labelTexts = new ArrayList<>();
-            List<Integer> labelInsets = new ArrayList<>();
-            for (XmlForEachView v : xmlModel.getForEachViews()) {
-                labelTexts.add(v.collectionExpr());
-                labelInsets.add(foreachInset);
-            }
-            for (String s : ordinarySources) {
-                labelTexts.add("#" + s);
-                labelInsets.add(0);
-            }
-            for (Pair<String, String> row : mbgRows) {
-                labelTexts.add(row.getSecond());
-                labelInsets.add(0);
-            }
-            int labelWidth = labelColumnWidth(p, labelTexts, labelInsets);
+            for (XmlForEachView v : xmlModel.getForEachViews()) labelTexts.add(v.collectionExpr());
+            for (String s : ordinarySources) labelTexts.add("#" + s);
+            int labelWidth = labelColumnWidth(p, labelTexts);
             if (!xmlModel.getConditionViews().isEmpty()) {
                 p.paramPanel.add(conditionSectionHeader(p));
                 for (XmlConditionView v : xmlModel.getConditionViews()) p.paramPanel.add(buildXmlConditionRow(p, v));
             }
             if (!xmlModel.getForEachViews().isEmpty()) {
                 p.paramPanel.add(sectionHeaderRow(p, MpSqlVisualizerBundle.message("panel.xml.foreach.section")));
-                for (XmlForEachView v : xmlModel.getForEachViews()) {
-                    List<MockObject> injected = xmlModel.getCollectionElements().get(v.collectionExpr());
-                    p.paramPanel.add(buildXmlForEachRow(p, v, labelWidth,
-                            injected != null ? injected.size() : null));
-                }
+                for (XmlForEachView v : xmlModel.getForEachViews()) p.paramPanel.add(buildXmlForEachRow(p, v, labelWidth));
             }
-            if (!ordinarySources.isEmpty() || !mbgRows.isEmpty()) {
+            if (!ordinarySources.isEmpty()) {
                 if (hasControls) {
                     p.paramPanel.add(sectionHeaderRow(p, MpSqlVisualizerBundle.message("panel.param.section")));
                 }
-                if (!mbgRows.isEmpty()) {
-                    // D11b：这一区的行名取自条件文本，但「怎么填」不看提示猜不出来——给一行常驻说明。
-                    JBLabel mbgHint = new JBLabel(MpSqlVisualizerBundle.message("panel.param.mbg.hint"));
-                    mbgHint.setForeground(SqlPreviewPanel.PARAM_WARN_FOREGROUND);
-                    mbgHint.setBorder(JBUI.Borders.empty(0, 10, 2, 8));
-                    p.paramPanel.add(mbgHint);
-                }
                 for (String s : ordinarySources) p.paramPanel.add(buildParamRow(p, s, labelWidth));
-                for (Pair<String, String> row : mbgRows) {
-                    p.paramPanel.add(buildParamRow(p, row.getFirst(), labelWidth, row.getSecond(),
-                            MpSqlVisualizerBundle.message("panel.param.mbg.tooltip")));
-                }
-            }
-            p.paramPanel.revalidate();
-            p.paramPanel.repaint();
-            return;
-        }
-
-        // T-Ibatis2Gap 券 A：iBatis 预览左栏——条件开关行（勾选 = Map 放 key）+ iterate 值列表行 +
-        // 占位符/$ 直替值行。行清单来自 IbatisParamModel（基线 SQL 里没有 `?` 也照建——这正是
-        // 「参数没识别」的正解：让用户看见语句需要哪些参数、能填值）；勾选/输入变更走 renderSql
-        // 的 rerender 回调分支模型级重渲染。
-        IbatisParamModel ibatisModel = result.getIbatisParamModel();
-        if (ibatisModel != null) {
-            if (!ibatisModel.hasControls() && result.getUnresolvedParams().isEmpty()) {
-                JBLabel none = new JBLabel(MpSqlVisualizerBundle.message("panel.param.none"));
-                none.setBorder(JBUI.Borders.empty(6, 8));
-                p.paramPanel.add(none);
-                p.paramPanel.revalidate();
-                p.paramPanel.repaint();
-                return;
-            }
-            // T-LabelInset：iterate 行与 `$` 直替行的标签带左缩进边框（见 buildIbatisIterateRow /
-            // buildIbatisDollarRow），预算必须计入该内边距——否则最宽的那条标签被 Swing 截尾；
-            // 占位符行 / 条件行无边框，补 0。
-            int ibatisInset = borderLeftInsetPx(indentedLabelBorder());
-            List<String> labelTexts = new ArrayList<>();
-            List<Integer> labelInsets = new ArrayList<>();
-            for (IbatisParamModel.IbatisPlaceholderRow row : ibatisModel.placeholderRows()) {
-                labelTexts.add("#" + row.name());
-                labelInsets.add(0);
-            }
-            for (IbatisParamModel.IbatisDollarRow row : ibatisModel.dollarRows()) {
-                labelTexts.add("$" + row.name() + "$");
-                labelInsets.add(ibatisInset);
-            }
-            for (IbatisParamModel.IbatisIterateRow row : ibatisModel.iterateRows()) {
-                labelTexts.add("iterate: " + row.property());
-                labelInsets.add(ibatisInset);
-            }
-            for (IbatisParamModel.IbatisConditionRow row : ibatisModel.conditionRows()) {
-                labelTexts.add(ibatisModel.labelOf(row));
-                labelInsets.add(0);
-            }
-            int labelWidth = labelColumnWidth(p, labelTexts, labelInsets);
-            boolean hasIbatisControls = ibatisModel.hasControls();
-            if (!ibatisModel.conditionRows().isEmpty()) {
-                p.paramPanel.add(conditionSectionHeader(p));
-                for (IbatisParamModel.IbatisConditionRow row : ibatisModel.conditionRows()) {
-                    p.paramPanel.add(buildIbatisConditionRow(p, row, ibatisModel));
-                }
-            }
-            if (!ibatisModel.iterateRows().isEmpty()) {
-                p.paramPanel.add(sectionHeaderRow(p, MpSqlVisualizerBundle.message("panel.ibatis.iterate.section")));
-                for (IbatisParamModel.IbatisIterateRow row : ibatisModel.iterateRows()) {
-                    p.paramPanel.add(buildIbatisIterateRow(p, row, labelWidth));
-                }
-            }
-            Set<String> coveredSources = new LinkedHashSet<>();
-            for (IbatisParamModel.IbatisPlaceholderRow row : ibatisModel.placeholderRows()) coveredSources.add(row.name());
-            for (IbatisParamModel.IbatisDollarRow row : ibatisModel.dollarRows()) coveredSources.add(row.name());
-            if (!ibatisModel.placeholderRows().isEmpty() || !ibatisModel.dollarRows().isEmpty()) {
-                if (hasIbatisControls) {
-                    p.paramPanel.add(sectionHeaderRow(p, MpSqlVisualizerBundle.message("panel.param.section")));
-                }
-                for (IbatisParamModel.IbatisPlaceholderRow row : ibatisModel.placeholderRows()) {
-                    p.paramPanel.add(buildIbatisPlaceholderRow(p, row, labelWidth));
-                }
-                for (IbatisParamModel.IbatisDollarRow row : ibatisModel.dollarRows()) {
-                    p.paramPanel.add(buildIbatisDollarRow(p, row, labelWidth));
-                }
-            }
-            // 手写 `?` 且无 parameterMap：参数名按 paramN 兜底（与既有口径一致），补普通参数行
-            List<String> fallbackSources = new ArrayList<>();
-            for (String s : result.getUnresolvedParams()) {
-                if (!coveredSources.contains(s) && !fallbackSources.contains(s)) fallbackSources.add(s);
-            }
-            if (!fallbackSources.isEmpty()) {
-                if (hasIbatisControls) {
-                    p.paramPanel.add(sectionHeaderRow(p, MpSqlVisualizerBundle.message("panel.param.section")));
-                }
-                for (String s : fallbackSources) p.paramPanel.add(buildParamRow(p, s, labelWidth));
             }
             p.paramPanel.revalidate();
             p.paramPanel.repaint();
@@ -817,9 +692,6 @@ public final class SqlPreviewPanelParamPanelKt {
      * 全选/全不选（M13.1）：批量设置动态条件勾选态（普通参数不受影响），
      * 同步复选框 UI 与 SQL 重渲染。T-M24-04：XML 预览的条件开关（id = test 表达式）一并处理。
      * T-SelToggle：由单个切换按钮按当前勾选态取反调用。
-     * T-IbatisSelectAll：iBatis 预览的条件行（id = {@code ibatis-cond-N}，IbatisParamModel 持有）
-     * 一并处理——此前只枚举 Wrapper/XML 两份 conditionViews，iBatis 链两份皆空 ⇒ 勾选态改了
-     * UI、enabledIds 一个没动，重渲染与基线逐字节相同（20261111 录制现场实测）。
      */
     public static void setAllConditions(@NotNull SqlPreviewPanel p, boolean enabled) {
         List<ConditionView> views = p.current != null && p.current.getPreviewModel() != null
@@ -828,9 +700,6 @@ public final class SqlPreviewPanelParamPanelKt {
         List<XmlConditionView> xmlViews = p.current != null && p.current.getXmlModel() != null
                 ? p.current.getXmlModel().getConditionViews() : null;
         if (xmlViews == null) xmlViews = List.of();
-        List<IbatisConditionRow> ibatisRows = p.current != null && p.current.getIbatisParamModel() != null
-                ? p.current.getIbatisParamModel().conditionRows() : null;
-        if (ibatisRows == null) ibatisRows = List.of();
         for (ConditionView v : views) {
             if (enabled) p.enabledIds.add(v.getId());
             else p.enabledIds.remove(v.getId());
@@ -838,10 +707,6 @@ public final class SqlPreviewPanelParamPanelKt {
         for (XmlConditionView v : xmlViews) {
             if (enabled) p.enabledIds.add(v.id());
             else p.enabledIds.remove(v.id());
-        }
-        for (IbatisConditionRow row : ibatisRows) {
-            if (enabled) p.enabledIds.add(row.id());
-            else p.enabledIds.remove(row.id());
         }
         for (JCheckBox cb : p.conditionCheckBoxes) cb.setSelected(enabled);
         SqlPreviewPanelSqlViewKt.renderSql(p);
@@ -854,16 +719,13 @@ public final class SqlPreviewPanelParamPanelKt {
         String displayLabel = checkBoxText(p, rawLabel);
         JCheckBox checkBox = new JCheckBox(displayLabel, p.enabledIds.contains(view.getId()));
         // T-M26.3：标签被截断时 tooltip 展示表达式原文（否则保留 flagSource 提示）
-        checkBox.setToolTipText(!displayLabel.equals(rawLabel) ? wrappedLabelTooltip(rawLabel) : conditionTooltip(p, view));
+        checkBox.setToolTipText(!displayLabel.equals(rawLabel) ? rawLabel : conditionTooltip(p, view));
         checkBox.putClientProperty(SqlPreviewPanel.PROP_TOGGLE_ID, view.getId()); // R22 T-02：快照枚举/召回同步的 id 锚点
         checkBox.addActionListener(e -> {
             if (checkBox.isSelected()) p.enabledIds.add(view.getId());
             else p.enabledIds.remove(view.getId());
             SqlPreviewPanelSqlViewKt.renderSql(p);
         });
-        // T-ParamNameTruncation：登记全名与标注预留宽度，视口变化后按同一口径重排
-        //（k2j 本行当前无 R49 行尾求值标注——预留 0；master 侧带 wrapperFlagOutcome 标注的形态见历轮分歧记录）
-        registerCheckBoxLabel(p, checkBox, rawLabel, 0, conditionTooltip(p, view));
         p.conditionCheckBoxes.add(checkBox);
         JBPanel<JBPanel<?>> row = new JBPanel<JBPanel<?>>(new FlowLayout(FlowLayout.LEFT, 4, 2));
         row.add(checkBox);
@@ -931,19 +793,6 @@ public final class SqlPreviewPanelParamPanelKt {
         }
         List<String> all = new ArrayList<>(conditionSources);
         all.addAll(ordinarySources);
-        // T-IbatisSelectAll：iBatis 链的参数输入同语义清空——条件行内联值（property 与占位符行共享
-        // paramValues 同键）+ 占位符/`$` 直替行。此前只枚举 previewModel.conditionViews 与
-        // unresolvedParams（iBatis 基线两者皆空），点清除毫无反应（20261111 录制现场一并核实）。
-        IbatisParamModel ibatisModel = p.current != null ? p.current.getIbatisParamModel() : null;
-        List<String> ibatisSources = new ArrayList<>();
-        if (ibatisModel != null) {
-            for (IbatisConditionRow row : ibatisModel.conditionRows()) {
-                if (row.property() != null) ibatisSources.add(row.property());
-            }
-            for (IbatisParamModel.IbatisPlaceholderRow row : ibatisModel.placeholderRows()) ibatisSources.add(row.name());
-            for (IbatisParamModel.IbatisDollarRow row : ibatisModel.dollarRows()) ibatisSources.add(row.name());
-        }
-        all.addAll(ibatisSources);
         for (String source : all) {
             p.paramValues.put(source, "");
             syncParamFieldText(p, source, "");
@@ -951,22 +800,6 @@ public final class SqlPreviewPanelParamPanelKt {
         // foreach 权威值（可见字段文本）；监听链同步权威 map，权威 map 再显式清一遍兜底
         for (Pair<String, JBTextField> pair : p.xmlForEachValueFields) pair.getSecond().setText("");
         p.xmlForEachValues.clear();
-        // D10（真机 2026-11-12）：展开项键必须一起清。syncForEachItemValues 负责回收 `__frch_*`，
-        // 但它以 `xmlForEachValues` 非空为前提——上一步 clear 之后那条路径直接 return，值就永久残留
-        // （真机：点「清除」后产物里仍是 `BETWEEN '11' AND ?`）。
-        for (String source : new ArrayList<>(p.paramValues.keySet())) {
-            if (source.startsWith("__frch_")) {
-                p.paramValues.remove(source);
-                syncParamFieldText(p, source, "");
-            }
-        }
-        // iBatis iterate 值（可见字段文本 + 权威 map）——与 foreach 同语义（留空 = 该段不展开）
-        if (ibatisModel != null) {
-            for (IbatisIterateRow row : ibatisModel.iterateRows()) {
-                syncParamFieldText(p, row.property(), "");
-            }
-        }
-        p.ibatisIterateValues.clear();
         SqlPreviewPanelSqlViewKt.renderSql(p);
         saveToHistory(p);
     }
@@ -1015,15 +848,13 @@ public final class SqlPreviewPanelParamPanelKt {
         JCheckBox checkBox = new JCheckBox(displayLabel, p.enabledIds.contains(view.id()));
         // T-M26.3：标签被截断时 tooltip 展示 test 表达式原文（否则保留条件提示）
         checkBox.setToolTipText(!displayLabel.equals(rawLabel)
-                ? wrappedLabelTooltip(rawLabel) : MpSqlVisualizerBundle.message("panel.xml.condition"));
+                ? rawLabel : MpSqlVisualizerBundle.message("panel.xml.condition"));
         checkBox.putClientProperty(SqlPreviewPanel.PROP_TOGGLE_ID, view.id()); // R22 T-02：快照枚举/召回同步的 id 锚点（XML 条件行）
         checkBox.addActionListener(e -> {
             if (checkBox.isSelected()) p.enabledIds.add(view.id());
             else p.enabledIds.remove(view.id());
             SqlPreviewPanelSqlViewKt.renderSql(p);
         });
-        // T-ParamNameTruncation：登记全名（XML 条件行无行尾标注，预留 0）
-        registerCheckBoxLabel(p, checkBox, rawLabel, 0, MpSqlVisualizerBundle.message("panel.xml.condition"));
         p.conditionCheckBoxes.add(checkBox);
         JBLabel outcomeLabel = new JBLabel();
         outcomeLabel.setForeground(UIUtil.getContextHelpForeground());
@@ -1116,55 +947,17 @@ public final class SqlPreviewPanelParamPanelKt {
         }
     }
 
-    /**
-     * T-M25.4：foreach 行——集合表达式标签 + 集合值输入框 + null 复选框
-     * （T-M26.5：标签即集合表达式，分区标题已含「foreach 集合」语义）。
-     *
-     * <p>D9（真机 2026-11-12 用户实测）：M2 已按调用点还原出<b>元素对象</b>的集合，值框必须<b>只读</b>。
-     * {@code oredCriteria} / {@code criteria.criteria} 这类集合的「值」是还原出来的 Criteria / Criterion 对象，
-     * 用户在框里填 {@code 1} 会把 {@code __frch_criterion_0} 从对象换成字符串——渲染时 {@code #{criterion.value}} 取到
-     * 那个字符串、{@code #{criterion.secondValue}} 取不到，产物就成了 {@code BETWEEN '1' AND ?} 这种半填形态。
-     * 旧工具提示还写着「MBG Example 这类集合通常只有 1 项，可填 1」，等于主动引导用户踩这个坑。</p>
-     */
+    /** T-M25.4：foreach 行——<b>集合表达式标签 + 集合值输入框</b>（逗号分隔，如 {@code 2,3} → 展开两项并回填）+ null 复选框（T-M26.5：标签即集合表达式，分区标题已含「foreach 集合」语义）。 */
     @NotNull
     public static JBPanel<JBPanel<?>> buildXmlForEachRow(
             @NotNull SqlPreviewPanel p, XmlForEachView view, int labelWidth) {
-        return buildXmlForEachRow(p, view, labelWidth, null);
-    }
-
-    /** Kotlin 默认参 {@code injectedCount: Int? = null} 的等价重载（全参形态）。 */
-    @NotNull
-    public static JBPanel<JBPanel<?>> buildXmlForEachRow(
-            @NotNull SqlPreviewPanel p, XmlForEachView view, int labelWidth, @Nullable Integer injectedCount) {
         JBPanel<JBPanel<?>> row = new JBPanel<JBPanel<?>>(new FlowLayout(FlowLayout.LEFT, 8, 6));
-        row.add(columnLabel(p, view.collectionExpr(), labelWidth, indentedLabelBorder()));
-        // D14（真机 2026-11-12 17:0x，`deleteByExample`）：<b>条件对象容器</b>（`oredCriteria` /
-        // `criteria.criteria`，item 是 criteria / criterion）一律只读——不管有没有 M2 注入。
-        // 这类集合的元素是「条件对象」而不是值；用户填一个字符串会把对象换成字符串，
-        // `${criterion.condition}` 塌成空、`#{criterion.value}` 取到那个字符串（真机 `({{condition}} '1')`）。
-        // 真正该填的值走「参数」区的按条件行。
-        boolean objectContainer = "criteria".equals(view.item()) || "criterion".equals(view.item());
-        boolean locked = injectedCount != null || objectContainer;
+        JBLabel label = columnLabel(p, view.collectionExpr(), labelWidth);
+        label.setBorder(JBUI.Borders.empty(0, 8, 0, 0));
+        row.add(label);
         JBTextField valuesField = new JBTextField(8);
-        // 召回先于参数区重建；注册监听前回填权威值，避免初始文本写入触发保存或改写集合。
-        List<String> existingValues = locked ? null : p.xmlForEachValues.get(view.collectionExpr());
-        valuesField.setText(existingValues != null ? String.join(",", existingValues) : "");
-        if (locked) {
-            valuesField.getEmptyText().setText(injectedCount != null
-                    ? "已还原 " + injectedCount + " 项" : "按条件对象展开");
-        }
-        // D9：元素对象由调用点还原的集合不可改写（填值会冲掉还原出来的对象）
-        valuesField.setEnabled(!locked);
-        if (injectedCount != null) {
-            valuesField.setToolTipText("该集合已按调用点还原 " + injectedCount + " 项对象，不能在此填值——"
-                    + "填了会把还原出来的条件对象冲掉（产物出现半填形态）。要改值请改 SQL 或看「参数」区。");
-        } else if (objectContainer) {
-            valuesField.setToolTipText("这个集合装的是条件对象而不是值，不能在此填值——"
-                    + "要填值请用下面「参数」区里按条件列出的行（例如 cust_id = 值）。");
-        } else {
-            valuesField.setToolTipText("集合值（逗号分隔，按该集合展开出的占位顺序依次填入；留空 = 默认展开 "
-                    + XmlPreviewModel.DEFAULT_FOREACH_SIZE + " 项）");
-        }
+        valuesField.setToolTipText("集合值（逗号分隔，如 2,3；留空 = 默认展开 "
+                + XmlPreviewModel.DEFAULT_FOREACH_SIZE + " 项）");
         valuesField.getDocument().addDocumentListener(new DocumentListener() {
             @Override
             public void insertUpdate(DocumentEvent e) {
@@ -1184,18 +977,6 @@ public final class SqlPreviewPanelParamPanelKt {
         row.add(valuesField);
         p.paramFields.add(valuesField);
         p.xmlForEachValueFields.add(new Pair<>(view.collectionExpr(), valuesField)); // R22 T-03：召回时按 expr 同步字段文本
-        // T-ForEachInert：值框本轮到底会不会参与渲染取决于**分支**有没有被走到（例如 `criterion.value`
-        // 只在 `listValue` 分支里被展开）。只读行自带说明，不挂这条提示；可填行挂一枚灰字提示，
-        // 由 syncXmlForEachInertStates 在渲染帧内按「本轮是否真展开」刷新可见性。
-        if (!locked) {
-            JBLabel inertHint = new JBLabel();
-            inertHint.setVisible(false);
-            inertHint.setForeground(SqlPreviewPanel.PARAM_WARN_FOREGROUND);
-            inertHint.setBorder(JBUI.Borders.empty(0, 6, 0, 0));
-            inertHint.putClientProperty("html.disable", true);
-            row.add(inertHint);
-            p.xmlForEachInertLabels.add(new Pair<>(view.collectionExpr(), inertHint));
-        }
         JCheckBox nullBox = new JCheckBox(MpSqlVisualizerBundle.message("panel.xml.foreach.null"),
                 p.xmlForEachNulls.contains(view.collectionExpr()));
         nullBox.putClientProperty(SqlPreviewPanel.PROP_FOREACH_NULL, view.collectionExpr()); // R22 T-02：召回同步的 expr 锚点
@@ -1269,58 +1050,9 @@ public final class SqlPreviewPanelParamPanelKt {
         }
     }
 
-    /**
-     * T-ForEachInert：foreach 行「本轮是否真参与渲染」提示刷新（渲染帧内调用，{@code xmlMappings} 恒新鲜）。
-     *
-     * <p>判据与 {@link #syncForEachItemValues} 同源：渲染器只为<b>被展开出来</b>的集合产 {@code __frch_<item>_<n>} 映射。
-     * 缺席即「这一行本轮没被走到」——大多是承载它的 {@code <choose>}/{@code <if>} 分支没命中（真机 2026-11-12：
-     * {@code criterion.value} 填了 {@code 1}，而当前走的是 {@code singleValue} 分支 ⇒ 产物纹丝不动）。此时必须说清
-     * 「为什么填了没用、怎么才生效」，否则用户以为插件坏了。</p>
-     */
-    public static void syncXmlForEachInertStates(@NotNull SqlPreviewPanel p, XmlPreviewModel xml) {
-        if (p.xmlForEachInertLabels.isEmpty()) return;
-        List<String> properties = new ArrayList<>();
-        for (cn.song.mybatisplus.visualizer.xml.ParameterMapping m : p.xmlMappings) properties.add(m.property());
-        for (Pair<String, JBLabel> pair : p.xmlForEachInertLabels) {
-            String expr = pair.getFirst();
-            JBLabel hint = pair.getSecond();
-            String item = null;
-            for (XmlForEachView v : xml.getForEachViews()) {
-                if (v.collectionExpr().equals(expr)) {
-                    item = v.item();
-                    break;
-                }
-            }
-            boolean expanded = forEachExpandedThisRound(item, properties);
-            hint.setVisible(!expanded);
-            if (!expanded) hint.setText(MpSqlVisualizerBundle.message("panel.xml.foreach.inert"));
-        }
-    }
-
-    /**
-     * T-ForEachInert：该 foreach 本轮是否展开过（纯函数）。
-     *
-     * <p>{@code item} 未知（{@code <foreach>} 未写 item 属性）时保守判「展开」——宁可少提示，不可误报。</p>
-     */
-    public static boolean forEachExpandedThisRound(@Nullable String item, List<String> mappingProperties) {
-        if (item == null || item.isBlank()) return true;
-        String prefix = "__frch_" + item + "_";
-        for (String property : mappingProperties) {
-            if (property.startsWith(prefix)) return true;
-        }
-        return false;
-    }
-
     /** 普通参数行：`#<source>` 标签 + 值输入框（T-PT-02：按签名类型类别挂占位提示与行尾校验警示）。 */
     @NotNull
     public static JBPanel<JBPanel<?>> buildParamRow(@NotNull SqlPreviewPanel p, String source, int labelWidth) {
-        return buildParamRow(p, source, labelWidth, null, null);
-    }
-
-    /** Kotlin 默认参 {@code labelOverride}/{@code tooltipOverride} 缺省 null 的等价全参形态（D11 MBG 行用）。 */
-    @NotNull
-    public static JBPanel<JBPanel<?>> buildParamRow(@NotNull SqlPreviewPanel p, String source, int labelWidth,
-                                                    @Nullable String labelOverride, @Nullable String tooltipOverride) {
         ParamKind kind = paramKindOf(p, source);
         // T-PT-02：行尾淡色警示标（校验是提示不是闸门——值照原样渲染，渲染链 renderValue 行为不动）
         JBLabel warnLabel = new JBLabel("");
@@ -1334,7 +1066,7 @@ public final class SqlPreviewPanelParamPanelKt {
         field.getEmptyText().setText(paramEmptyText(p, source, kind));
         // 长值超框宽时光标钉回首字符，视口停在头部；完整值以 tooltip 兜底
         if (!field.getText().isEmpty()) field.setCaretPosition(0);
-        field.setToolTipText(tooltipOverride != null ? tooltipOverride : paramTooltip(p, source, field.getText()));
+        field.setToolTipText(paramTooltip(p, source, field.getText()));
         updateParamWarning(p, warnLabel, kind, field.getText());
         field.getDocument().addDocumentListener(new DocumentListener() {
             @Override
@@ -1356,271 +1088,11 @@ public final class SqlPreviewPanelParamPanelKt {
         p.paramWarnLabels.add(warnLabel);
         // T-M19.4-01：FlowLayout 间距 (4,2) → (8,6)——参数名较长时视觉"贴太近"（用户实测）
         JBPanel<JBPanel<?>> row = new JBPanel<JBPanel<?>>(new FlowLayout(FlowLayout.LEFT, 8, 6));
-        row.add(labelOverride != null ? columnLabel(p, labelOverride, labelWidth) : paramLabel(p, source, labelWidth));
+        row.add(paramLabel(p, source, labelWidth));
         row.add(field);
         row.add(warnLabel);
         row.setBorder(JBUI.Borders.empty(0, 8, 2, 8));
         return row;
-    }
-
-    /**
-     * D11（真机 2026-11-12）：MBG 预览的可填行。
-     *
-     * <p>M2 注入后，语句里的占位符来源全是 {@code __frch_criterion_N.value} / {@code .secondValue} 这类<b>展开项键</b>，
-     * 而参数区按既有口径把 {@code __frch_} 前缀全部过滤掉了（那是给 foreach 值框统一回填的）——结果左栏
-     * 一个可填行都没有，用户只能去 foreach 值框填，而那会冲掉还原出来的 Criterion 对象（D9 已改只读）。</p>
-     *
-     * <p>标签口径（<b>D11b 修正</b>）：{@code __frch_criterion_N} 的 {@code N} 是渲染期唯一编号，<b>不是</b> criterion 下标
-     * （真机因此显示成「条件 2 值」——查不到第 2 条条件，只能退化成编号）。改为按<b>首次出现顺序</b>分组，
-     * 与注入的 criterion 顺序对齐；区间条件两个占位再区分「起始值 / 结束值」。</p>
-     */
-    public static List<Pair<String, String>> mbgParamRows(PreviewResult result, XmlPreviewModel xml) {
-        if (xml.getCollectionElements().isEmpty()) return List.of();
-        List<String> conditions = new ArrayList<>();
-        List<MockObject> criteria = xml.getCollectionElements().get("criteria.criteria");
-        if (criteria != null) {
-            for (MockObject o : criteria) {
-                Object condition = o.properties().get("condition");
-                conditions.add(condition instanceof String ? (String) condition : null);
-            }
-        }
-        return mbgParamRowsOf(result.getUnresolvedParams(), conditions);
-    }
-
-    /** 纯逻辑（单测入口）：占位符来源 + 各 criterion 的条件文本 → (source, 用户可读标签)。 */
-    @NotNull
-    public static List<Pair<String, String>> mbgParamRowsOf(@NotNull List<String> sources,
-                                                            @NotNull List<String> conditions) {
-        java.util.regex.Pattern prefixRegex = java.util.regex.Pattern.compile("^__frch_criterion_(\\d+)");
-        Map<String, List<String>> groups = new LinkedHashMap<>();
-        for (String source : sources) {
-            java.util.regex.Matcher m = prefixRegex.matcher(source);
-            if (!m.find()) continue;
-            String number = m.group(1);
-            groups.computeIfAbsent(number, k -> new ArrayList<>()).add(source);
-        }
-        List<Pair<String, String>> rows = new ArrayList<>();
-        int index = 0;
-        for (List<String> groupSources : groups.values()) {
-            String condition = index < conditions.size() ? conditions.get(index) : null;
-            if (condition != null && !condition.isBlank()) condition = condition.trim();
-            else condition = null;
-            String base = condition != null ? condition : "条件 " + (index + 1);
-            boolean between = groupSources.size() >= 2;
-            List<String> distinct = new ArrayList<>();
-            for (String s : groupSources) if (!distinct.contains(s)) distinct.add(s);
-            for (int k = 0; k < distinct.size(); k++) {
-                String suffix;
-                if (between && k == 0) suffix = " 起始值";
-                else if (between && k == 1) suffix = " 结束值";
-                else suffix = " 值";
-                rows.add(new Pair<>(distinct.get(k), base + suffix));
-            }
-            index++;
-        }
-        return rows;
-    }
-
-    // ------------------------------------------------------------------
-    // T-Ibatis2Gap 券 A：iBatis 预览左栏行构造器（条件开关 / iterate 值列表 / 占位符与 $ 直替值）
-    // ------------------------------------------------------------------
-
-    /**
-     * iBatis 条件开关行：复选框（label = {@code isNotNull: id} / {@code isEqual: status == "1"} 形态摘要，
-     * id 进 enabledIds）+ 值输入框（property 未被占位符行覆盖时在此给值，否则与 {@code #prop#} 行共享
-     * paramValues 同键）。isNotEmpty/isEmpty 行尾标注「空值 ⇒ 条件不成立」的引擎语义——
-     * 避免用户以为「勾了没生效是坏了」。
-     */
-    @NotNull
-    public static JBPanel<JBPanel<?>> buildIbatisConditionRow(@NotNull SqlPreviewPanel p, IbatisConditionRow row,
-                                                              IbatisParamModel model) {
-        String rawLabel = model.labelOf(row);
-        String displayLabel = checkBoxText(p, rawLabel);
-        JCheckBox checkBox = new JCheckBox(displayLabel, p.enabledIds.contains(row.id()));
-        checkBox.setToolTipText(rawLabel);
-        checkBox.putClientProperty(SqlPreviewPanel.PROP_TOGGLE_ID, row.id()); // R22 T-02：快照枚举/召回同步的 id 锚点（与 XML 条件行同形态）
-        checkBox.addActionListener(e -> {
-            if (checkBox.isSelected()) p.enabledIds.add(row.id());
-            else p.enabledIds.remove(row.id());
-            SqlPreviewPanelSqlViewKt.renderSql(p);
-        });
-        // T-ParamNameTruncation：登记全名（iBatis 条件行无行尾标注，预留 0）
-        registerCheckBoxLabel(p, checkBox, rawLabel, 0, rawLabel);
-        p.conditionCheckBoxes.add(checkBox);
-        JBPanel<JBPanel<?>> panel = new JBPanel<JBPanel<?>>(new FlowLayout(FlowLayout.LEFT, 4, 2));
-        panel.add(checkBox);
-        if (row.property() != null) {
-            String prop = row.property();
-            boolean coveredByPlaceholder = false;
-            for (IbatisPlaceholderRow placeholder : model.placeholderRows()) {
-                if (placeholder.name().equals(prop)) {
-                    coveredByPlaceholder = true;
-                    break;
-                }
-            }
-            if (!coveredByPlaceholder) panel.add(ibatisValueField(p, prop));
-        }
-        if ("isNotEmpty".equals(row.kindTagName()) || "isEmpty".equals(row.kindTagName())) {
-            JBLabel note = new JBLabel(MpSqlVisualizerBundle.message("panel.ibatis.condition.emptyString.note"));
-            note.setForeground(UIUtil.getContextHelpForeground());
-            note.setToolTipText(MpSqlVisualizerBundle.message("panel.ibatis.condition.emptyString.tooltip"));
-            panel.add(note);
-        }
-        panel.setBorder(JBUI.Borders.empty(0, 8, 2, 8));
-        return panel;
-    }
-
-    /** iBatis 迭代行：`iterate: ids` 标签 + 值列表输入（逗号/换行分隔）——留空 = 该段不展开（引擎降级，现状一致）。 */
-    @NotNull
-    public static JBPanel<JBPanel<?>> buildIbatisIterateRow(@NotNull SqlPreviewPanel p, IbatisIterateRow row,
-                                                            int labelWidth) {
-        String labelText = "iterate: " + row.property();
-        JBPanel<JBPanel<?>> panel = new JBPanel<JBPanel<?>>(new FlowLayout(FlowLayout.LEFT, 8, 6));
-        // T-ParamNameTruncation：标签列宽取本分区统一列宽（旧实现按「本行单条文本」自算，
-        // 与同区占位符/参数行不齐，输入框左缘对不上）
-        panel.add(columnLabel(p, labelText, labelWidth, indentedLabelBorder()));
-        JBTextField field = new JBTextField(16);
-        // 召回先于参数区重建；注册监听前回填权威值（与 xmlForEachValues 同口径）
-        String existing = p.ibatisIterateValues.get(row.property());
-        field.setText(existing != null ? existing : "");
-        field.setToolTipText(MpSqlVisualizerBundle.message("panel.ibatis.iterate.tooltip"));
-        field.putClientProperty(SqlPreviewPanel.PROP_FIELD_SOURCE, row.property());
-        field.getDocument().addDocumentListener(new DocumentListener() {
-            @Override
-            public void insertUpdate(DocumentEvent e) {
-                onIbatisIterateValuesChanged(p, row, field.getText());
-            }
-
-            @Override
-            public void removeUpdate(DocumentEvent e) {
-                onIbatisIterateValuesChanged(p, row, field.getText());
-            }
-
-            @Override
-            public void changedUpdate(DocumentEvent e) {
-                onIbatisIterateValuesChanged(p, row, field.getText());
-            }
-        });
-        panel.add(field);
-        p.paramFields.add(field);
-        panel.setBorder(JBUI.Borders.empty(0, 8, 2, 8));
-        return panel;
-    }
-
-    /** iterate 值变更：即时写状态，渲染走防抖（T-Perf-04 同口径；值装配收进 renderSql 帧）。 */
-    public static void onIbatisIterateValuesChanged(@NotNull SqlPreviewPanel p, IbatisIterateRow row, String text) {
-        p.ibatisIterateValues.put(row.property(), text);
-        p.scheduleRender(() -> SqlPreviewPanelSqlViewKt.renderSql(p));
-    }
-
-    /** iBatis 占位符行：`#name` 标签 + jdbcType 类型提示（emptyText/tooltip）+ 值输入框。 */
-    @NotNull
-    public static JBPanel<JBPanel<?>> buildIbatisPlaceholderRow(@NotNull SqlPreviewPanel p, IbatisPlaceholderRow row,
-                                                                int labelWidth) {
-        JBPanel<JBPanel<?>> panel = new JBPanel<JBPanel<?>>(new FlowLayout(FlowLayout.LEFT, 8, 6));
-        panel.add(paramLabel(p, row.name(), labelWidth));
-        JBTextField field = new JBTextField(16);
-        String existing = p.paramValues.get(row.name());
-        field.setText(existing != null ? existing : "");
-        field.putClientProperty(SqlPreviewPanel.PROP_FIELD_SOURCE, row.name());
-        field.getEmptyText().setText(ibatisEmptyTextHint(row.jdbcType()));
-        field.setToolTipText(row.jdbcType() != null
-                ? "#" + row.name() + ":" + row.jdbcType() : "#" + row.name());
-        if (!field.getText().isEmpty()) field.setCaretPosition(0);
-        field.getDocument().addDocumentListener(new DocumentListener() {
-            @Override
-            public void insertUpdate(DocumentEvent e) {
-                onParamFieldText(p, row.name(), field);
-            }
-
-            @Override
-            public void removeUpdate(DocumentEvent e) {
-                onParamFieldText(p, row.name(), field);
-            }
-
-            @Override
-            public void changedUpdate(DocumentEvent e) {
-                onParamFieldText(p, row.name(), field);
-            }
-        });
-        p.paramFields.add(field);
-        panel.add(field);
-        panel.setBorder(JBUI.Borders.empty(0, 8, 2, 8));
-        return panel;
-    }
-
-    /** {@code $x$} 直替行：`$name$` 标签 + 值输入框 + 行尾注入面标注（接既有 `${}` 确认闸门，不新开无闸门路径）。 */
-    @NotNull
-    public static JBPanel<JBPanel<?>> buildIbatisDollarRow(@NotNull SqlPreviewPanel p, IbatisDollarRow row,
-                                                           int labelWidth) {
-        JBPanel<JBPanel<?>> panel = new JBPanel<JBPanel<?>>(new FlowLayout(FlowLayout.LEFT, 8, 6));
-        panel.add(columnLabel(p, "$" + row.name() + "$", labelWidth, indentedLabelBorder()));
-        JBTextField field = new JBTextField(16);
-        String existing = p.paramValues.get(row.name());
-        field.setText(existing != null ? existing : "");
-        field.putClientProperty(SqlPreviewPanel.PROP_FIELD_SOURCE, row.name());
-        field.setToolTipText(MpSqlVisualizerBundle.message("panel.ibatis.dollar.tooltip"));
-        field.getDocument().addDocumentListener(new DocumentListener() {
-            @Override
-            public void insertUpdate(DocumentEvent e) {
-                onParamFieldText(p, row.name(), field);
-            }
-
-            @Override
-            public void removeUpdate(DocumentEvent e) {
-                onParamFieldText(p, row.name(), field);
-            }
-
-            @Override
-            public void changedUpdate(DocumentEvent e) {
-                onParamFieldText(p, row.name(), field);
-            }
-        });
-        p.paramFields.add(field);
-        panel.add(field);
-        JBLabel note = new JBLabel(MpSqlVisualizerBundle.message("panel.ibatis.dollar.note"));
-        note.setForeground(SqlPreviewPanel.PARAM_WARN_FOREGROUND);
-        panel.add(note);
-        panel.setBorder(JBUI.Borders.empty(0, 8, 2, 8));
-        return panel;
-    }
-
-    /** 条件行内联值输入框（property 未被占位符行覆盖时用；与普通参数共享 paramValues 同键）。 */
-    @NotNull
-    public static JBTextField ibatisValueField(@NotNull SqlPreviewPanel p, String source) {
-        JBTextField field = new JBTextField(12);
-        String existing = p.paramValues.get(source);
-        field.setText(existing != null ? existing : "");
-        field.putClientProperty(SqlPreviewPanel.PROP_FIELD_SOURCE, source);
-        field.getDocument().addDocumentListener(new DocumentListener() {
-            @Override
-            public void insertUpdate(DocumentEvent e) {
-                onParamFieldText(p, source, field);
-            }
-
-            @Override
-            public void removeUpdate(DocumentEvent e) {
-                onParamFieldText(p, source, field);
-            }
-
-            @Override
-            public void changedUpdate(DocumentEvent e) {
-                onParamFieldText(p, source, field);
-            }
-        });
-        p.paramFields.add(field);
-        return field;
-    }
-
-    /** jdbcType → 输入框占位提示（复用既有键；不认识的类型给空提示，不做猜测）。 */
-    private static String ibatisEmptyTextHint(@Nullable String jdbcType) {
-        Set<String> numeric = Set.of("INTEGER", "INT", "BIGINT", "SMALLINT", "TINYINT",
-                "DECIMAL", "NUMERIC", "FLOAT", "REAL", "DOUBLE");
-        Set<String> temporal = Set.of("DATE", "TIME", "TIMESTAMP", "DATETIME");
-        String upper = jdbcType != null ? jdbcType.toUpperCase() : "";
-        if (numeric.contains(upper)) return MpSqlVisualizerBundle.message("panel.param.emptyText.number");
-        if (temporal.contains(upper)) return MpSqlVisualizerBundle.message("panel.param.emptyText.temporal");
-        return "";
     }
 
     // ------------------------------------------------------------------
@@ -1713,248 +1185,33 @@ public final class SqlPreviewPanelParamPanelKt {
 
     /**
      * T-M26.3：两列行标签——统一列宽（输入框左缘对齐，IDEA 表单惯例），
-     * 文本超列宽时中段省略（保留尾部）。
-     *
-     * <p>T-ParamNameTruncation：全名 tooltip <b>无条件</b>设置——旧实现只在「构建那一刻判定超宽」的分支里设，
-     * 而列宽会随视口变化（见 {@link #relabelParamLabels}），一旦事后变窄就会「截断了却没有 tooltip」，
-     * 正是用户「悬停也看不到全名」的成因面。标签同时登记进 {@link SqlPreviewPanel#paramLabelRefs}，
-     * 供视口变化时原地重排（不重建左栏——重建会丢输入焦点与未保存文本）。</p>
+     * 文本超列宽时中段省略（保留尾部）+ tooltip 全名。
      */
     @NotNull
     public static JBLabel columnLabel(@NotNull SqlPreviewPanel p, String fullText, int columnWidth) {
-        return columnLabel(p, fullText, columnWidth, null);
-    }
-
-    /** Kotlin 默认参 {@code border: Border? = null} 的等价全参形态（T-LabelInset：带左缩进行用）。 */
-    @NotNull
-    public static JBLabel columnLabel(@NotNull SqlPreviewPanel p, String fullText, int columnWidth,
-                                      @Nullable Border border) {
-        JBLabel label = new JBLabel();
-        // T-LabelInset：边框必须在 applyLabelColumn **之前**落地——它带来的内边距会缩掉可绘文本
-        // 宽度，度量晚于边框就等于按「没有内边距」算可用宽度（这正是真机截尾的成因）。
-        if (border != null) label.setBorder(border);
-        label.putClientProperty(SqlPreviewPanel.PROP_LABEL_FULL_TEXT, fullText);
-        applyLabelColumn(p, label, fullText, columnWidth);
-        p.paramLabelRefs.add(new ParamLabelRef(label, fullText));
+        JBLabel label = new JBLabel(fullText);
+        FontMetrics metrics = label.getFontMetrics(UIUtil.getLabelFont());
+        if (metrics.stringWidth(fullText) > columnWidth) {
+            label.setToolTipText(fullText);
+            label.setText(ellipsize(p, fullText, metrics, columnWidth));
+        }
+        label.setPreferredSize(new Dimension(columnWidth, label.getPreferredSize().height));
         return label;
     }
 
-    /** T-ParamNameTruncation：单个标签的截断态落定（构建期与视口变化重排共用同一套度量）。 */
-    public static void applyLabelColumn(@NotNull SqlPreviewPanel p, JBLabel label, String fullText, int columnWidth) {
-        FontMetrics metrics = p.getFontMetrics(UIUtil.getLabelFont());
-        // T-LabelInset：Swing 只按「组件宽 − 内边距」画文本，放不下时它**自己**把尾部换成 `...`
-        // （headless 实证：`layoutCompoundLabel(avail=70)` → `criteria.crit...`），而不是走我们的
-        // ellipsize（那套保留尾部）。故判定必须用可绘宽度，否则最宽的标签必被 Swing 截尾。
-        Insets insets = label.getInsets() != null ? label.getInsets() : EMPTY_INSETS;
-        int avail = paramLabelTextAvailPx(columnWidth, insets.left, insets.right);
-        String display = metrics.stringWidth(fullText) > avail ? ellipsize(p, fullText, metrics, avail) : fullText;
-        if (!display.equals(label.getText())) label.setText(display);
-        String tooltip = wrappedLabelTooltip(fullText);
-        if (!tooltip.equals(label.getToolTipText())) label.setToolTipText(tooltip);
-        label.setPreferredSize(new Dimension(columnWidth, label.getPreferredSize().height));
-    }
-
     /**
-     * T-M26.3：两列行标签列宽——按最长可见标签自适应，上限跟随左栏视口宽度。
-     *
-     * <p>T-ParamNameTruncation：旧实现把它算成「构建时定稿一次」（viewport 取自弹窗定尺前的瞬时宽度，
-     * 且上限硬编码 260px），于是<b>拉宽弹窗、拖宽分隔条都不会变</b>，30 多个字符以上的名字永远截断。
-     * 现改为「视口 × {@link #LABEL_COLUMN_VIEWPORT_RATIO}，硬上限 {@link #LABEL_COLUMN_MAX_PX}」，
-     * 并由 {@link #relabelParamLabels} 在视口变化后重算。</p>
+     * T-M26.3：两列行标签列宽——按最长可见标签自适应，<b>上限跟随左栏视口宽度</b>
+     * （标签列 + 输入框约 90px + 间距边距 38px 不超出视口，保证标题行右侧按钮不被推出；
+     * 默认 240 面板 → 上限约 109，宽面板放宽至 260 封顶；未布局/测试环境取 260）。
      */
     public static int labelColumnWidth(@NotNull SqlPreviewPanel p, List<String> texts) {
-        return labelColumnWidth(p, texts, List.of());
-    }
-
-    /** Kotlin 默认参 {@code insets: List<Int> = emptyList()} 的等价全参形态（T-LabelInset：带缩进行预算）。 */
-    public static int labelColumnWidth(@NotNull SqlPreviewPanel p, List<String> texts, List<Integer> insets) {
-        if (texts.isEmpty()) return LABEL_COLUMN_MIN_PX;
+        if (texts.isEmpty()) return 140;
         FontMetrics metrics = p.getFontMetrics(UIUtil.getLabelFont());
-        List<Integer> textWidths = new ArrayList<>();
-        for (String t : texts) textWidths.add(metrics.stringWidth(t));
-        return paramLabelColumnWidth(textWidths, p.paramScroll.getViewport().getWidth(), insets);
-    }
-
-    /**
-     * 列宽预算的纯函数形态（脱 FontMetrics/组件，headless 可直测）：内容宽度按「视口 × 比例」封顶，
-     * 再夹在 {@link #LABEL_COLUMN_MIN_PX}/{@link #LABEL_COLUMN_MAX_PX} 之间；{@code viewportPx} <= 0（未布局）
-     * 时按 {@link #LABEL_COLUMN_FALLBACK_VIEWPORT_PX} 估算。
-     */
-    public static int paramLabelColumnWidth(@NotNull List<Integer> textWidths, int viewportPx, List<Integer> insets) {
-        if (textWidths.isEmpty()) return LABEL_COLUMN_MIN_PX;
-        int viewport = viewportPx > 0 ? viewportPx : LABEL_COLUMN_FALLBACK_VIEWPORT_PX;
-        int budget = Math.max(LABEL_COLUMN_MIN_PX,
-                Math.min((int) (viewport * LABEL_COLUMN_VIEWPORT_RATIO), LABEL_COLUMN_MAX_PX));
-        // T-LabelInset：列宽是**标签总宽**，而 Swing 只用「总宽 − 内边距」画文本（见
-        // paramLabelTextAvailPx）。需求宽度按「文本 + 该行内边距」取最大，否则最宽的标签恰好差
-        // 一个内边距、必然被 Swing 截成 `criteria.crit...`（真机 2026-11-12 截图 + headless 实证）。
-        int need = 0;
-        for (int i = 0; i < textWidths.size(); i++) {
-            int inset = i < insets.size() ? insets.get(i) : 0;
-            need = Math.max(need, textWidths.get(i) + inset);
-        }
-        return Math.max(LABEL_COLUMN_MIN_PX, Math.min(need, budget));
-    }
-
-    /** T-LabelInset：标签可绘文本宽度 = 列宽 − 该标签左右内边距（Swing 按此判定是否截尾）。 */
-    public static int paramLabelTextAvailPx(int columnWidth, int leftInset, int rightInset) {
-        return Math.max(columnWidth - leftInset - rightInset, 0);
-    }
-
-    /**
-     * T-LabelInset：左栏<b>无边框</b>标签的内边距替身（{@code JComponent.insets} 恒非 null，这里只为
-     * 免一处空判；数值与真实标签一致）。
-     */
-    public static final Insets EMPTY_INSETS = new Insets(0, 0, 0, 0);
-
-    /**
-     * T-LabelInset：<b>带左缩进</b>的行标签边框（foreach / iBatis iterate / {@code $} 直替三类行共用）——
-     * 预算侧 {@link #borderLeftInsetPx} 与绘制侧 {@link #columnLabel} 取同一族实例，数值不会漂。
-     */
-    @NotNull
-    public static Border indentedLabelBorder() {
-        return JBUI.Borders.empty(0, LABEL_LEFT_INDENT_PX, 0, 0);
-    }
-
-    /** T-LabelInset：取边框左内边距（JBEmptyBorder 忽略组件参数，传 null 安全）。 */
-    public static int borderLeftInsetPx(@NotNull Border border) {
-        return border.getBorderInsets(null).left;
-    }
-
-    /** T-LabelInset：带缩进行标签的左内边距（px，未缩放值；实际值按 JBUI 缩放由 {@link #indentedLabelBorder} 定）。 */
-    public static final int LABEL_LEFT_INDENT_PX = 8;
-
-    /** MBG Criterion 的四个 kind 分支后缀（D13c：快照恢复时据此判定「过期勾选」）。 */
-    public static final Set<String> KIND_BRANCH_SUFFIXES =
-            Set.of("noValue", "singleValue", "betweenValue", "listValue");
-
-    /** T-ParamNameTruncation：标签列宽预算常量（视口比例 / 硬上下限 / 未布局兜底视口 / tooltip 折行宽度）。 */
-    public static final double LABEL_COLUMN_VIEWPORT_RATIO = 0.55;
-    public static final int LABEL_COLUMN_MAX_PX = 480;
-    public static final int LABEL_COLUMN_MIN_PX = 80;
-    public static final int LABEL_COLUMN_FALLBACK_VIEWPORT_PX = 640;
-    public static final int LABEL_TOOLTIP_WRAP_CHARS = 64;
-
-    /** T-ParamNameTruncation：视口变化 → 重排的防抖窗口（拖分隔条时连续触发，按次重排会抖）。 */
-    public static final int LABEL_RELABEL_DEBOUNCE_MS = 120;
-
-    /**
-     * T-ParamNameTruncation：tooltip 文本——短名原样，超长名改用 {@code <html>} 软折行。
-     *
-     * <p>Swing 对<b>纯文本</b> tooltip 不做折行，单行超屏宽时会被裁掉（「悬停也看不全」的第二个成因面）；
-     * 断行优先落在 {@code .} / {@code _} / {@code )} 之后，{@code criteria.criteriaValue} 这类层级名折行后仍可读。</p>
-     */
-    @NotNull
-    public static String wrappedLabelTooltip(@NotNull String fullText) {
-        return wrappedLabelTooltip(fullText, LABEL_TOOLTIP_WRAP_CHARS);
-    }
-
-    /** Kotlin 默认参 {@code charsPerLine: Int = LABEL_TOOLTIP_WRAP_CHARS} 的等价全参形态。 */
-    @NotNull
-    public static String wrappedLabelTooltip(@NotNull String fullText, int charsPerLine) {
-        if (fullText.length() <= charsPerLine) return fullText;
-        StringBuilder sb = new StringBuilder("<html>");
-        List<String> lines = softWrapLines(fullText, charsPerLine);
-        for (int i = 0; i < lines.size(); i++) {
-            if (i > 0) sb.append("<br>");
-            sb.append(escapeTooltipHtml(lines.get(i)));
-        }
-        return sb.append("</html>").toString();
-    }
-
-    /** 软折行（纯函数）：每段 ≤ width，优先在层级分隔符后断，找不到就硬断。 */
-    @NotNull
-    private static List<String> softWrapLines(@NotNull String text, int width) {
-        List<String> lines = new ArrayList<>();
-        int start = 0;
-        while (start < text.length()) {
-            if (text.length() - start <= width) {
-                lines.add(text.substring(start));
-                break;
-            }
-            int end = start + width;
-            for (int i = end; i >= start + Math.max(width / 2, 1); i--) {
-                char ch = text.charAt(i - 1);
-                if (ch == '.' || ch == '_' || ch == ')') {
-                    end = i;
-                    break;
-                }
-            }
-            lines.add(text.substring(start, end));
-            start = end;
-        }
-        return lines;
-    }
-
-    @NotNull
-    private static String escapeTooltipHtml(@NotNull String text) {
-        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
-    }
-
-    /**
-     * T-ParamNameTruncation：视口尺寸变化后重排（防抖由调用方 {@link #scheduleParamLabelRelabel} 负责）。
-     * 只改已有标签的文本/首选尺寸/tooltip；不重建左栏、不碰参数值状态表与召回链。
-     */
-    public static void relabelParamLabels(@NotNull SqlPreviewPanel p) {
-        if (p.paramLabelRefs.isEmpty() && p.paramCheckRefs.isEmpty()) return;
-        FontMetrics metrics = p.getFontMetrics(UIUtil.getLabelFont());
-        List<Integer> textWidths = new ArrayList<>();
-        List<Integer> insets = new ArrayList<>();
-        for (ParamLabelRef ref : p.paramLabelRefs) {
-            textWidths.add(metrics.stringWidth(ref.fullText()));
-            // T-LabelInset：重排时边框已落地，直接读各行真实内边距（与构建期同口径）
-            Insets labelInsets = ref.label().getInsets();
-            insets.add(labelInsets != null ? labelInsets.left + labelInsets.right : 0);
-        }
-        int columnWidth = paramLabelColumnWidth(textWidths, p.paramScroll.getViewport().getWidth(), insets);
-        for (ParamLabelRef ref : p.paramLabelRefs) {
-            applyLabelColumn(p, ref.label(), ref.fullText(), columnWidth);
-        }
-        int boxBudget = checkBoxMaxWidth(p);
-        for (ParamCheckRef ref : p.paramCheckRefs) {
-            applyCheckBoxLabel(p, ref.box(), ref.fullText(),
-                    Math.max(boxBudget - ref.reservePx(), SqlPreviewPanel.MIN_CHECKBOX_TEXT_WIDTH),
-                    ref.fallbackTooltip());
-        }
-        p.paramPanel.revalidate();
-        p.paramPanel.repaint();
-    }
-
-    /** T-ParamNameTruncation：左栏视口变化 → 防抖登记一次重排（Alarm 随面板 Disposer 树释放）。 */
-    public static void scheduleParamLabelRelabel(@NotNull SqlPreviewPanel p) {
-        com.intellij.util.Alarm alarm = p.labelRelabelAlarm;
-        if (alarm == null) {
-            alarm = new com.intellij.util.Alarm(com.intellij.util.Alarm.ThreadToUse.SWING_THREAD, p);
-            p.labelRelabelAlarm = alarm;
-        }
-        alarm.cancelAllRequests();
-        alarm.addRequest(() -> relabelParamLabels(p), LABEL_RELABEL_DEBOUNCE_MS);
-    }
-
-    /**
-     * T-ParamNameTruncation：复选框标签截断态落定——被截断时 tooltip 换成全名（T-M26.3 既有口径），
-     * 未被截断时退回行内原有提示；构建期与视口变化重排共用。
-     */
-    public static void applyCheckBoxLabel(@NotNull SqlPreviewPanel p, JCheckBox box, String fullText,
-                                          int maxWidth, @Nullable String fallbackTooltip) {
-        String display = checkBoxText(p, fullText, maxWidth);
-        if (!display.equals(box.getText())) box.setText(display);
-        String tooltip = !display.equals(fullText) ? wrappedLabelTooltip(fullText) : fallbackTooltip;
-        if (!java.util.Objects.equals(tooltip, box.getToolTipText())) box.setToolTipText(tooltip);
-    }
-
-    /** T-ParamNameTruncation：复选框标签登记（全名 + 标注预留宽度 + 未截断时的原有提示）。 */
-    public static void registerCheckBoxLabel(@NotNull SqlPreviewPanel p, JCheckBox box, String fullText,
-                                             int reservePx, @Nullable String fallbackTooltip) {
-        p.paramCheckRefs.add(new ParamCheckRef(box, fullText, reservePx, fallbackTooltip));
-    }
-
-    /** T-ParamNameTruncation：左栏标签的截断态登记（视口变化后原地重排的依据）。 */
-    public record ParamLabelRef(JBLabel label, String fullText) {
-    }
-
-    /** T-ParamNameTruncation：左栏复选框的截断态登记（同上；reservePx = 行尾标注预留宽度）。 */
-    public record ParamCheckRef(JCheckBox box, String fullText, int reservePx, @Nullable String fallbackTooltip) {
+        int viewport = p.paramScroll.getViewport().getWidth();
+        int maxWidth = viewport <= 0 ? 260 : Math.max(80, Math.min(viewport - 128, 260));
+        int maxTextWidth = 0;
+        for (String t : texts) maxTextWidth = Math.max(maxTextWidth, metrics.stringWidth(t));
+        return Math.max(80, Math.min(maxTextWidth, maxWidth));
     }
 
     /**
@@ -2311,28 +1568,11 @@ public final class SqlPreviewPanelParamPanelKt {
             if (source.startsWith(SqlPreviewPanel.SNAPSHOT_CHK)) {
                 // T-PresetMethodBinding：跨 SQL 回落不恢复勾选态——条件 id 是按解析序递增的序号，
                 // SQL 增删条件后整体移位，套用旧快照会把勾选落到别的条件上（错位比丢失更难排查）。
-                // T-PreviewOpenPerfM2 P8：按「相对当时默认基线」的**差异**恢复。快照里的 SNAPSHOT_CHK
-                // 是全量勾选态，直接覆盖会把规则升级后的新默认（profile 抑制 / choose 组归并 /
-                // M2 真实 kind）整体冲掉；无基线键的旧快照（升级前保存）一律不应用。
                 if (recovered == null) {
                     String id = source.substring(SqlPreviewPanel.SNAPSHOT_CHK.length());
-                    String baseValue = history.get(SqlPreviewPanel.SNAPSHOT_CHK_BASE + id);
-                    // D13c：MBG 无元素注入时 kind 分支已收敛到 singleValue（D13b），快照不得再把它打开——
-                    // 否则旧方案里那次手动勾选会重放，面板上出现「勾着却永远轮不到」的 betweenValue。
-                    String lastSegment = id.contains(".") ? id.substring(id.lastIndexOf('.') + 1) : id;
-                    boolean kindBranch = KIND_BRANCH_SUFFIXES.contains(lastSegment);
-                    // 只在「无元素注入」这一档拦（D13b 的收敛口径）；有 M2 元素时 kind 由数据决定，
-                    // 用户显式勾过就照旧恢复。
-                    boolean noInjection = p.current == null || p.current.getXmlModel() == null
-                            || p.current.getXmlModel().getCollectionElements().isEmpty();
-                    boolean defaultKeepsIt = p.current != null && p.current.getXmlModel() != null
-                            && p.current.getXmlModel().defaultState().enabledIds().contains(id);
-                    boolean staleKindRestore = "1".equals(value) && kindBranch && noInjection && !defaultKeepsIt;
-                    if (baseValue != null && !staleKindRestore && ("1".equals(value) != "1".equals(baseValue))) {
-                        if ("1".equals(value)) p.enabledIds.add(id);
-                        else p.enabledIds.remove(id);
-                        stateRestored = true;
-                    }
+                    if ("1".equals(value)) p.enabledIds.add(id);
+                    else p.enabledIds.remove(id);
+                    stateRestored = true;
                 }
             } else if (source.startsWith(SqlPreviewPanel.SNAPSHOT_FNULL)) {
                 if (recovered == null) {
@@ -2344,22 +1584,16 @@ public final class SqlPreviewPanelParamPanelKt {
             } else if (source.startsWith(SqlPreviewPanel.SNAPSHOT_FEV)) {
                 if (recovered == null) {
                     String expr = source.substring(SqlPreviewPanel.SNAPSHOT_FEV.length());
-                    // D12：注入集合的值框已只读且不回显——历史里的旧值不再恢复（否则会显示成
-                    // 「框里有值但改不动」，反而更像 bug）。
-                    boolean injected = p.current != null && p.current.getXmlModel() != null
-                            && p.current.getXmlModel().getCollectionElements().containsKey(expr);
-                    if (!injected) {
-                        List<String> values = splitTrimmed(value);
-                        if (!values.isEmpty()) {
-                            p.xmlForEachValues.put(expr, values);
-                            for (Pair<String, JBTextField> pair : p.xmlForEachValueFields) {
-                                if (pair.getFirst().equals(expr)) {
-                                    pair.getSecond().setText(value);
-                                    break;
-                                }
+                    List<String> values = splitTrimmed(value);
+                    if (!values.isEmpty()) {
+                        p.xmlForEachValues.put(expr, values);
+                        for (Pair<String, JBTextField> pair : p.xmlForEachValueFields) {
+                            if (pair.getFirst().equals(expr)) {
+                                pair.getSecond().setText(value);
+                                break;
                             }
-                            stateRestored = true;
                         }
+                        stateRestored = true;
                     }
                 }
             } else {
@@ -2485,36 +1719,21 @@ public final class SqlPreviewPanelParamPanelKt {
     public static Map<String, String> buildHistorySnapshot(@NotNull SqlPreviewPanel p) {
         Map<String, String> snapshot = new LinkedHashMap<>(p.paramValues);
         Set<String> seenToggles = new HashSet<>();
-        // T-PreviewOpenPerfM2 P8：同时记录「当时的默认基线」（__chkbase__ 键）。
-        // - XML 链：= defaultState().enabledIds（规则升级后基线变化，召回只应用用户的改变）；
-        // - 其他链（Wrapper/JPA，无 defaultState）：基线全 "0" ⇒ 差异＝全部勾选项，召回等价于旧的
-        //   「全量还原」语义，行为不变。
-        Set<String> defaults = p.current != null && p.current.getXmlModel() != null
-                ? p.current.getXmlModel().defaultState().enabledIds() : Set.of();
         for (JCheckBox cb : toggleBoxes(p)) {
             Object id = cb.getClientProperty(SqlPreviewPanel.PROP_TOGGLE_ID);
             if (!(id instanceof String)) continue;
             String sid = (String) id;
             seenToggles.add(sid);
             snapshot.put(SqlPreviewPanel.SNAPSHOT_CHK + sid, p.enabledIds.contains(sid) ? "1" : "0");
-            // T-PreviewOpenPerfM2 P8：同时记录「当时的默认基线」（同 id 的 __chkbase__ 键）。
-            snapshot.put(SqlPreviewPanel.SNAPSHOT_CHK_BASE + sid, defaults.contains(sid) ? "1" : "0");
         }
         for (String it : p.enabledIds) {
-            if (!seenToggles.contains(it)) {
-                snapshot.put(SqlPreviewPanel.SNAPSHOT_CHK + it, "1");
-                snapshot.put(SqlPreviewPanel.SNAPSHOT_CHK_BASE + it, defaults.contains(it) ? "1" : "0");
-            }
+            if (!seenToggles.contains(it)) snapshot.put(SqlPreviewPanel.SNAPSHOT_CHK + it, "1");
         }
         for (String it : p.xmlForEachNulls) {
             snapshot.put(SqlPreviewPanel.SNAPSHOT_FNULL + it, "1");
         }
-        // D12：注入集合的值框只读且不回显，其权威值不该进出历史（存了也没人恢复，只会让快照里留下
-        // 与界面不一致的旧值）。
-        Set<String> injectedCollections = p.current != null && p.current.getXmlModel() != null
-                ? p.current.getXmlModel().getCollectionElements().keySet() : Set.of();
         for (Map.Entry<String, List<String>> e : p.xmlForEachValues.entrySet()) {
-            if (!e.getValue().isEmpty() && !injectedCollections.contains(e.getKey())) {
+            if (!e.getValue().isEmpty()) {
                 snapshot.put(SqlPreviewPanel.SNAPSHOT_FEV + e.getKey(), String.join(",", e.getValue()));
             }
         }

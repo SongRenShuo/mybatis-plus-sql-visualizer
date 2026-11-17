@@ -128,6 +128,12 @@ public final class DialectRegistry {
         return decision(project, sourceFile, sqlPsiFile, moduleKey, boundDataSourceDialect, null, null);
     }
 
+    /** Kotlin 默认参数等价重载：来源文件方言决策（T-NotifyTune 券 A 的 DialectGapTip 入口形态）。 */
+    public DialectDecisionEngine.Decision decision(com.intellij.openapi.project.Project project,
+                                                   com.intellij.openapi.vfs.VirtualFile sourceFile) {
+        return decision(project, sourceFile, null, null, null, null, null);
+    }
+
     /** T-DialectInferSmart / T-DialectInferFix 全参形态：决策出口统一包 {@link #withLowConfidenceEvidence}。 */
     public DialectDecisionEngine.Decision decision(com.intellij.openapi.project.Project project,
                                                    com.intellij.openapi.vfs.VirtualFile sourceFile,
