@@ -157,10 +157,12 @@ class SqlMapConfigAliasIndexTest : BasePlatformTestCase() {
             emptyList<String>(),
             SqlMapConfigAliasIndex.getConfigFilesByAlias(project, "Old").map { it.name },
         )
-        myFixture.addFileToProject(
-            "src/main/resources/sqlmap-config.xml",
-            sqlMapConfig("User" to "p.User", "Old" to "p.Old"),
-        )
+        // 内容更新走 setBinaryContent（WriteAction 内改真实文件，触发 VFS contentsChange）——
+        // addFileToProject 对已存在路径会抛 IOException（T-PerfSweep32 收口轮修正）
+        val configFile = SqlMapConfigAliasIndex.getAllConfigFiles(project).single()
+        com.intellij.openapi.application.WriteAction.runAndWait<Exception> {
+            configFile.setBinaryContent(sqlMapConfig("User" to "p.User", "Old" to "p.Old").toByteArray())
+        }
         // dependsOnFileContent=true：内容变更即增量重索引（失效全交平台）
         assertEquals(
             "config 保存后新增别名立即可查（v1 会话级缓存限制已退役）",

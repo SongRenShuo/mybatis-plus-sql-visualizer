@@ -102,6 +102,14 @@ class IbatisXmlToJavaLineMarkerProvider : LineMarkerProvider {
                 .getOrDefault(true)
         }
 
+        /**
+         * T-PerfSweep32 收口轮：键构造集中化（与 [IbatisJavaToXmlLineMarkerProvider.cacheKey]
+         * 同口径）——[resolvedIbatisCallKeys] 应用级、键带 `project.locationHash` 前缀
+         * （T-PerfSweep31 券04），测试断言必须与生产同源，不得再裸拼 `namespace|id`。
+         */
+        internal fun callKey(project: Project, namespace: String?, statementId: String): String =
+            "${project.locationHash}|${namespace.orEmpty()}|$statementId"
+
         internal fun resetCallKeysCacheForTest() {
             resolvedIbatisCallKeys.clear()
             IbatisJavaCallSites.lookupOverrideForTest = null
@@ -145,7 +153,7 @@ class IbatisXmlToJavaLineMarkerProvider : LineMarkerProvider {
         // 静态容器、项目关闭不清理，裸 `namespace|id` 作键会让两个工程对同一条语句互踩正负缓存
         // （A 工程确认过调用点，B 工程直接信 → Absent 也照样画箭头）。跨项目撞键面消除；
         // 会话内增长仍以语句数为上界。
-        val key = "${project.locationHash}|${namespace.orEmpty()}|$statementId"
+        val key = callKey(project, namespace, statementId)
         return when (val lookup = IbatisJavaCallSites.lookupCallSite(project, namespace, statementId)) {
             is IbatisJavaCallSites.CallLookup.Found -> {
                 resolvedIbatisCallKeys.add(key)

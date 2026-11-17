@@ -61,6 +61,7 @@ class IbatisTypeAliasResolverHotPathTest {
         return forbiddenTokens.filter { body.contains(it) }
     }
 
+    @Test
     fun test生产文件不得含模块全走查形态() {
         val source = File(findRepoRoot(), resolverPath).readText()
         val violations = violationsIn(resolverPath, source)
@@ -76,6 +77,7 @@ class IbatisTypeAliasResolverHotPathTest {
         )
     }
 
+    @Test
     fun test判定器自证_含禁用调用的合成样本必须被抓出() {
         val synthetic = """
             import com.intellij.openapi.vfs.VfsUtilCore
@@ -95,6 +97,7 @@ class IbatisTypeAliasResolverHotPathTest {
         )
     }
 
+    @Test
     fun test判定器自证_干净样本必须放行() {
         val clean = """
             import com.intellij.openapi.module.ModuleUtilCore

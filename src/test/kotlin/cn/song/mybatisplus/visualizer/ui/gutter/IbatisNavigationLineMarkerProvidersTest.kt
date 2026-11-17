@@ -427,12 +427,12 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         )
         assertTrue(
             "命中必须记入会话级缓存",
-            IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.contains("user|selectById"),
+            IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.contains(callKey("user", "selectById")),
         )
     }
 
     fun test箭头门槛_确定无调用点_摘箭头并收回缓存() {
-        IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.add("user|selectById")
+        IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.add(callKey("user", "selectById"))
         IbatisJavaCallSites.lookupOverrideForTest = { _, _, _ -> IbatisJavaCallSites.CallLookup.Absent }
         addDao()
         val sqlMap = addSqlMap()
@@ -442,12 +442,12 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         )
         assertFalse(
             "确定无调用点必须收回缓存，否则下一趟慢 pass 还会把箭头画回来",
-            IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.contains("user|selectById"),
+            IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.contains(callKey("user", "selectById")),
         )
     }
 
     fun test箭头门槛_判定未知_缓存命中仍出箭头() {
-        IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.add("user|selectById")
+        IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.add(callKey("user", "selectById"))
         IbatisJavaCallSites.lookupOverrideForTest = { _, _, _ -> IbatisJavaCallSites.CallLookup.Unknown }
         addDao()
         val sqlMap = addSqlMap()
@@ -457,7 +457,7 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         )
         assertTrue(
             "Unknown 不得动缓存",
-            IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.contains("user|selectById"),
+            IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.contains(callKey("user", "selectById")),
         )
     }
 
@@ -669,6 +669,14 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
      */
     private fun cacheKey(statementId: String, ownerNamespace: String? = null): String =
         IbatisJavaToXmlLineMarkerProvider.cacheKey(project, statementId, ownerNamespace)
+
+    /**
+     * 调用点缓存键测试构造（T-PerfSweep32 收口轮同步）：[IbatisXmlToJavaLineMarkerProvider]
+     * 的键同样带 `project.locationHash` 前缀，断言与生产 [IbatisXmlToJavaLineMarkerProvider.callKey]
+     * 同源——箭头门槛三态矩阵的入账/收回/命中断言不得再裸拼 `namespace|id`。
+     */
+    private fun callKey(namespace: String, statementId: String): String =
+        IbatisXmlToJavaLineMarkerProvider.callKey(project, namespace, statementId)
 
     fun testF1i_解析成功_入正缓存并产出两枚() {
         val dao = addDao()
