@@ -131,16 +131,16 @@ class McpSourceLocatorRenderAtLineTest : BasePlatformTestCase() {
         McpSourceLocator.renderAtLine(project, relPath, line)
 
     /**
-     * sqlMap 用 `addFileToProject` 进项目索引（namespace → 文件解析走 `FileTypeIndex`）；
-     * 磁盘 `writeMapper` 造的文件不保证进 **FileTypeIndex**（既有 mapper 用例只走「路径 → PSI」，
-     * 不查索引，所以没暴露）。Java DAO 仍写磁盘（`McpFilePathResolver` 按 basePath 解析绝对路径）。
+     * sqlMap 走磁盘 `writeMapper`（与同文件里已通过的 `testiBatis_sqlMap语句行走iBatis渲染` 同款：
+     * 平台扫描 basePath 磁盘文件建索引，稳定进入 SqlMapNamespaceIndex）。
+     * `addFileToProject` 落在 VFS 虚根 `/src/`、不在 basePath 磁盘目录下，长生命周期 CI JVM 里
+     * 自定义索引对它的可见性不稳定 → iBatis 调用行拿到空锚（SOURCE_NOT_FOUND）。
      */
     private fun addSqlMap(): com.intellij.psi.PsiFile {
         val file = myFixture.addFileToProject("sqlmap/User.xml", sqlMap)
-        // FileBasedIndex 在长生命周期 CI JVM 里对刚 addFileToProject 的文件异步建索引；
-        // 强制目标索引追平，避免 iBatis 调用行解析拿到空锚（SOURCE_NOT_FOUND）。
+        // 强制目标索引追平（长分片 CI 里索引可能还在异步建）
         FileBasedIndex.getInstance().ensureUpToDate(
-            SqlMapNamespaceIndex.NAME, project, GlobalSearchScope.allScope(project))
+            SqlMapNamespaceIndex.NAME, project, GlobalSearchScope.projectScope(project))
         return file
     }
 
@@ -163,7 +163,13 @@ class McpSourceLocatorRenderAtLineTest : BasePlatformTestCase() {
 
         // 调用行（`return client.queryForObject("User.selectById", id);`）
         val callOutcome = render("cn/demo/UserDaoImpl.java", 5)
-        assertNull("iBatis 调用行应命中: ${callOutcome.error}", callOutcome.error)
+        // CI 诊断：若仍 SOURCE_NOT_FOUND，把索引候选与 dumb 态打进断言消息，一轮定位真因
+        val diagFiles = SqlMapNamespaceIndex.getSqlMapFilesByStatementId(project, "selectById")
+        val diagAll = SqlMapNamespaceIndex.getAllSqlMapFiles(project)
+        assertNull(
+            "iBatis 调用行应命中: ${callOutcome.error}; [DIAG idxStmt=$diagFiles idxAll=$diagAll]",
+            callOutcome.error,
+        )
         assertEquals("iBatis (User.selectById)", callOutcome.sourceType)
         assertTrue("应渲染出 iBatis SQL: ${callOutcome.sql}", callOutcome.sql.orEmpty().contains("FROM T_USER"))
 
