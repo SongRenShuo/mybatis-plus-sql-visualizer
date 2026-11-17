@@ -21,6 +21,19 @@ import java.util.List;
  */
 public class XmlSqlCompletionContextResolverTest extends BasePlatformTestCase {
 
+    /**
+     * T-StartupReadLockFreeze §十九：候选实体现在是**项目级缓存**（按 `PsiModificationTracker` 失效）。
+     * Light 沙盒同一测试类共享一个 project 且测试间不改 PSI ⇒ 上一条用例的候选会漏进下一条
+     * （实测 `testNoNamespaceDegradesToNullMain` 因此变红）。每个用例前清缓存，保持用例隔离。
+     */
+    @Override
+    protected void setUp() throws Exception {
+        super.setUp();
+        XmlSqlCompletionContextResolver.clearCandidatesCacheForTest();
+        XmlSqlCompletionContextResolver.tableNameEntitiesProviderForTest = null;
+        XmlSqlCompletionContextResolver.resetEntityCacheForTest();
+    }
+
     // ------------------------------------------------------------------
     // fixture 工具
     // ------------------------------------------------------------------

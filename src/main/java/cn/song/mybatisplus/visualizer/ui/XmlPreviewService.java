@@ -43,6 +43,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -165,7 +166,14 @@ public final class XmlPreviewService {
             }
             parsedRef[0] = new ParsedRef(parsed.namespace(), statement.id(), statement.kind());
             List<String> warnings = new ArrayList<>();
-            Map<String, Object> staticValues = resolveStaticFields(fileText, project, warnings);
+            // T-BindStaticRefCrossNs：静态常量扫描域必须与渲染域一致。跨命名空间 include 的片段在
+            // 解析期被展开进语句树（T-IC-02），但片段文本在**另一个文件**里——只扫当前文件会把
+            // 片段内 `<bind value="@类@字段"/>` 漏出注入表（表现：同语句里本地 bind 正常、
+            // 片段内 bind 求值为空）。无跨命名空间引用时 fragments 为空表，本次扫描与改动前一致。
+            List<String> staticTexts = new ArrayList<>(1 + crossNamespace.fragments().size());
+            staticTexts.add(fileText);
+            staticTexts.addAll(crossNamespace.fragments().values());
+            Map<String, Object> staticValues = resolveStaticFields(staticTexts, project, warnings);
             // O-77 T-EwStatementScope：占位按语句域扫描（statement.rawText），他语句占位不再记账到本语句
             Map<String, Object> ewBindings = resolveEwPlaceholders(fileText, statement.rawText(), parsed.namespace(), statement.id(), project, warnings);
             // T-M29.5 / T-PT-01：mapper 方法参数类型 → 类型类别映射（引号由类别派生；
@@ -450,13 +458,19 @@ public final class XmlPreviewService {
     /**
      * 静态字段引用解析（T-M25.2）：扫描文本中的 `@类全名@字段名`（OGNL 静态访问），
      * 经 PSI 定位用户项目中的常量类与字段初始值。
+     *
+     * <p>T-BindStaticRefCrossNs：多文本入口——调用方必须把**所有会被渲染的文本**传进来
+     * （当前 mapper 文件 + 跨命名空间 include 片段），保证扫描域与渲染域一致；
+     * 引用按 `类@字段` 跨文本去重，同一个常量只解析一次。</p>
      */
-    public Map<String, Object> resolveStaticFields(String fileText, Project project, List<String> warnings) {
+    public Map<String, Object> resolveStaticFields(Collection<String> texts, Project project, List<String> warnings) {
         if (project == null) return java.util.Collections.emptyMap();
         Set<String> refs = new java.util.LinkedHashSet<>();
-        Matcher m = STATIC_REF_REGEX.matcher(fileText);
-        while (m.find()) {
-            refs.add(m.group(1) + "@" + m.group(2));
+        for (String text : texts) {
+            Matcher m = STATIC_REF_REGEX.matcher(text);
+            while (m.find()) {
+                refs.add(m.group(1) + "@" + m.group(2));
+            }
         }
         if (refs.isEmpty()) return java.util.Collections.emptyMap();
         Map<String, Object> result = new HashMap<>();
@@ -472,6 +486,11 @@ public final class XmlPreviewService {
             }
         }
         return result;
+    }
+
+    /** 单文本入口（注解 `<script>` 链等只有一段文本的调用方）。 */
+    public Map<String, Object> resolveStaticFields(String fileText, Project project, List<String> warnings) {
+        return resolveStaticFields(java.util.List.of(fileText), project, warnings);
     }
 
     /** 单字段求值：findClass → findFieldByName → 字段初始值常量求值。 */
