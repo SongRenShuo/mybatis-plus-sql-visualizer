@@ -4,6 +4,215 @@
 
 ## [Unreleased]
 
+## [2026.11.16] - 2026-11-16
+
+> 范围＝`v2026.11.14` 正式版之后全部用户可见增量，含 11-15 内测 `2026.11.15-beta.1` 与 11-16 同日两轮内测 `2026.11.16-beta.1` / `2026.11.16-beta.2`（今早曾以 `2026.11.16` 发正式版，因随后补入一批修复已撤回三端 tag/发行版，本版一次性纳入全部增量）。本节按能力面合并并取代三个内测段；逐条根因与读数见 `docs/发行说明/` 的 `20261115-0819`、`20261116-1324`、`20261116-1448` 内测说明与本篇正式版说明。
+
+### Fixed
+- **mapper 补全的跨文件片段名与 config 变量名不再每次按键重扫全项目 XML（T-IndexScanSweep2 P1，`b77180ee6`）**：`<include refid="…"/>` 的跨文件片段候选与 `${…}` / `<if test>` 里来自 mybatis-config `<properties>` 的变量名，原本每次补全都把最多 500 个 XML 逐个解析拼清单（工程越大越慢、清单却几乎不变）。现在改由项目级服务一次构建、按 IDE 索引状态失效（新增/删除/保存 mapper 或配置即生效，无 5 秒窗口），大工程连续补全只首次建一次清单。Registry `sqlvis.completion.nameIndexCache=false` 可回到旧行为（回退通道下一版删除）
+- **Mapper 跳转图标改走自定义索引（T-GutterFirstOpenDelay F1'''，`7dc6c1c73`）**：大工程里「跳到 XML 语句」的图标原本每次全项目扫清单，慢且长期缺席；现在 namespace 在 IDE 索引期摊平成键，运行时一次查询毫秒级出答案，热更新免重启不受影响
+- **冷打开时跳转图标不再闪没（F1 `d3eb65079` / F1' `6bc12e9c8`）**：索引未就绪时的瞬时解析失败不再被当成「真没有」，XML→Java 与 Java→XML 都加会话级正缓存 + dumb 乐观产出，本会话确认过存在的语句不再闪没或长期缺席
+- **Mapper 图标在目标删除或改名后消失（T-MapperGutterEvict，`c0bc9b043`）**：接口方法删掉或 `<mapper namespace>` 改名后立即摘图标并清记忆；「暂时查不了」与「确定没有」分开判断，iBatis 侧 `8eca5211f` 同族收口
+- **iBatis DAO 调用行图标索引化、不再慢半拍或无故消失（T-IbatisGutterPerf，`b5ccf14c7` / `bcad37b84`）**：sqlMap 的 namespace 与语句 id 改走自定义索引，一次查询即出、不再有 5 秒空窗；中途被打断也不再摘掉已显示的图标。只认 `<sqlMap>` 根标签，其它 ORM 不受影响
+- **iBatis XML 箭头不跨命名空间认领同名语句、无调用点不出（T-IbatisXmlArrowCallerGate，`e4b3fdd27` / `2eecbdcba`）**：只认裸 `id` 或「本文件 `namespace.` + `id`」两种形态，改名或删掉调用代码后箭头随之消失；Registry `sqlvis.gutter.ibatisXmlArrowRequiresCaller=false` 可恢复旧行为
+- **打开 mapper 的预热延后、不再刷读权限报错（F2 `7ad1d1a5d` / `e4b3fdd27`）**：三件预热（调用点预取 / 补全上下文 / 预览装配）推迟到工程就绪后数秒再做，`sqlvis.gutter.warmDelayMs` 可调；到点执行改在正确读权限内完成，不再往日志刷 SEVERE
+- **跨命名空间公共片段改了立刻生效（T-MechanismSweep，`501db7d89`）**：`<include refid="其它命名空间.片段名"/>` 与带命名空间的引用改按 namespace 查 IDE 索引，不再有「5 秒旧值」、不随项目 XML 数量变慢；删掉了 iBatis 定位里内部 A/B 用的全项目扫描回退开关
+- **跨文件片段里的 bind 静态常量能认出（T-BindStaticRefCrossNs，`ad1deacb0`）**：被 include 进来的片段里的 `@常量@` 此前一律求值为空，现覆盖这类片段；常量声明在父类或接口上时也支持按 `@子类@常量` 解析
+- **SQL 日志工具窗首次打开少一条无害告警（T-DebugLogNoise，`c79026ea9`）**：排序按钮工具栏在显示前被手动刷新发出的 `toolbar manual update is ignored` 告警已去掉，按钮外观与提示不变
+
+## [2026.11.14] - 2026-11-14
+
+> 范围＝`2026.11.12` 正式版之后的全部用户可见增量，含内测 `2026.11.13-beta.1` / `2026.11.13-beta.2` / `2026.11.14-beta.1` 三轮，以及发行提交前的本地安装包目录持久化修复（`59a9d1baa`）。本节按能力面归并并取代三个内测段；逐条记录（根因、读数、反向验证）见 `docs/发行说明/` 的三篇内测说明（`20261113-1210` / `20261113-1704` / `20261114-0957`）与本篇正式版说明。
+
+### Added
+- **预览面板给出「类型依据」与「预览目标」切换（T-PreviewStmtTypeScope，1b3af3ec5）**：语句类型（UPDATE/DELETE/COUNT/EXISTS）是怎么判出来的直接写在 meta 行——「类型依据: `remove()` 消费（第 235 行）」；同一 wrapper 上有多种消费写法时（真实工程常见：同一个变量先 `update(entity, w)`、重新赋值后再 `delete(w)`），工具栏出现「语句: UPDATE」切换入口，列出全部档位（带方法名与行号）按需切换，悬停也列出全部候选。查询链被判成 UPDATE 这类困惑不必再翻源码猜，也不必因为一个变量被复用就只看到一种语句
+- **方言推断走到死路时会主动说一声（T-NotifyTune 券 A）**：智能推断既没有数据源、项目配置、依赖坐标也没有语法特征可依时，预览其实一直在按 MySQL 兜底渲染，但用户不开预览或设置就看不到——预览面板的状态行和设置页的推断结果都太被动。现在打开含 SQL 的文件（Wrapper 链、注解 SQL、JPA `@Query`、JdbcTemplate、iBatis `sqlMap`、mapper XML、hbm 都算）时在后台判一次，只有真死路（`UNAVAILABLE` 且无方言名）才弹一条提示，说清「按 MySQL 兜底、遇 Oracle/PostgreSQL/SQL Server 会有差异」，并给两个动作：**去设置方言**直接打开插件设置并滚动高亮到方言行，**本项目不再提示**永久静默。标题不写 MyBatis——插件支持面不止它。开关默认开，每台机器至多一条，歧义/冲突不弹（面板里已有处理）
+- **本地安装包目录重启后不再丢失（T-LocalDirPersist，`59a9d1baa`）**：选好或填好目录立即保存——原来只有点「确定」才落盘，而选目录→检测→安装的流程不会经过确定，导致每次重启都要重填；删空目录同样被记住（等于关闭该功能），路径不合法时不保存并在状态行说明原因
+- **开封即用：打开 mapper XML 时在后台预热一次预览装配（T-PreviewAssemblyWarm）**：本会话第一次打开预览要等约 700ms（其中装配那 351ms 含着首次类加载与 JIT），之后每次只要 55~75ms。现在打开 mapper XML 时就在后台把装配算一遍——**只算不建界面**，结果丢弃，把冷启动成本挪到用户点击之前。**每文件只预热一次、每项目至多 2 个文件**（一个 mapper 常有十几条语句，按语句去重会一次预热十几遍）；可在 Registry 里关掉（`sqlvis.preview.assemblyWarm`，默认开），关掉即回到点击时才装配
+- **补全插入形态跟随输入大小写风格（`c5646b239`）**：大写 SQL 就提大写（`DEL_FLAG`），小写 SQL 就提小写（`del_flag`），混合或空前缀按实体原形态；其余别名注册为候选的可查找串，敲哪种都能搜到
+- **补全触发可见化 + 打开文件时后台预热补全上下文（`acf503f83`）**：补全为什么没弹/弹了什么有了日志可查；打开 mapper XML 时就在后台把表/列上下文备好，首次敲补全不再从零解析
+
+### Fixed
+- **消掉数据源切换按钮每次刷新打的 2 条平台告警（`be43c4bf6`）**：预览控制台顶部的数据源按钮（显示当前数据源名那个）内部镜像界面状态时，用了平台点名的反模式写法，IDE 日志里每次刷新都会记 2 条带堆栈的 WARN（一个会话能攒几十条）。改走平台自家的批量复制通道后告警消失，按钮显示不受影响
+- **打开预览时不再顺带把工程打进重索引（也不再多一条「EDT 上慢操作」告警）**：预览打开时会写一份带方言映射的临时 SQL 文件并把控制台准备好；而给这份频繁重写的文件设方言映射，会让 IDE 在每次写入后重算「语言替换」并推文件属性——实测整个工程短暂进入索引态、补全也随之短暂失灵。现在预览打开只显示 SQL，**执行控制台在你第一次执行（或切换数据源）时才准备**；想恢复「打开即准备控制台」的旧行为，可在 Registry 里把 `sqlvis.preview.eagerConsole` 置 true
+- **方言映射不再每轮重写**：预览用的 SQL 文件需要设方言映射，探测拿不到结果时旧逻辑会每轮重写一次，而平台的方言推送会让整个工程重算文件属性（实测会让 IDE 短暂进入索引态）。现在写入成功会记一条本地备忘，探测不可用时凭它跳过；探测可用时仍以 IDE 自己的配置为准（你手动改过映射我们不会拦）
+- **启动期反查索引被重复建了 7 次（只 1 次建成）**：启动阶段工程结构版本抖动会换掉缓存条目，已完成的扫描结果被「条目已换」直接丢弃、随即在新条目上重扫（实测同秒 7 次「候选源=注解索引」、只 1 次建成）。现在结果落到**当前**条目；跨 ORM 回补的全项目扫描也改按结构版本缓存（不再每个 5 分钟 TTL 重扫一遍）
+- **表名反查按 ORM 分源，JPA 工程同样适用**：上一版把反查的候选源收窄到 `@TableName` 后，JPA 实体（`@Table(name=…)`，`javax` 与 `jakarta` 两代都认）会整片漏掉。现在按 ORM 分源查注解索引；注解索引没命中时再退回一次「全项目推断」，覆盖 MBG / iBatis / Kotlin / 自定义映射这些没有表名注解的工程
+- **后台索引扫描的 CPU 从「全项目类」降到「带 `@TableName` 的实体」（`ee8c69e9a`）**：这条扫描（4.7~9.7 秒一趟）此前要遍历工程内所有类并逐个推断表名，其中绝大多数不是实体——现在直接走 IDEA 自带的注解索引只取带注解的类（实测 16804 类 → 812 类，稳态重建 4737ms → **187ms**）；一个注解都没有的工程（JPA/原生 MyBatis）自动退回原口径，能力不变
+- **联表候选的取数不再压在打开预览与补全上（`ee8c69e9a`）**：冷态首次要 374ms（只解析出 1 个候选），现在命中缓存直接用、未命中就后台预热，本次先给主表兜底，预热落地后自动回填（实测点击链 0~2ms）
+- **补全不再被后台索引建立拖住**：反查索引改到后台线程后，EDT 上的补全路径**只派发不等待**（原来最多会等满 800ms）；扫描在平台要写权限时会被撤销、撤销后 10 秒冷却，避免连续输入把一次扫描打成反复重试白烧 CPU
+- **改了实体上的注解或字段，预览与补全最多一分钟内还是旧的（`ad292a169`）**：实体解析结果按「类名 + 时间窗」缓存，命中条件写成「60 秒内一律命中」，于是内容变了也照旧复用——改了 `@TableName` 或字段后，预览的表名与列名候选会继续用旧值。现在改按**类正文指纹**判据：内容没变就复用（PSI 重建不再导致反复重算），真改了立刻生效
+- **打开预览面板仍然慢（T-StartupReadLockFreeze §二十二，`c96759946` + `e99750f53`）**：真机日志里 `resolve=` 段反复出现 3.7~4.0 秒——「SQL 表名 → 实体类」的反查原本查一个表名就把工程内所有类扫一遍，而这份缓存挂在 PSI 版本上，预览自己写执行文件、建临时文档就会把它顶掉，于是**每次打开都在重扫**（16804 个类的工程一趟 3.8 秒）。现在改成一次扫描建「表名 → 类」全表索引（任意表名都是 O(1) 命中），失效基准换成项目结构版本 + 5 分钟 TTL：打字与我方写入不再作废它。第二轮实测发现这一趟扫描本身要 **4.7~9.7 秒**且跑在点击线程上，遂把建索引挪到后台线程、点击至多有界等 800ms（等不到就本次降级、下次命中）
+- **热更新后设置页点「确定」没反应（T-HotUpdateSettingsGuard，`29e872abe`）**：本地安装包动态更新（免重启装）之后，设置页保存会静默失败，只能完全退出 IDE 才恢复。现在更新前一刻自动关掉正开着的设置窗口（只关设置窗口，不碰预览面板等可能有未保存内容的对话框），并弹一条提示说明更新已生效、若「确定」无反应请重启 IDE——气泡里带重启入口
+- **`@TableName` 注解索引兜底恒空（`47634d4c5`）**：该兜底反查把**全限定名**传给了注解索引，而这个索引的键是**注解简单名**（243 字节码实证：建键时把 `(` 之后整段截断，属性名/属性值都不进索引），所以它从未命中过——恰恰是「工程没接 MP 依赖、注解类解析不到」时最需要它的场景。改传简单名并按注解原文筛同名，不额外触发 resolve
+- **退出 IDE 时日志里报插件内存泄漏（`a02ad51cf`）**：预览面板的编辑器与补全监听只在「组件移除」那条路径上释放，IDE 直接退出时那条路径不必然到达，于是平台在关闭时按 `Memory leak detected … Plugin to blame: SQL Visualizer` 记账四条（预览编辑器、它的光标与视图子件、补全监听）。现在面板销毁时兜底释放这二者（幂等，与既有路径不冲突），退出不再刷这几条
+- **敲 `DEL_F` 补不出 `DEL_FLAG`（`3813d832c`）**：实体列名是驼峰（`delFlag`）而 SQL 里写大写蛇形时，前缀匹配命中不了，列名候选整段为空。现在列名候选同时收录原名 / snake / UPPER_SNAKE 三种形态，任一形态命中即给出
+- **补全上下文解析加缓存与计数埋点（`d29bec9d5`）**：实体解析结果按「类名 + 文件版本」缓存（解析不再每敲一次来一遍），并给补全链加计数埋点，慢在哪儿有读数可看
+- **MBG 查询的列名补全给出 `xxx_example` 假列（T-StartupReadLockFreeze §二十五，`7a0d2a101`）**：`selectByExample(XxxExample)` 的实参是查询条件对象，却被当成实体、表名推成 `cust_channel_example`，列只剩 Example 自身的 3 个字段。现在参数名以 Example 结尾时按 MBG 约定回查同包实体 `Xxx`，查不到则跳过（宁可 `main=null` 也不给假列）
+- **mapper 接口与泛型都解析不到时列名补全整片为空（T-StartupReadLockFreeze §二十六，`866c6e651`）**：新增兜底——从语句文本取 FROM/JOIN 表名反查实体再取列，只在前两条主实体链路都失败时生效，不改变既有优先级
+- **大工程里带 `Example_Where_Clause` 的预览打开慢（T-StartupReadLockFreeze §14.8，`bccc3fd8e`）**：条件反推改到后台——首次打开立即出占位骨架，检索落地后自动刷新补上真实条件；不再同步等待一次动辄数秒的调用点检索（真机冷态 2.4s，超大工程 30s 级）
+- **首次打开预览还要等补全上下文解析（T-StartupReadLockFreeze §十九，`bccc3fd8e`）**：表/列候选原本会把工程内所有 `@TableName` 实体解析一遍再截断（2500 表工程 6~10 秒、且无缓存）；现在按上限边解析边停、项目级缓存按 PSI 版本失效、单次解析 400ms 预算
+- **大工程打开即卡死 / 预览白屏（T-StartupReadLockFreeze，39d4b2706 / 9f712eb78）**：左侧预览图标的调用点预取不再占读锁跑索引检索（改智能模式后台任务，索引期不抢锁、有预算与熔断），预览解析单次上限 800ms 超时退占位骨架；执行链的文档写不再在被调用方活动里就地升级写锁。新增 Registry 开关 `sqlvis.mbg.prefetch`（默认开，只关预取、预览照常）
+- **预览换源记忆不再写坏工程文件（T-LastUsedEdt，e08280a00）**：数据源回调在后台线程写 `.idea/workspace.xml` 的 last-used 条目，与平台保存竞争后值丢引号、每次启动报 JsonDecodingException；写入统一归位 EDT
+- **已写坏的工程文件会自动修好（T-WorkspaceHeal）**：升级后第一次打开工程时自动把被旧版本写坏的那条记录补回，并备份原文件；本次启动可能仍有那条报错，重启 IDE 后不再出现
+- **关预览面板时刷一条平台 Keymap 告警（T-CommentShortcutKeymap，3ce4b7c54）**：预览编辑器接管行注释（`Ctrl+/` 改插 `--`）用的是 `ActionManager.replaceAction`，而平台每次注册动作都会回填 `ProxyShortcutSet`，于是 `AnAction.setShortcutSet` 对「全局动作在 KeymapManager 之外被改快捷键」打 WARN——真机日志每关一次面板刷一条。现在换入/换回前先把动作的快捷键集合置为 `CustomShortcutSet.EMPTY`（平台唯一豁免条件，经**公共** `registerCustomShortcutSet` 而非 Internal 的 `setShortcutSet`——后者会被 `verifyPlugin` 判 INTERNAL_API_USAGES），键位仍由 keymap 惰性解析，告警消失、`Ctrl+/` 行为不变。同一处修复也覆盖控制台「选择数据源」动作组的接管（两处都在换全局动作，e00e779b5）
+- **实体更新的 SET 参数被一个输入框填满（T-PreviewStmtTypeScope，90e494b33）**：`update(entity, wrapper)` 预览里 SET 各列的占位符此前共用一个来源（`?`），左栏只剩一行 `#?`——填一个值（比如 1）就把 `order_no / user_id / amount / status / create_time` 全填成 1。现在每列各有来源（`patch.order_no` …），一行一列，填哪个改哪个
+- **重新赋值那一行点预览，条件与消费全丢成无 WHERE 的 SELECT（T-PreviewStmtTypeScope，3731e2eed）**：`w = new LambdaQueryWrapper<>();` 这种「重新赋值」行上的预览图标挂在赋值表达式右侧的 `new` 上，此前只收该赋值表达式内部的链，后续另起语句的 `w.eq(...)` 与 `delete(w)` 全被丢掉。现在赋值锚点按**目标变量**走变量链，且重新赋值即分段——锚点在哪一段就只收那一段的条件（赋值前是声明段的 `user_id / status`，赋值后是 `order_no / user_id`），DELETE 不再串进上一段的 `status`
+- **同一个 wrapper 被多处消费时，预览语句类型与正在看的语句脱钩（T-PreviewStmtTypeScope，1b3af3ec5）**：判型此前只要该变量在**任意位置**被写调用消费过就改判（`mapper.update(entity, w)` / `delete(w)` 可能写在另一条语句上），于是查询链的预览出 UPDATE/DELETE。现在判型依据按锚点位置单选：优先锚点所在语句内的消费，其次锚点之后最近的一次；「声明与消费分离」（`w = new …; service.remove(w);`）照旧判 DELETE
+- **JDK 容器上的同名调用会把查询链改判成删除（T-PreviewStmtTypeScope，1b3af3ec5）**：`list.remove(wrapper)` / `map.remove(k, wrapper)` 这类调用此前按方法名就改判 DELETE；现在叠加接收者负门——接收者类型（含父链）落在 JDK 容器/常见非 DB 类型集合内即不算 SQL 消费。取负门而非「正向要求 MP CRUD 家族」是有意的：正向判定会否掉未接依赖的自有 Service 桩与自有 Component 中间层
+- **预览 insert 的列名提示不再和 IDEA 自带的重复（T-PreviewInlayNativeYield，5f054e4c8）**：IDEA Ultimate 自带的「SQL 列名」inlay（`INSERT … VALUES` 一项默认开启）与预览面板的 INSERT 目标列提示做的是同一件事，同一条 `VALUES` 的每个值前面会出现两枚同名胶囊（`CUST_NO CUST_NO '1'`）。现在检测到原生那侧在位就让位，只留原生的一枚；没装 DatabaseTools、Community 版、或检测不到时本插件照旧提示。在 IDEA 设置里关掉该提示时本插件也不补回来——关掉的就是这个提示
+
+### Changed
+- **首次捕获引导不再每次启动 IDE 都弹（T-NotifyTune 券 B）**：那条「已捕获到第一条 SQL」的提示原来只是「每个 IDE 进程一次」——重启 IDE 或反复拉沙盒就会再出现，用户体感为高频。现在改成每台机器一次（持久化记忆），并且三个场景直接跳过：日志窗本来就开着、这次捕获刚把日志窗自动展开、开关被关掉。设置页「界面与操作」新增「首次捕获 SQL 时显示一次性提示」开关，默认开；「SQL 方言无法确定时显示一次性提示」也同区可见——两条一次性提示都能单独关掉
+
+## [2026.11.12] - 2026-11-12
+
+> 范围＝`v2026.11.11` 正式版发行包之后的全部用户可见增量，含内测 `2026.11.12-beta.1` ~ `beta.4` 四轮，以及同日撤回的旧 `2026.11.12` 正式版所覆盖的内容。本节按能力面合并叙述并取代四轮内测段与 `[Unreleased]`；逐条记录（根因、读数、反向验证）见 `docs/发行说明/`：`20261111-1102` beta.1、`20261111-1445` beta.2、`20261112-1512` beta.3、`20261112-1614` beta.4。
+
+### Added
+- **MBG Example 预览按调用点还原条件（T-MbgExamplePreview、T-PreviewOpenPerfM2 D1/D4/D5/D6/D7）**：从 mapper 方法的调用点找到 example 变量，在同一方法体里逐个解析 `and*` / `or*` 调用、读 `addCriterion` 的常量，`${criterion.condition}` 从占位符变成真实列名与操作符；`ReferencesSearch.findFirst()` 在真实大工程恒返回空（同一方法 253 处引用），改为「首个命中即止」的遍历（D1），命中落在实现声明处或方法引用上时跳过继续找真正的调用点（D6）；同一方法里先后两次查询只收与实参同一个 Example 的条件（D4），`example.or()` 另开的条件按 Criteria 分组并以 `or` 连接、内层集合不再被全局集合遮蔽（D7），一批条件混 kind 时区间条件按自己的类型渲染、不再丢第二个占位（D5）；产物骨架同时修掉三处失真：求值为空的 `${}` 写成 `{{表达式}}` 占位、foreach 两轮迭代只在「不补就拼成一个词」时补空格（`IN (?,?)` 保持紧凑）、`choose` 同组只默认启用含 `#{}` 的分支（`6fb76205` / `2d8798a9` / `6212f24e0` / `85e09cab9` / `bdc1f89ab` / `b12ccf8cc` / `875c942f8` / `ab9a8c308`）
+- **预览左栏可填也可解释（T-PreviewOpenPerfM2 D9~D14、T-LabelInset、T-ParamNameTruncation）**：MBG 注入后语句占位符只剩 `__frch_criterion_N.*`，左栏按条件文本生成可填行（`staff_login LIKE 值`、`create_time between 值/结束值`），行名按首次出现顺序与条件对齐、区间分「起始值 / 结束值」；点「清除」显式回收展开项键，不再残留 `BETWEEN '11' AND ?`；条件对象容器（`oredCriteria` / `criteria.criteria`）的值框一律只读并说明去哪里填，已还原元素对象的集合不回显历史值、改为占位「已还原 N 项」；分支没走到的值框给灰字「本轮未展开」；没有调用点的删除/更新骨架统一收敛到 `singleValue`，固定为 `WHERE ( {{criterion.condition}} ? )`；标签列宽按「每行文本 + 该行内边距」取最大、长参数名标签随左栏视口宽度自适应，不再被 Swing 截成 `criteria.crit…`（`c33f9542c` / `0d52f8e1d` / `405aee737` / `1a327d5f8` / `f3e4f2fca` / `89c74c663` / `e9b140fb1` / `2096fa2f5`）
+- **iBatis 两笔（T-IbatisCallPreview、T-IbatisParamClassQuote）**：`client.queryForList("User.selectAll")` 这类 `SqlMapExecutor` 调用行在跳转箭头旁新增预览图标，点开直接渲染对应 `<sqlMap>` 语句（`#name#`、动态条件、`<iterate>`、`<selectKey>`），`Alt+Shift+Q` 在调用行与方法定义行同样可用，MCP `sqlv_render_sql` 同步支持；裸 `#name#` 参数改为按 `parameterClass` 字段类型决定引号，`WHERE USER_NAME = #username#` 填纯数字不再丢引号，占位符自带 jdbcType 时仍以 jdbcType 为准（`8ad491b8` / `cb4ec1ed3` / `5a2e0419d`）
+- **关于页新增本地安装包目录（T-LocalUpdateDir）**：指向一个存放插件 zip 的文件夹（内网共享盘可用），插件自动识别最高版本并可直接安装、新版 IDE 免重启生效；只认本插件的包（包内 id 匹配、不夹带其他插件、IDE 构建号不匹配拒绝安装），目录不存在 / 不可读 / 路径不合法在状态行逐条给原因；「打开」改用系统文件管理器 API 打开路径（原来走浏览器打开目录地址，失败无声），选完目录立即刷新状态行（`f0c7c30d5` / `202c5dfcb`）
+- **数据源列表末尾新增「添加数据源…」（T-DsListAddSource）**：预览面板两处数据源列表（内嵌控制台的数据源下拉、「更多 → 切换数据源」）末尾可直接打开 IDE 原生新建数据源对话框，建好后自动切到新源；列表里那个名字解析失败漏出的「unknown」死项已移除，不再点了报「数据源 Unknown 不存在」（`c728c8058`）
+- **OceanBase 的 EXPLAIN 计划树给出索引建议（T-OBExplainFormat）**：与 MySQL 同口径（`9219ca61`）
+
+### Fixed
+- **多字符运算符被格式化拆成两半，预览 / 复制 / 执行的 SQL 直接失真（T-SqlOperatorFidelity）**：词法器原本只合并 `!=` `<>` `<=` `>=` 四个双字符运算符，`||` 被切成两个 `|`，格式化器的「运算符两侧空格」规则再把它们拼开；预览编辑器文本同时是复制、分享、直接执行的输入源，且「格式化输出」默认开启，所以这是默认就命中的产物级失真（PG 系真库直接报 `operator does not exist`）。现在运算符按最长匹配整体分词，`||` `::` `<=>` `->` `->>` `&&` `<<` `>>` `:=` `@>` `<@` `!~` `~*` `=>` 一次修好普通 / 关键字换行 / 竖向排列三条格式化路径；`#>` `#>>` 与 `?|` `?&` 因与 iBatis `#x#` 闭合界和 `?` 占位符记账冲突保持原样（`17eabc420`）
+- **执行失败不再只剩红字，落点与成因可诊断（T-ExecPsiGate F3~F6、R4~R7、13.9~13.12）**：反编译 2026.3 平台确认闸门 `shouldCreatePsi()` 问的是父目录，归因改为取文件与父目录的并集；成因随失败文案本身传递（尾部 ` [hint=XXX]`，UI 渲染前剥掉、日志与「复制错误信息」保留），不再被预热链清空或并发覆盖；目录能否建 PSI 的判定改为每次现探，改了排除或忽略设置后下一次打开立即生效；失败行给原因说明 + 蓝色「改用项目根落点重试」+ 蓝色「打开文件类型设置」，面板五处执行回调统一走同一条提示。按用户定案落点不自动改写（`.idea` 仍是默认，失败要人点），也不引导改 `.gitignore`（`a34aef25` / `43845bb7` / `cef8545e` / `c46d5907` / `23457844` / `908623ed` / `61205cf2` / `1a5ce405` / `7ab0d5335`）
+- **首次打开预览不再干等（T-PreviewOpenPerfM2 M11、T-SchemaPrewarmDedupe）**：gutter 渲染时对 `select` 且 `parameterType` 以 Example 结尾的语句后台预取一次条件解析（失败记忆、单条在途两道护栏），真机首次点开 `m2=1ms`、装配 104ms，同语句再点 30ms；预热链加 60 秒去重窗口，同一张表窗口内只尝试一次、窗口外放行以保留「数据源晚连接后自愈」，不再每次打开都重扫 15 个数据源（`34488db41` / `773421955` / `20cc719dd`）
+- **横幅与提示跟着本轮产物走（T-PreviewBannerLiveRefresh、T-FullTableWriteRisk、T-ForEachInert）**：XML 重渲染分支补 `updateMeta`，改完勾选横幅立即按本轮产物重算、恢复即隐藏；新增 `fullTableWriteRisk` 纯函数与 `WRITE_RISK` 横幅类别，产物变成无 WHERE 的全表删除 / 更新时顶部直接警示（判据取未回填产物，字面量与注释先挖空，参数值里出现 `where` 不污染判据）；分支没走到的 foreach 值框给「本轮未展开」灰字说明（`e9b140fb1`）
+- **2026.3 上打开数据源列表刷一条插件错误（T-PreviewOpenPerfM2 D8）**：菜单更新路径的可用性判定会走 `ActionGroup.getChildren(null)` 展开原生驱动组，2026.3 把这种手写展开记为插件错误；现在可用性判定只做类可达判断，真正点击时才用带真实事件的重载取子项，日志里不再出现 `getChildren(null)` 告警（`ab9a8c308`）
+- **其余同批修复**：MCP 工具页「点击前往」在 2026.3 上改用「类名候选链 → 页面 id 打开 → 都失败才提示」寻址（`3106e4c6`）；复制可执行 SQL 时产物头部加一条带计数的注释，说明哪些是待替换的 `{{…}}` 占位，分享面板一并接上（`2e553316`）；控制台 MyBatis 与 Hibernate 日志补齐静默冲刷，会话结束前的最后几条 SQL 不再等下一次执行（`48b6f04f`）
+
+## [2026.11.11] - 2026-11-11
+
+> 范围＝`v2026.11.10` 正式版发行包之后的全部用户可见增量（含内测 `v2026.11.11-beta.1` / `beta.2` 两轮、转正前两笔收口修复与转正后同版补入的 iBatis 全选/清除修复）：**捕获静默路径可见化**、**「整类 SQL 消失」根治**、**Mac/UOS 执行链 PSI 修复**、**预览执行写语句完成态修复**、**iBatis 勾选联动修复**。本节按能力面合并叙述并取代下方两轮内测段（它们的逐条记录含根因、提交与反向验证读数，见 `docs/发行说明/` 两篇内测说明：`20261110-1651` 捕获静默路径可见化与方言登记补齐、`20261110-1755` 语句抛异常致整类 SQL 消失的根治）。
+
+### Added
+- **状态栏新增「门禁陈旧 N」确诊读数（T-NestGateObserve，8e85d397）**：增强捕获的嵌套门禁靠「深度最终归零」识别嵌套，磐维 A 模式驱动下会出现深度泄漏（某帧出口未配平），此后该线程每条语句都被当成外层静默抑制，而既有的「门禁抑制」计数对这种形态恒为 0。状态栏新增「门禁陈旧 N」，debug 档另在宿主 stderr 打一次陈旧链摘要与调用栈（只一次、不含 SQL 原文），心跳带出 `nestStale` / `nestMaxDepth` 供现场判读
+
+### Fixed
+- **iBatis 链「全选 / 清除」按钮不生效（T-IbatisSelectAll，e1cf3872）**：点「全选」后动态条件复选框全部勾上但 SQL 预览不重渲染，「清除」同样无反应（单框切换正常）。根因是两条批量路径只枚举 Wrapper 与 MyBatis XML 两份条件视图清单，iBatis 条件行持有在 `PreviewResult.ibatisParamModel`，两条路径都枚举不到 ⇒ 勾选态只改了 UI、`enabledIds` / `paramValues` 一处未动。现在两条路径一并枚举 iBatis 条件行：全选落齐 `enabledIds` 并实时重渲染；清除同时清参数值与可见字段文本（iterate 值同语义清空），勾选态保留。这也收掉了 v2026.11.10 发行说明登记的已知问题「selectByCondition 勾选联动」。定向：`SqlPreviewPanelDynamicBatchTest` +2（全选重渲染 / 清除清值），反向摘除 iBatis 行枚举转红、恢复 23/0 复绿
+- **预览执行 INSERT/UPDATE/DELETE 成功却被报「等待结果超时」（T-PreviewDmlResult，67a574ab）**：数据库控制台对写语句**不建结果页签**，影响行数（`1 row affected in 60 ms`）只写进 Output 视图；插件原来的完成态判据只读 `historyViewer` 文档（真机实证该文档里只有 `Connected` 与 SQL 回显），于是 40 拍窗口到期后 `completed=false`，成功被归成「已提交执行，但等待结果超时」，用户面板里只剩原生 Output。现在按 DML/DDL 首关键字识别「结构上没有结果页签」的语句：提交后 8s、连接已就绪即给中性提示「已提交执行（更新/DDL 语句不产生结果页签），影响行数与耗时见下方控制台 Output」——措辞刻意不宣称「完成」，长事务仍在跑时不误导；40 拍判定侧同步不再把这类语句落超时归因。定向：`PreviewWriteStatementTest` 5 例（含反向验证：移除 `INSERT` 判据后 2 例转红）
+- **「同一线程后续整类 SQL 突然不再上屏」现在有了确诊读数（T-NestGateObserve，8e85d397）**：增强捕获的嵌套门禁靠「深度最终归零」识别嵌套，磐维 A 模式驱动下会出现深度泄漏（某帧出口未配平），此后该线程每条语句都被当成外层静默抑制，而既有的「门禁抑制」计数对这种形态恒为 0。状态栏新增「门禁陈旧 N」（链龄超过阈值仍有新帧进入即计），debug 档另在宿主 stderr 打一次陈旧链摘要与调用栈（只一次、不含 SQL 原文），心跳带出 `nestStale` / `nestMaxDepth` 供现场判读。需要规避仍可用 `-Dsqlvis.agent.nestGate=false`
+- **「一条语句抛异常之后，该线程的 SQL 整类消失」已根治（T-NestGateFix，0fc3836c）**：根因在增强捕获的语句织入——原实现只在方法体里**显式出现**的返回点前插出口回调；语句执行抛异常、而异常是从被调方法逃逸时（方法体自身没有 try/catch），这条路径根本没有出口点：嵌套门禁的入口计数了、出口没执行，线程深度永久 +1，此后该线程每条语句都被当成外层静默抑制（现场形态正是「前几条正常，之后整类不上屏」，而门禁抑制计数恒为 0）。现在 timed 语句面（execute/executeQuery/executeUpdate/executeLargeUpdate/批处理）的方法体统一包一层 catch-all 出口：异常也走一次出口回调（因此失败语句本身会产一条带 errorText 的事件）再原样重抛，链深度立即归零。磐维 A 模式真机验证：失败 DROP 之后 INSERT/SELECT 照常产出，`nestStale` 0、`nestMaxDepth` 回到 1；金仓/达梦/PostgreSQL/磐维 V1·V2 等厂商类的织入产物全部通过 JVM 校验（无 VerifyError）
+
+- **抓不到某类 SQL 时不再「零信息」（T-PanweiInsertCapture，e2b0b581）**：用户报障「磐维库上 SQL 日志只出 SELECT、INSERT 一条不见」，现场排查暴露的是四条**完全没有读数**的静默丢弃路径——现在它们都在 SQL 日志页签底部状态栏可见：①增强捕获接管期间被让位丢弃的**可解析 SQL 行**（此前控制台明明有、面板就是没有，两条通道都不留痕）；②agent 出口组装异常被自吞的次数；③嵌套门禁抑制的外层帧数；④登记盲区按 PS 实现类点名（并与盲区总次数配对显示）。配合既有的「已收事件 N / 未登记 JDBC 实现」，现场可以一眼分出「没产事件」「产了被丢」「让位吃了」三种形态
+- **两种真实存在的日志形态此前整条丢失（e2b0b581）**：MyBatis 的 `statementType="STATEMENT"` 走 `SimpleStatementHandler`，只打 `==>  Executing: <sql>`（无 `Preparing:`、无 `Parameters:`），旧解析器接不住；iBatis 2.x 的普通 `Statement`（`createStatement()`）打的是 `{stmt-N} Statement: <sql>`，标记前缀与关键字都与 PreparedStatement 那档不同，旧解析器当噪声丢掉。两者现在都能产出条目（后者来源标记为 IBATIS）。严格前缀模式（关掉「启用混合前缀」）仍按原契约只认用户配置的前缀，未识别的 SQL 形态行会计入解析诊断增量
+- **iBatis 批处理不再无声消失（e2b0b581）**：iBatis 2.x 的 `BaseLogProxy` 只记录 execute/executeUpdate/executeQuery，批处理（`executeBatch`）在框架层**一行日志都不产生**，控制台通道结构性看不到。现在「已识别到 iBatis 形态且增强捕获未开启」时，状态栏给出具名提示（开启增强捕获后由 agent 的批处理形态兜住）
+- **三方数据库增强捕获的同类登记缺口（e2b0b581，横向审计）**：按真实驱动 jar 逐个 javap 核对后补齐——pg 家族 `PgCallableStatement`（7 个包名，函数模式 `executeUpdate` 走 `executeWithFlags` 分支会漏采）、MySQL 5.1 `CallableStatement`、华为两族兼容模式 `MPreparedStatement`（`addBatch(String)` 覆盖父类不回调，批文本漏记）、海量/社区 openGauss 的读写分离包装语句与其连接类（读写分离模式下整条连接的语句进不了登记表）、SQLite 四参 `prepareStatement` 重载实现类、华为两族 connect 面驱动类
+- **Mac / UOS 上点「执行 SQL」恒报「创建临时 SQL 文件失败：findPsi」（T-ExecPsiGate，87226496）**：执行用的临时 SQL 文件，其 PSI 语言由插件写的**文件级方言映射**决定。映射落到本机建不出 SQL PSI 的方言时（自注册方言的 parser definition 未生效、平台缺该方言、或历史版本留在 `workspace.xml` 里的坏映射），平台拿不到 PSI——非方言语言直接在方言替换器里抛 `ClassCastException`，方言类语言则让 `findFile` 返回 null；而 exec 链过去对映射失败**既没有闸门也没有日志**，用户只能看到笼统的 findPsi 报错。预览侧一直有「可建 PSI 门」（目标语言建不出 PSI 就跳过映射），exec 侧缺这一道，所以同一台机器预览正常、点执行必死。现在两条链共用同一道闸门：不建 PSI 就不写映射并清掉历史映射（退回平台默认），`findFile` 仍失败时再清映射重建一次，再失败则**显式钉住一个能建 PSI 的方言**（清映射只会把继承来的方言请回来）；临时文件的 VFS 条目若已失效（同步盘 / 网络盘 / 外部替换的典型形态，平台对这种失效只返回 null），先重新定位取新条目再建 PSI；若某个 IDE 上 `.idea` 目录里的 `.sql` 根本建不出 PSI（**2026.3 起平台新增 `shouldCreatePsi` 闸门：父目录不在内容模型里、或被 excluded，就直接不建 PSI**，同文件放项目外则正常），**优先引导用户修配置**（红字说明原因 + 蓝字直达对应设置页），另给一颗「改用项目根落点重试」——用户点了才把临时文件写到项目根 `.sql-visualizer/`（自带 `.gitignore`，不污染工作树）并记住该选择；预览侧因为是降级而不是阻断，自动改写的同时给一条**只出现一次**的告知（含去修配置的蓝字入口），既不静默也不打断；失败文案改带 vf 有效性、文件类型、映射语言、继承方言、平台实际选中的 PSI 语言、这几者各自能否建 PSI、IDE Build 号与绝对路径，映射没落地也一定有日志；若最终仍失败，红字后面会给**蓝色可点入口**并按原因细分——文件类型忽略规则未改就直通「设置 → 编辑器 → 文件类型」，被 `.gitignore` 忽略就直通那个文件，方言问题就直通 SQL 方言设置
+
+### Changed
+- **「门禁陈旧」读数的判据收口（70048a12）**：原判据是「链龄超 5s 仍进入即计一次」，会把「一条跑几十秒的语句内部再执行语句」这类**合法嵌套**误报成泄漏。现改为「链龄超 **30s** **且**同一链连续 **3** 次超阈值进入才计，同一链只计一次」——合法长语句内部的嵌套是个位数且随后闭合（depth 归零即清零），真泄漏的链一直不闭合、每条语句都以嵌套进入出现，连续次数持续累积。两个门槛可经 `sqlvis.agent.nestStaleMs` / `sqlvis.agent.nestStaleStreak` 覆盖；不改任何抑制语义。定向：`NestGateTest` 含新增「长事务合法嵌套不误报」与「连续三次只计一次、同链不重复计」两例
+- **心跳新增 `assembleFailures` / `nestSuppressed` / `unresolved` / `blind` 四个诊断键（e2b0b581）**：键序固定、无空格；旧版 IDE 宽容扫描零影响。与 Fixed 首条的四段状态栏读数同源，是它们的传输面
+
+## [2026.11.10] - 2026-11-10
+
+> 范围＝v2026.11.8 正式版发行包之后的全部用户可见增量（含内测 `v2026.11.9-beta.1` 与 `v2026.11.10-beta.1` ~ `beta.3` 四轮）：**iBatis 2.x 全面支持与交互补全**、**中兴 GoldenDB 第 15 方言**、**SQL 列表追赶与风暴期刷新优化**，以及两轮真机反馈驱动的 iBatis 缺陷修复。本节按能力面合并叙述并取代下方四轮内测段（它们的逐条记录含根因、提交与反向验证读数，见 `docs/发行说明/` 四篇内测说明：`20261109-1705` iBatis2 与 GoldenDB 与列表提速、`20261110-0300` iBatis 交互补全、`20261110-0930` 预览四项修复、`20261110-1140` 双向跳转与图标归位）。
+
+### Added
+- **iBatis 2.x 全面支持，含两条编辑期能力（T-Ibatis2Support + T-Ibatis2Gap，29a4a4be / e744b9d6 / 92c515ec / 367561f3 等）**：`<sqlMap>` 的语句预览（`#p#` 四态占位、14 个 `<isXxx>`、`<dynamic prepend>`、`<iterate>`、`<sql>/<include>`、`<selectKey>`，以官方 2.3.4.726 引擎做 20 形态逐字节黄金对照）、注入着色与折叠、关键字补全、DTD 随包内置（离线可用，包增约 9 KiB）、SQL 列表独立 `IBATIS` 来源。①**双向跳转**：XML 内部 id 引用（`include refid` / `resultMap` / `parameterMap` / `extends`）与「Java DAO ↔ XML 语句」双向软引用，Ctrl+B 与 Ctrl+Click 两个方向都通；让位门与 MyBatisCodeHelperPro **解耦**（竞品无 iBatis 能力，竞品在位时箭头照常显示）。②**预览参数可交互**：动态条件按行勾选、值可填、`<iterate>` 值列表，SQL 随填值变化；`parameterMap` 语句显示真实参数名（按位对齐，未消费声明单独透出）；降级改为结构化可见并分档（信息级 ℹ 与失败 ⚠ 分开）
+- **新增中兴 GoldenDB 方言（第 15 方言，T-GoldenDbDialect，7c5788fb / acc522cf）**：渲染形态依据《GoldenDB 开发支持 V6.1.03.10》——分页 `LIMIT [offset,] count`、反引号标识符、upsert `ON DUPLICATE KEY UPDATE`、`DELETE ... LIMIT`；保留字词表按官方 PDF 三表并集落 384 词。连接面接全（`jdbc:goldendb://` URL→方言、列表角标、MCP 归一、执行路由）；增强捕获按 jar 真实字节登记连接/语句/prepare 三面 + `com.goldendb.` 框架帧前缀。能力矩阵如实标注：**EXPLAIN 行 false（PDF 有专章但输出格式未逐字取证）**，UPSERT 与 DELETE LIMIT 为 true
+
+### Fixed
+- **iBatis 两轮真机反馈共六项（v2026.11.10-beta.2 / beta.3 段有逐条根因）**：`<selectKey>` 子语句不展示、占位符被格式化拆散、勾选填值后重渲染失败被静默吞掉、信息性说明混进红色失败行、DAO 调用行与方法定义行各多一枚点开没有 SQL 的预览图标、`#x:jdbcType#` 填值不带引号、XML 语句 `id` 上 Ctrl+Click 报「Cannot find declaration」（XML 侧从未接 GTD 管线）
+- **iBatis 文件点预览图标打开很慢（T-Ibatis2Support 券 0，04522885）**：慢在预览前的源语言判定——它拿 FROM 根标识符反查实体类，iBatis 语句必然落到全项目类短名的有界扫描（单次约 1 秒）。现两条 XML 预览链的同步判定只做直查 + 只读别名缓存，不再启动全项目扫描；影响面大于 iBatis 用户
+- **PostgreSQL 等库执行预览 SQL 只提交 `TIMESTAMP` 一个词报 42601（T-DateLiteralBackfill R10，用户真机）**：折行后光标落在以 `TIMESTAMP` 开头的片段上，DBN 按光标所在语句提交；现**单语句预览整批提交**，绕开光标与选区变量
+- **高并发抓取链路的四类静默故障与三处误报**：控制台清屏后捕获静默数分钟（重放守卫水位未随清屏重置）、高峰期事件被静默丢弃（丢弃数上报 + 同模板聚合）、投递速率被钉死在约 64 条/秒（排水免超时税，512 条 726ms→31ms）、风暴末尾最后几条要等下次执行才上屏（悬挂补刷）；Hikari 等连接池代理与 Oracle 驱动的连接继承链被误报「未登记 JDBC 实现」
+- **运行期占位回填两处错位（T-RuntimeSlotOptionalFill，用户沙盒验收）**：三元占位注释里的 Java 问号被当成 JDBC 占位符；可选 if 片段填值重复或被拒（改为整段一个 slot）
+
+### Changed
+- **SQL 列表风暴期刷新成本大幅下降（T-SqlListCatchup 券 A/B/E 等）**：刷新加 150ms 时间窗下限；⨉N 与同模板计数从每拍全量重算改增量维护（六类兜底点自动回退全量）；列表渲染器加条目级尺寸缓存，消除贴底滚动触发的整表布局重扫——刷新单拍从实测 102~232ms 降到 7~9ms；状态栏新增「追赶中：落后 N 条」
+
+### Internal
+- 依赖本地容器的测试用例改走外指通道（T-DockerGateOffload）；GoldenDB 驱动长效注入测试 classpath；iBatis 2.x 渲染保真以官方引擎做黄金对照（20 种形态不连库直取真值逐字节比对）
+
+## [2026.11.8] - 2026-11-07
+
+> 范围＝v2026.11.7 正式版发行包之后的全部用户可见增量（含内测 `v2026.11.8-beta.1` 一条）：日期族参数改 ANSI 类型字面量、IDE 2026.3 换源退化修复。两条都在 `Fixed`。
+
+### Fixed
+- **IDE 2026.3 上换源弹窗又只剩当前一个源、点选静默跑到旧库（T-ConsoleBind263，bd4eff85）**：2026.3 移除了 `DataSourcePerFileMappingsImpl.setMapping(VirtualFile, LocalDataSource)`，插件清平台「文件 → 数据源」绑定的那一步恒抛 `NoSuchMethodException`——绑定清不掉，平台的 forced 关联就把可选数据源短路成单条，于是「切换数据源」只列出当前源，工具栏挑 `mpj_demo@localhost` 却在原来钉住的 Oracle 源上建会话（用户看到的「点了没反应」和「跑错库」是同一个根因的两张脸）。现在写入口按能力族探测（2026.3 的 `setMappingWithWriteAction` → 旧重载 → `setMapping(VirtualFile,String)` → 静态只写入口），每次写完都用平台接口回读核对；2026.3 的写动作入口是异步协程（字节码实证），由同步写兜底并在日志里给出实际生效的策略名。日志分型改为 `setMapping FAILED strategy=… reason=…` / `setMapping UNAVAILABLE …`，首次换源打一行平台契约读数，2026.3 再收走入口时一眼可见。同时补一道防护：**显式选了数据源但可选集合里没有它时直接阻断并说明原因**（不再静默用另一个源执行），平台绑定改不动时面板就地提示实际目标与请求目标。
+
+- **日期时间参数回填改用 ANSI 类型字面量，Oracle 预览执行不再报 ORA-01843 / ORA-01861（T-DateLiteralBackfill）**：捕获到的 `LocalDateTime` 值按 `toString()` 是 ISO `T` 形态（`2026-11-07T13:20:14.417`），预览参数行此前只把它包成单引号串，Oracle 对 TIMESTAMP 列的隐式转换按 `NLS_TIMESTAMP_FORMAT` 解析，`T` 分隔符不被接受 → 执行报 ORA-01843；把 `T` 换成空格同样不够（`'2024-01-01 10:00:00.0'` 在 Oracle 11g/23 实测 ORA-01861）。现在日期族参数统一由 `SqlDateLiteral` 产出 ANSI 类型字面量——纯日期 `DATE '…'`、时间戳 `TIMESTAMP '…'`（ISO `T` 归一为空格、缺秒补 `:00`），覆盖面板参数行、复制可执行 SQL、导出/分享、增强捕获列表与 MP/批量/JPA/XML 模型链。形态不匹配或类型未知时仍回落原引号渲染，不会产生非法字面量。SQL Server / SQLite 因 T-SQL 与 SQLite 不支持 ANSI 类型字面量，按方言门禁维持引号形态（SQL Server 的 ISO 8601 引号串本来就能隐式转换）。R3 当时挂起的面板参数行路径（决策点 D1）由此定案为同步 ANSI 化。
+
+## [2026.11.7] - 2026-11-07
+
+> 范围＝v2026.11.4 发行包之后的全部用户可见增量。本段由四个内测版（11.6-beta.1 / beta.2、11.7-beta.1 / beta.2）按能力面合并去重：自研框架页面 HQL 识别、Mapper 原生快捷键、空 Wrapper 与 JPA 预览锚点、磐维 PanWeiDB 方言与增强捕获、运行期 SQL 可填值五块新能力；跨通道去重、iBatis 参数、2026.3 热替换、运行期占位回填等修复；以及方言矩阵与 CI 的内部项。
+
+### Added
+- **运行期拼接的 SQL 现在可以自己填值，填完就是可执行 SQL（T-RuntimeSlotFill，745cfe3c / 15de3ede / 36dc8da3）**：上一版把运行期片段收口成 `/* 运行时值: … */` 注释占位（括号与引号不再被吃掉），但用户没法把它变成能跑的语句。现在参数区为**每个占位建一行**，按语义给不同控件——单值（可选字符串/数字/布尔/NULL 类型）、循环（填一组值，按你代码里的模板展开成 `(id='1' or id='2' or id='3' )`）、三元（选真/假分支）、可选片段（勾「包含这段」）。填值后**预览 / 复制可执行 SQL / 导出回放脚本 / 直接执行四条链路取的是同一份文本**，不再出现「预览填了、复制出来还是注释」；值按字面量渲染（`O'Brien` → `'O''Brien'`），循环/命名参数/`?` 混用时用一次扫描 + 区间记账，避免值里的 `:nm` 被二次当参数。**留空即原样**（与上一版逐字节一致），所以不填不影响任何既有行为。顺带修掉一个旧缺陷：**被括号包住的三元此前不被识别为三元**，整段会退化成普通运行时值——`listByTernaryBranch` 那种 `(status == null ? "" : " AND status = " + status)` 写法以前拿不到「两支」信息
+- **开发者模式：设置页构建号连点 7 次露出「检测更新（开发版）」，读预览清单（T-DevUpdateChannel，cda8f3e5）**：正式「检查更新」仍读 `update/update.json`，开发版按钮读同目录的 `update/preview.update.json`（状态行标「（开发版通道）」，按钮 tooltip 写实际读取的 URL；`-Dmpvs.update.previewManifestUrl` 可换源，换源到本地 server 时预览地址同源改名，只需多一条路由）。解锁只在本会话内存里（不写配置、不弹窗，只改构建号 tooltip），`-Dmpvs.update.devMode=true` 可直通（启动时读一次，需重启生效）；语言切换重建面板后按钮仍在（可见性按解锁态重算，不是在解锁那一刻一次性点亮）
+- **MP 写族「空 Wrapper」调用有预览图标与可执行 SQL（T-WriteFamily，6fbc763b）**：`mapper.delete(null)` / `service.remove(null)` / `mapper.update(entity, null)` 此前既没有 gutter 图标也没有预览入口——`delete`/`update`/`remove` 都不在批量注册表，空 Wrapper 又没有链可锚。现在三者按「空 Wrapper 精确形态 + MP receiver 家族」双门控挂锚点：`delete`/`remove` → `DELETE FROM 表`（实体有 `@TableLogic` 时转 `UPDATE 表 SET 删除标记 = 1 WHERE 标记 = 0`），`update(entity, null)` → `UPDATE 表 SET …`；无 WHERE 时面板给全表删除/更新红字警示。非空 Wrapper（内联链/变量）锚点仍在链上，同一语句不出第二枚图标；`redisTemplate.delete(null)` / `list.remove(null)` 等非 MP receiver 不亮
+- **JPA `delete(entity)` / `update(entity)` 调用行预览图标（T-JpaDeleteAnchor，0c26618b）**：`delete`/`update` 与 Wrapper 工厂/链方法撞名，`WrapperAnchorDetector` 场景 C 在 JPA 判定之前就返回了，`repository.delete(entity)` / `ht.delete(entity)` / `ht.update(entity)` 一直只有右键/快捷键能预览。现在场景 C 的「非工厂、非服务链」分支补一次 JPA receiver 家族判定（`hasJpaCrudReceiver`），命中才锚；`JoinWrappers.delete/update` 仍归工厂、`service.update(wrapper)` 仍不锚
+- **磐维（PanweiDB）驱动的增强捕获支持（T-IbatisPanwei 券 C，94235f8d）**：磐维驱动此前不在白名单，只能靠接口兜底，attach 后常常一条不出。现按 `panweidb-jdbc-1.0.0.jar` 的真实字节登记三面——连接面 `org.panweidb.Driver`、语句面 `org.panweidb.jdbc.PgStatement` / `PgPreparedStatement` / `PgCallableStatement`、prepare 面 `PgConnection`（jar 内 `org/panweidb` 374 条、`org/postgresql` 0 条，确认是整包重命名的 openGauss-connector-jdbc 谱系；四个类均通过「织入 → 隔离 loader 定义 → 初始化过 JVM 校验」）。驱动 jar 不入库，字节层用例经 `-Dpanwei.jar` / `PANWEI_JAR` 读取，未提供时显式跳过
+- **「未登记 JDBC 实现」成为面板可见事实（T-IbatisPanwei 券 D，47a28ef1 / 6efd2e48）**：接口兜底扫到「是 JDBC 实现但不在驱动白名单」的类时，按首次发现顺序记下类名（最多 8 个、只类名），随 agent 心跳上报；空态诊断行显示「发现未登记 JDBC 实现：…（未纳入驱动白名单，增强仅靠接口兜底）」，而控制台有产出时（空态诊断行整条不显示）改挂在 SQL 日志页签底部常驻状态栏。磐维那次「增强捕获一条不出」是靠人工猜驱动包名才定位到白名单漏登记，此后同类问题一眼可见
+- **自研框架 `<pages>` 页面数据源识别 HQL 并转换为可执行 SQL（T-PagesHql，用户反馈「这种场景下的 hql 没有正常识别」）**：`<pages>` 页面 XML 的 `<datasource>` 此前一律按原生 SQL 直显——`FROM BaseLocation location` 原样展示（真执行会报「表不存在」）、`location.updateInfo.beDelete` 这类实体属性路径不映射列名、`:name` / `?1` / `#{...}` 参数一概不提取。现在按「entityClass 与语句根标识符的关系」判定源语言（用户样本形态 `FROM BaseLocation` ↔ `entityClass="...BaseLocation"` 判 HQL；demo 的 `orderMaintain` 反例——entityClass 是 Order、`<datasource>` 却是原生 SQL——保证「有 entityClass」不会被误判成 HQL），命中后复用既有 JPA/HQL 转换管道：实体名→表名、按别名作用域的属性路径→列名、JOIN 副表实体映射、命名/位置参数提取；框架占位符 `#{SESSION_BASE_ORGAN}` 预处理成命名参数 `:SESSION_BASE_ORGAN` 走既有参数链（字符串字面量内的 `#{...}` 不替换，与 HQL 自带 `:x` 同名时合并为同一参数）。泛化件同批落地：页面标签名不再限定 `maintainPage`（listPage 等任意页面标签都认），`<dataValue>` 这类无 entityClass 的通用 SQL 载体同样走该判定；gutter 图标与右键预览两条入口都生效。设置新增「自研框架数据源语言（HQL/SQL）」三档：自动（默认，判不准按 SQL）/ 仅 SQL / 仅 HQL。面板元信息行新增「来源: HQL（已转换）」，并新增「原文」只读页签可随时回看转换前文本；无工程索引 / 根实体解析不了 / 转换异常三种情况回退显示原文并给出提示，不报错
+- **Mapper 接口与 XML 语句跳转接入 IDEA 原生快捷键（T-MapperNavShortcut，用户反馈「mapper 和 xml 跳转不支持快捷键，正常应该跟着 IDEA 原生的快捷键支持跳转」）**：此前双向跳转只有 gutter 图标（鼠标专用）——Java 接口方法上 Ctrl+B / Ctrl+Click 无反应，XML 语句标签名上同样无反应（只有 `id` 属性值位置本来就有引用跳转）。现注册平台 `gotoDeclarationHandler` 与 `gotoRelatedProvider` 两个扩展点：Ctrl+B / Ctrl+Click 在 Mapper 接口方法与 XML 语句间双向跳转，Ctrl+Alt+Home 弹出「关联符号」（对侧 Mapper XML 语句 / 接口方法）。handler 优先于 reference 且返回 null 即回落原生，非 Mapper 位置行为零变化；键位归平台 action 所有，用户改 Keymap 自动跟随，插件侧不留第二份键位配置
+
+### Changed
+- **循环内拼接的降级占位现在带「追加的是什么」（T-RuntimeConcat-Polish，10441d9b）**：上一版把循环内的运行期拼接降级成一条 `/* 运行时值: 循环内追加，运行时重复执行 */`，用户看得到「会重复」、看不到「重复的是什么」。现在占位带上循环体的**模板摘要**——只取循环体里 `append` 的字符串字面量片段，变量引用 / 方法调用 / 三元条件一律替换为 `…`，三元两支以 ` / ` 分隔：`for` 里按 `k == 0 ? "id='…' " : "or id='…' "` 拼条件的用户样本，占位变成 `/* 运行时值: 循环内追加 id=’…’ / or id=’…’（运行时重复） */`。摘要走的仍是占位那套清洗（注释结束符拆开、引号换安全同形字符、空白折叠、长度上限），因此 `k == 0 ?`、`ids.get(k)` 这类 Java 源码不会漏进预览；循环体取不到任何字符串字面量时回落原文案，不猜内容
+- **日志列表来源位置后可选显示「类名#方法名」（默认关，T-LogMethodName）**：设置开启后在每条 SQL 的来源位置后追加一段「类名#方法名」，如 `[OrderServiceImpl.java:41] [UserMapper#selectById]`。控制台桥通道的方法名取捕获到的 mapper 语句 id（与来源位置常不是同一个类，故不合并成一段）；增强捕获通道取调用栈里的业务方法。无方法信息的条目（Hibernate、JdbcTemplate、ShardingSphere、旧日志）保持原样
+
+### Fixed
+- **运行期占位回填的两处错位：三元注释里的 `?` 被当成 JDBC 占位符、可选 if 片段填值重复或被拒（T-RuntimeSlotOptionalFill，用户沙盒验收）**：`listByTernaryBranch` 面板多出一个 `#param1`、填了不生效——JDBC 字符串预览用朴素 `count('?')` 数占位符，把三元占位注释里的 Java 问号也算成了 JDBC 占位符；现改用 string-aware 位点扫描（注释/字符串里的 `?` 不计），参数行只保留真实 `?`。`listByOptionalIf` 填 `keyword` 时占位留在字符串里不被替换、填 `minAmount` 时出现 `AND amount >=` 悬空行 + `AND amount >= 111` 重复行——可选 if 片段的 slot 原本只覆盖值位置、模板却覆盖整段片段；现改为「整段一个 slot」（token 与模板同覆盖整段），填值/取消包含/留空三条路径一致；一个片段含多个运行期值时回退为值位置模式并提示限制
+- **下载更新包遇到 404/410 不再甩出一串 HTTP 异常，改为「该更新包还没有发布」并给发布页链接（T-DevUpdateChannel，cda8f3e5）**：清单里的 `downloadUrl` 常指向尚未建仓的 Release 附件（预览清单最常撞上），旧口径把 `HttpStatusException` 原文塞进「更新失败：{0}」，看着像插件坏了。现在 404/410 单独判为「未发布」——设置页写「该更新包还没有发布（HTTP 404），请稍后重试，或到发布页手动下载」并露出既有发布页兜底链接，日志只记一行带 URL 与状态码的 info；启动通道给同文案的 WARNING 通知。网络不通、非法 zip、安装失败等其余失败仍是普通「更新失败」，不扩散
+- **更新被平台拒绝时日志给出确定原因，不再只说「平台没给原因」（T-HotSwapUnloadSafety，eff3bbd7）**：旧版探测入口（`allowLoadUnloadWithoutRestart` / `checkCanUnloadWithoutRestart`）只返回真假，插件在拒绝时统一写一句「platform gave no reason」，而平台其实在同一份 `idea.log` 上一行就点名了确切项。现在按「非动态 EP 事实表」补位，日志直接写出「本插件扩展了 `com.intellij.sql.dialect`，平台自 baseline 253 起才把它标为动态，当前 243」并说明后果是重启生效。同时确认一条**平台边界**（已写进已知边界）：243（2024.3.x）上 `com.intellij.sql.dialect` 是非动态 EP，扩展它的插件不可被动态卸载，因此**更新只能重启生效**；253 / 262 / 263 上该 EP 已是 `dynamic="true"`，免重启热替换可用
+- **运行期拼接的 SQL 预览把 Java 源码当活 SQL，`WHERE (...)` 的右括号与引号被吃掉（T-RuntimeConcatAndDeleteNull，53de1ee4）**：JdbcTemplate / 自定义 DAO / Hibernate 三条字符串 SQL 通道共用 `SqlStringConcatenator`，静态不可求值的片段原本输出 `/*运行时值*/` + 原样 Java 源码 + `*/`——前缀注释当场闭合、源码变成活 SQL、末尾 `*/` 悬空，源码里的 `'`/`"` 再把词法器带偏（用户报障的 `idStr.append(k == 0 ? "id='" + … )` 预览里 `WHERE (...)` 的右括号消失）。现在占位收口为单条合法块注释 `/* 运行时值: <清洗后表达式> */`（`*/`→`* /`、引号换安全同形字符、空白折叠、120 字上限）；同时补三元分支处理（常量条件取分支、两支同文折叠、其余单占位）与控制流感知（循环内 append 降级为「运行时重复执行」占位、互斥 if/else 两支不线性拼接、可选 if 片段带注释标记），不再把静态片段当直线代码一次拼死
+- **磐维（Panwei）数据源的日志条目没有库角标，预览按 MySQL 渲染导致 Oracle 语法降级（T-IbatisPanwei 券 F，46c05b5f）**：`jdbc:panwei:` / `jdbc:panweidb:` 此前不在 JDBC URL 的两张子协议表里——角标解析为 null（列表里看不到目标库），方言推断无结论后回落 MySQL，`SYSDATE` / `dual` / `to_date` 这类 Oracle 语法走 MySQL 渲染，预览常以简化模式打开。现在两种子协议都登记：角标显示「Panwei（磐维） · 库名@host:port」，渲染方言按 Oracle 推断（磐维现网是 Oracle 兼容模式；PG 模式可在面板手动改选）。历史条目持久化的角标也能被方言兜底解析——角标显示名与注册方言名不同名时走显式别名表，未登记的显示名仍返回 null（不猜近似方言）
+- **`db_compatibility` 是客户端参数，不决定方言（T-IbatisPanwei 券 F 订正）**：上一条把 JDBC 连接参数当成了 SQL 兼容模式开关——按《磐维数据库 V2.0.0 开发者指南》表 1-1~1-5，磐维的 SQL 兼容模式由**建库参数 `DBCOMPATIBILITY`** 决定（Oracle(A，**默认**) / MySQL(B) / TD(C) / SQL Server / PostgreSQL），而 JDBC 的 `db_compatibility` 只控制 ResultSetMetaData 返回列名的大小写。按参数切方言会把「Oracle 模式的库 + 为了小写列名设 `postgresql`」误判成 openGauss。现改回 **`jdbc:panweidb:` 恒映射 Oracle**（A 是出厂默认），PG/MySQL 模式的库由用户在面板手动改选；新增不变式用例 `panweiClientDbCompatibilityMustNotChangeDialect` 钉住（反向探针：重新加回覆盖分支恰 1 红）。另实测 V2 `panweidb-jdbc-2.0.0.jar` 与 V1 类形一致（`org.panweidb.*` 整包重命名、同类名同方法形态），现有三面登记直接覆盖，字节层用例改为自动遍历 `database-lab/vendor/drivers/panweidb-jdbc-*.jar`（V1/V2 同轮全过）
+- **attach 到运行中应用时，attach 之后才懒加载数据源的进程增强捕获一条不出（T-IbatisPanwei 券 E，47a28ef1 / 7510dc79）**：attach 路径此前只跑一轮接口兜底扫描，驱动类在扫描之后才加载就永远漏扫（premain 侧早有补挂轮，attach 侧没有）。现在 attach 首轮之后再补挂 2 轮（默认 5s / 20s，`sqlvis.agent.catchAllAttachDelayMs` / `...AttachRepeatMs` / `...AttachPasses` 可配），复用已处理去重、每轮开跑前重查总开关与熔断；扫描预算从「遍历到的每个类」改为「候选类」（JDK 前缀、接口/枚举/数组/基本型/bootstrap/动态代理这些零成本排除项不再占 5000 上限），名字带 JDBC 线索的候选优先评估，数组顺序不再决定谁被截断。20k 类实测一轮扫描 4~6ms，attach 全链一次性约 10~20ms
+- **iBatis 2.x 项目的 SQL 参数被一对中括号包住、INSERT 大片变 NULL（T-IbatisPanwei 券 A/B，用户真机报障，6a5cef96）**：iBatis 的 JDBC 日志代理打三行一组——`{pstm-N} Executing Statement:` 后跟 `Parameters: [v1, null, v2, …]` 与 `Types: [java.lang.String, null, …]`，参数行是 Java 集合的 `toString`，而控制台解析器只认 MyBatis 的「值(类型)」语法：单值会把整段方括号当字面量渲染成 `'[00340025002200200006]'`；含 null 的多值只匹配到 null 项、其余值被丢弃并按序错位填充（36 个占位符只剩前 13 个被填成 `NULL`）。现解析器按行内 `{pstm-N}` / `{conn-N}` 标记识别 iBatis 行并优先消费——用户把日志设置里的 SQL 前缀配成 `Executing Statement:` 也不会产生双条目：参数列表剥一层方括号、按顶层逗号切分、裸 null 记为 null 值；`Parameters:` 行按 pstm id 挂起，紧随的 `Types:` 行按位置并入类型后闭合。类型必须并入——`00340025002200200006` 这类纯数字串在无类型启发式下会裸出成数值字面量（Oracle 模式语义错误），只有拿到 `java.lang.String` 才按字符串加引号渲染。`Types:` 缺行时按原无类型口径兜底、不伪造类型；`{conn-N} Preparing Statement:` 只消费不产条目（与随后的 execute 重复，两条都收会让条目翻倍）。已知边界：元素内含逗号或嵌套方括号时按逗号切分（`List.toString` 不可逆），iBatis 批处理一期不支持
+- **IDEA 2026.3 上更新插件一律提示「需要重启 IDE」，热替换不再生效（T-DynUpdate263，用户真机报障，2769e1b8）**：2026.3 的平台删掉了 `DynamicPlugins.allowLoadUnloadWithoutRestart(...)`，卸载预检改由 `validateCanUnloadWithoutRestart`（返回不可卸载原因）/ `checkCanUnloadWithoutRestart`（布尔）承担；插件把「旧方法存在」当成热替换的总开关，方法一消失整条动态安装链就降级成重启脚本。现按**能力族**解析预检入口（旧入口优先，243/262 与改动前走同一条路径；旧入口缺失时才用新的 validate/check），并连返回类型一起判——2024.3 的同名 `checkCanUnloadWithoutRestart` 返回的是原因字符串，只按名字匹配会把字符串当布尔。平台否决时把原因原话写进日志，探测失败时列出全部缺失项（此前只报第一个）；签名护栏同步改口径并在 2026.3 上实测通过，2026.3 用户更新恢复免重启
+- **增强捕获被平台侧停采时现在会说清原因，不再静默（T-AgentSilentAfter16s，1cc28d7c）**：agent 有一条 T-07 保守策略——会话建立后 15s 内收不到 IDE 的 CONFIG 帧就主动停采（「不知道用户要不要采 → 不采」）。此前这条自停完全不可见，用户侧表现成「采集开着，过一会儿就不出 SQL 了」。现在自停会带归因：心跳 body 新增 `gate` 字段（0=正常 / 1=看门狗自停），宿主控制台留一行点名「会话建立后 15000ms 内未收到任何 CONFIG，按保守策略主动停采……下发任一 CONFIG 即解除」。采集语义未改，只是把原因摆出来；真 IDE 正常路径不受影响
+- **同一次执行的 SQL 在日志列表留两条，其中一条没有耗时与执行位置（T-CrossChannelDedupe，用户真机报障「部分 INSERT 没有捕获到耗时和执行位置」）**：控制台通道（解析 MyBatis 日志）与增强捕获通道（agent）对同一条 INSERT 各出一条——控制台条目耗时恒为空（MyBatis 对 DML 只打 `Updates: N` 不打耗时行）、无库角标无源码位置，增强通道条目信息齐全，两条并存看着像漏采。信息其实都在，缺的是「两份折叠成一份」：既有去重只认完全相同的去重键，两通道的 SQL 还原器口径不同源（日期族/布尔/全限定类型名/注释内 `?`/参数个数守卫等六类文本差异）导致键永不相等。现加跨通道等价键兜底折叠：5 秒窗口内按归一化等价键折叠为一条，agent 副本到达时融合升级（耗时、影响行数、库角标、可跳转的执行位置补齐），不计入 ⨉N 重复计数；且与「SQL 去重」开关解耦——开关关闭时也折叠，因为这不是重复执行而是同一次执行。二进制参数（byte[]/Blob/Clob）签名归一为 `<binary>`，不再因参数文本不同漏折；同批补齐 agent 参数捕获面（四族 `setObject` 等此前织入点盖到但捕获不到的形态），点号类型名匹配放宽。沙盒再验收又抓到同链路两处一并修掉：①配置周期性下发会在「清空 → 回执」之间放开一道 0.2~1.25 秒的控制台桥放行窗，每轮都让桥完整解析并与 agent 各产一条（闸门抖动），现下发保留上一次确认值，配置未变即无窗；②活性回落判据「静默 ≥10 秒 + 控制台有 SQL」在用户两次操作间隔超 10 秒时就误解封一次，解封瞬间的 SQL 又落成一条无耗时条目，现收窄为「本纪元从未收到过 agent 事件」才回落
+- **工具语句/更新语句执行成功却报「超时」提示（T-TestGapSpeed T8，用户令）**：不产生结果页签的语句（工具语句、更新语句）成功完成时，执行链仍按「等待结果超时」归因，提示引导用户去排查连接与日志——实际 SQL 已成功执行完。现对「已提交且确认完成、只是没有结果页签」的形态给出中性提示：SQL 已提交执行并完成（工具语句/更新语句不产生结果页签），详情见控制台 Output
+
+### Internal
+- **真机方言矩阵耗时压缩（T-DialectSweepSpeed，fa0a63a3 / 4997b52d）**：实例级并发（默认 `min(实例数, 4)`）+ 逐词往返由 8 降到 7/4，CI 方言腿 43.5 → 21.6 分钟（4/4 PASS）；CI 步骤预算口径由「各实例相加」改为 `max(实例预算) + 冷启动`，四实例子集 60/70 分钟
+- **方言矩阵实例级超时看门狗（T-MatrixInstanceTimeout，59b67fc5 / b4839307）**：四桶结局 PASS / SKIP / TIMEOUT / FAIL，单实例挂死不再拖垮整轮，超时与崩溃可区分（真机 1s / 15s 双档实证）
+- **测试服务器容器内存治理（T-LabMemTrim，71473007）**：容器内存上限 41 → 19.25GiB + 4G swap，DB 内部参数同步收缩；结论落 skill / 经验 / LESSONS
+- **守卫与 CI 快腿收口（9473a038 / f2d865b7 / 4997b52d）**：新守卫登记进元守卫；BOOLEAN 无产出点与回放导出守卫空判两处红点；`dialectExternalVerify` 的顺序断言挪到写 summary 之后、drain 不再吞异常
+- **退避时序判据改用调度值 + `-Dmpvs.*` 不再被配置缓存冻结（c35135cb）**：`SenderLoop` 加 `BackoffSleeper` 注入缝，测试断言调度序列而非墙钟；`dialectExternalVerify` 改为逐键 `providers.systemProperty`（配置缓存输入），`-Dmpvs.external.maxConcurrency` 等参数不再在缓存命中时被静默忽略
+- **本地清单服务器按 UTF-8 读 update.json（629dcba8）**：dev-support 本地预览清单服务不再按平台默认字符集解码
+- **真机方言矩阵二轮压缩（T-DialectSweepSpeed2，890b6154）**：MySQL 族开多语句（`allowMultiQueries=true`）+ 单实例内词级并行（默认 `min(4, 词数)`，`-Dmpvs.external.wordWorkers` 可调）+ 夹具种子并入批处理，逐词往返统一压到 3；CI 实测 mysql84 897s → **109.6s**、gaussdb_kernel503 477s → 56.6s、panwei_a 204s → 34.1s、pg16 92s → 20.8s，`dialect` 腿 22.1min → **11m43s**（含约 6min 冷启动），覆盖 `words=262 / 86 / 109(skip=1 rowid) / 197` 与 4/4 PASS 逐字不变
+## [2026.11.4] - 2026-11-04
+
+> 范围＝v2026.11.3 发行包之后的全部用户可见增量：Oracle 增强捕获的 PreparedStatement 登记断链修复、从 dev 回 port 到 master 的五项预览/方言/线程修复，以及空 Runner「方言不匹配」提示的可操作化改造。
+
+### Fixed
+- **Oracle 应用的增强捕获只剩连接校验 SQL，MyBatis 业务 SQL 一条不出（T-OracleWrapperRegistry，用户真机报障）**：Oracle thin 驱动对外返回的是包装器（`OraclePreparedStatementWrapper` / `OracleCallableStatementWrapper` / `OracleStatementWrapper`），prepare 面把我方登记的 SQL 挂在包装器上，而 `executeQuery()` 的织入点在包内物理语句（`T4CPreparedStatement`）——登记对象与执行对象错位，查表永远落空、事件按「盲区」丢弃；plain `Statement` 走「SQL 取首参」不依赖登记表，所以只有 `select 1 from dual` 这类连接校验 SQL 能看见。现 prepare 面登记时按字段类型反射解一层包装，把内层物理语句一并登记（绑定参数与批串随之接回内层）。同时修掉同链路两处去重门缺陷：嵌套门把「进入过」当「产出过」，内层盲区会连外层能出的 SQL 一起吞掉；同一帧「try 内 ATHROW + 处理器重抛」两条出口钩子会让嵌套深度多减一次，一条失败语句重复上报 3 条。真机复验（Oracle Free 23：ojdbc11 23.3 / ojdbc8 19.3 / ojdbc8 12.2，premain 与 attach 双路径，HikariCP 池）：业务 SQL 全部可见且带绑定参数，失败语句只报 1 条
+- **打开预览就弹「选择数据源」列表，多源工程每次预览都要先选一次（T-PreviewPreparePick，用户真机报障）**：预览默认准备与显式执行走同一个 `chooseAndPrepare` 分支，`else -> showRunnerPopup` 不区分两者，工程里配了多个数据源又没有 last-used 记忆时必弹，面板右上同时还显示「未绑定数据源」——与该函数自己声明的「预览默认准备静默」意图矛盾。现在预览准备阶段（`executeAfterPrepare=false`，且不是显式要求选源）不再弹窗、不建链、不报错，面板保持未绑定灰字，等点「执行 SQL」时再弹；单飞门按 owner 正常结算，下一次执行不会排队到 60 秒超时。显式执行与「切换数据源」两个入口的弹窗行为不变。多源无记忆这一档预览控制台留空是有意取舍
+- **改了 IDEA 方言并刷新预览后，底部方言红条仍按旧方言报冲突（T-DialectGateRenderDialect，用户真机报障）**：顶部写「方言: MySQL（已绑定数据源）」、SQL 已按 MySQL 渲染、数据源也是 MySQL，底部却报「当前 SQL 按 PostgreSQL 渲染」。三条原因叠在一起：闸门请求无条件优先取生成时固化的 `effectiveDialect` 快照，而顶部决策会随绑定与刷新升级，两份方言事实分裂；XML 载体不能无损重渲染，AUTO 被降级成 RERENDER_UNAVAILABLE，红字两边方言都取自陈旧值；「刷新」按钮只重渲染文本，既不重算决策也不更新 `effectiveDialect`。现在方言无关载体（XML 原文 / 纯文本，排除分页 LIMIT 行）的闸门渲染方言取最新决策，与顶部同源；模型 / 批量 / 分页载体仍取渲染事实，`canLosslesslyRerender` 的既有判定未动；点「刷新」按预览生成时的同一份证据重算决策，MATCH 就清掉红条，仍不一致则报真实的两边方言。只在结果区纯信息态动作，不覆盖执行结果
+- **控制台数据源下拉每次刷新都在界面线程读 PSI（T-ThreadFix A）**：接管组覆写了 `update()` 与 `displayTextInToolbar()`，平台据此判定它不是默认 update，线程落回 EDT；而它逐字委托的原生 `ChooseDataSourceAction` 自己返回 BGT，PSI 走平台预缓存 DataContext。一次「预览 + 执行」里 IDE 日志出现 1 条 PreCachedDataContext 与 8 条慢操作告警，全部指向这个类。现在声明 `ActionUpdateThread.BGT`，与原生动作一致，update 体仍只读写 Presentation，不碰 PSI 与 Swing
+- **执行 SQL 时在界面线程做 PSI/VFS 目录查找（T-ThreadFix B）**：准备链第一次取控制台脚本模型会实例化临时文件的 PSI，平台内部走 `findDirectory → isUnderIgnored → ensureIsUpToDate`，EDT 上调用即记慢操作，一次执行 9 条。靠缓存也不行——方言映射的 `setMapping` 会触发重解析把 PSI 作废。现在 attach 之后先到后台线程用读锁预热 PSI，再以 `nonModal` 回 EDT 续接准备；非 EDT 调用方保持原同步语义；续接异常统一走 `handlePrepareFailure`，单飞门不会悬挂 60 秒。预热失败只是退回「取模型时自己建 PSI」的旧行为
+- **执行入口与方言映射的写派发不是写安全的（T-ThreadFix C）**：`submitExplainDirectConsole` 用 `ModalityState.any()` 投递，`DialectPreMapping` 从后台线程用省略模态派发 `setMapping`；`any()` 恒为 write-unsafe，链内改文档与改模型的写动作因此没有写资格，一次执行出现 3 条 TransactionGuard 告警，写有被平台拒绝的风险。现在两处派发统一改 `ModalityState.nonModal()`，投递顺序、回调内容与异常路径都没变；方言映射仍保留原有有界等待与超时降级（模态弹窗存续期映射延后，预算内未落地即回落 GenericSQL）
+
+### Changed
+- **没有匹配方言的数据源时，用户不知道该怎么办（UI-049，用户真机反馈「非常不友好，看到错误会不知道怎么处理」）**：原文案是红色「执行失败：没有与该 SQL 方言（MySQL）匹配的已配置数据源……请打开 Database 工具窗口，在目标数据源属性的 Dialects 设置中把 SQL 方言与语句对齐」，一次列出全部 12 个源名，且与面板右上「未绑定数据源」读起来互相矛盾。现在：①用 JDBC URL 子协议推断哪些源看起来就是目标方言，唯一命中直接把源名写进标题（「下一步：给「mp_demo@localhost」启用 MySQL 方言」），多个则点名前 5 个、其余折叠，推断不出则只说「给一个数据源启用」；②状态行从红色错误降级为橙色提示，右侧给「打开数据源属性」与「切换数据源」两个可点入口，前者直接打开数据源对话框并选中推断出的源；③悬停详文写明「右上角「未绑定数据源」就是这个状态——这不是执行失败」，并给出可执行的下一步：右键目标数据源 → Properties，用「Test Connection」确认能连上（平台在连接成功后才把该源识别为该方言）。初版文案写的「属性页底部 Dialect 下拉框」经反编译核实不成立（243/262 的方言 UI 是只读标签，点不进去），已在发版前改掉。runners 筛选逻辑与五态归因未动，只接第五态「方言不匹配」
+
+## [2026.11.3] - 2026-11-03
+
+> 范围＝v2026.11.2 发行包之后的全部用户可见增量；主体是预览窗「执行 SQL」链路的整批修复与原生数据源下拉接管。
+
+### Added
+- **控制台工具栏原生数据源下拉接管，只换源不执行（T-PreviewConsoleOwnership）**：反编译 2026.2 平台实现确认，原生 `ChooseDataSourceAction` 点选后走 `chooseAndRunRunners` → 换源 + 立即执行 + 重挂一个新控制台——新控制台不在预览面板里（面板嵌的仍是旧对象），且绕过 DML 二次确认、`${}` 原文段确认、未知参数确认、方言闸与留痕。现按用户定案接管：新增 `ChooseDataSourceTakeoverGroup`，本插件执行文件的子项改为每个数据源一项，点选走插件换源链（清 pin + 全源枚举 + 只重建控制台，不提交 SQL）；其它文件逐字委托原生组；面板关闭或插件卸载时换回原动作。顺带修好下拉的三个显示问题（按钮只剩图标、弹层不贴按钮、名字里的下划线被当助记符吃掉），枚举改为「全量在册源 + 原生所有集合」两条来源取并集
+- **「更多」菜单常驻「切换数据源」**：状态行的两段可点蓝字只在方言冲突时出现，执行失败后错误行会把它们顶掉，而「想换源」最常发生在执行失败之后。现「更多」菜单始终提供「切换数据源」，点开就地弹原生数据源列表，只换源不自动提交
+
+### Fixed
+- **执行 SQL 后预览面板下半区空白，连原生控制台工具栏都不出现（T-PreviewConsoleOwnership，用户真机报障）**：五个独立缺陷叠加——①预览编辑器与原生控制台共用同一个显示槽，冷启预热超预算时降级装配与迟到换装都落在控制台嵌入之后，各自 `removeAll()` 再挂自建编辑器，`consoleHost` 整块被挤出显示链，而两个「控制台还在不在」的判据只查组件与宿主关系、宿主被摘下仍恒真；②Database 工具窗对同一执行文件复用同一结果面板，新建控制台路径没有清场，旧 Result 页签跨预览残留（预览还没执行就先出现结果栏）；③接管组未覆写 `displayTextInToolbar()`，平台把按钮渲染成纯图标；④结果区 160px 最小高度把折叠分隔条钳住，推到底仍留约 165px；⑤结果区回收守卫无条件把 160px 最小高度写回，窗口放大时分隔条停在旧绝对位置、新增高度全给结果区。修法＝新增 `mountEditorHolderContent` 单一装配口（控制台在位时保留宿主，预览编辑器只作文档/状态载体）+ 归属判据补「宿主仍在显示槽上」+ 预览路径 `clearResultContents`/`clearConsoleHistory` + 覆写 `displayTextInToolbar()` + 折叠时清零最小高度并打标记、回收守卫与分隔条校正读标记让路 + 折叠态常驻 resize 监听重新贴底。清空控制台历史同时改用带类型 Document + 写命令，消除 262 上裸反射 `setText` 的写断言 WARN
+- **方言冲突「放行」把控制台准备链静默卡死（T-DialectGatePassDeadChain，用户真机报障）**：执行报「数据库控制台准备超时，未提交 SQL」，预览窗里找不到「切换数据源」；日志 session 创建后 6ms 就打出 `runRunner invoked OK`，`attachConsole` 一次没到，随后点击全部排队，60 秒逃生才自愈。根因是放行分支仍「非 MATCH 一律投 BLOCKED」，而准备链收到的回执一投就把执行意图标成已完成 → 「准备是否进行中」立刻为假 → 在挂控制台之前静默早退，既不挂控制台也不释放单飞门。修法＝先算放行结果再投回执、BLOCKED 只用于真阻断；准备链 7 处早退改为「结算门 + 返回」；放行态状态行保留「切换数据源」「方言设置」两段可点蓝字；换源就地弹原生列表、单源也弹、只换源不自动提交；排队超时与「被新请求取代」拆成两条独立文案
+- **方言冲突状态渲染实例化整棵设置树，EDT 卡顿且面板停在「执行中」转圈**：判断「方言设置」链接显隐时调了会把整棵设置树实例化的平台 API，第三方设置页构造时抛异常（日志三条 SEVERE），单次 1.2 秒级 EDT 卡顿，异常还把状态行渲染整段吞掉。现链接恒显示、点击时按 id 打开并兜底失败；渲染整段包兜底，失败至少退回纯状态行
+- **注解预览打开后一直「未绑定数据源」，要点一次执行才挂上控制台**：注解预览链的回退编辑器异步创建，准备默认控制台时编辑器还没建好，旧实现直接提前返回。现 SQL 源改为三级回落（原生文档 → 回退编辑器 → 本次预览结果），并补入口锚点日志
+- **折叠结果区后约 2.5 秒又自己长回来；放大窗口时结果区反被撑大**：回收守卫无条件把 160px 最小高度写回（真机 `collapse=true divider=304→508` 后紧跟 `result reclaim guard: bottom re-mounted`），split 变高时分隔条停在旧绝对位置。现守卫读折叠标记、折叠态保持零兜底并重新贴底，展开态才恢复 160px；折叠态挂常驻 resize 监听；准备与复用两处折叠加高度守卫
+- **增强捕获「登记盲区」单条告警平时也出现**：任意一条无登记的执行就打宿主 stderr，而 attach 前的 prepare 是常态（连接池/启动期预热/MyBatis 缓存），看着像常规噪声。现单条降为诊断、默认静默（`logLevel=debug` 可查）；累计 ≥5 次判为系统性盲区才必报，文案改为可行动提示
+- **Marketplace 描述二维码卡片两列不等宽、交流群码部分客户端不显示**：描述区样式覆盖图片 `width` 属性，两个单元格都不写宽度时列宽由说明文字长度决定（本地复现 526px vs 368px，与线上截图 1.43 比例一致）；站点 `group-qr.png` 内容实为 JPEG 却按扩展名返回 `image/png`，配合 nosniff 在部分客户端被拒渲染。现两个 `<td>` 显式等宽、交流群码改引 `.jpg`，原 `.png` 保留不删
+
+### Changed
+- **预览打开速度：每次省 1.7–2.0 秒（T-PreviewConsoleOwnership）**：执行文件的有界等待放在写锁内，后台预热线程先持锁等 EDT，EDT 随后阻塞同一把锁，形成自锁，每次稳定烧满 2000ms 超时；超时后 12–18ms 立刻写完。现临界区收缩为「存在性 + 内容判等 + 首建裸写」，EDT 派发移到锁外；等待失败后重进锁复核，内容仍不一致时不裸写
+
 ## [2026.11.2] - 2026-11-02
 
 > 范围＝v2026.10.31 发行包之后的全部用户可见增量；单项修复版，集中在预览窗「执行 SQL」的取源链路与分页 COUNT 判定。

@@ -1,6 +1,6 @@
 ---
 name: ide-demo-gif
-description: "IntelliJ/JetBrains IDE 功能演示 GIF 录制：脚本重放+帧稳定采样+无损中间产物转制。当用户要求录制、补拍或重录 IDE 插件功能演示动图，把 IDE 内操作过程做成循环 GIF，给文档站/README/发行说明配功能演示图时使用。Windows + pyautogui 桌面自动化；**同一时刻只允许一个 GUI 操作者**——主控或用户明确指派的子代理都可以做，但禁止两路并发操作桌面（合成输入会互相打死）。不适用于网页或移动端录屏。"
+description: "IntelliJ/JetBrains IDE 功能演示动图录制：脚本重放+帧稳定采样+无损中间产物转制，交付 GIF+MP4+WebP 三件套（MP4 为站点主用，体积约 GIF 的 1/3）。当用户要求录制、补拍或重录 IDE 插件功能演示动图，把 IDE 内操作过程做成循环动画，给文档站/README/发行说明配功能演示图时使用。Windows + pyautogui 桌面自动化；**同一时刻只允许一个 GUI 操作者**——主控或用户明确指派的子代理都可以做，但禁止两路并发操作桌面（合成输入会互相打死）。不适用于网页或移动端录屏。"
 when_to_use: "用户说「录一张演示 GIF」「补拍/重录 demo 动图」「给功能页配演示图」且对象是 IDE 内的操作画面时。网页录屏用 browser-use，不要用本 skill。"
 ---
 
@@ -14,7 +14,7 @@ when_to_use: "用户说「录一张演示 GIF」「补拍/重录 demo 动图」�
 
 | 位置 | 内容 | 权威性 |
 |---|---|---|
-| `.agents/skills/ide-demo-gif/scripts/` | 通用基建：`gifkit` `shot` `assemble` `scene_template` `locate` `verify` `black_underlay` `clipread` | **权威源**（改这里，再同步到 `record/` 工作副本） |
+| `.agents/skills/ide-demo-gif/scripts/` | 通用基建：`gifkit` `shot` `assemble` `deliver` `scene_template` `locate` `verify` `black_underlay` `clipread` | **权威源**（改这里，再同步到 `record/` 工作副本） |
 | `record/` | 场景脚本 `scene_*.py`、`BASELINE.md`、`preflight.py`/`prep_env.py`、`lib/nav.py`、`_run_elev.bat` | 项目侧工作位置（场景动作、坐标、沙盒预置） |
 | `record/` 里的 `anchor.py` `robot.py` `mcpnav.py` | 图像锚点 / robot-server 组件树 / IDE MCP 开文件 | 项目侧，**不在** skill scripts 内（未通用化） |
 
@@ -34,15 +34,68 @@ when_to_use: "用户说「录一张演示 GIF」「补拍/重录 demo 动图」�
 | 构图 | 窗口外框 1370×984 @ 屏幕 (277,25)；**录制区域再内缩 8px 去阴影** → `(285,26,1354,974)`（见坑 49） |
 | IDE 缩放 / 编辑器字号 | 120% / 13pt（13pt 是 2026.2 默认值，别再调大） |
 | 主题 | Islands Dark（或目标项目定的官方暗色基准） |
-| 导出 | 15fps，宽 1280（多投放位共用的那张 1440），4~6MB 预算 |
-| 文件 | `<功能名>.gif` + 同名 `.png` poster（关键定格帧） |
+| 导出 | 15fps，宽 1280（多投放位共用的那张 1440） |
+| 交付 | **三件套同名**：`<功能名>.gif`（源/兜底）+ `<功能名>.mp4`（站点主用）+ `<功能名>.webp`（poster）；见下节 |
+| 体积 | 按 **MP4** 验收：单个 ≤600KB，首页第一屏（3~4 张）合计 ≤2MB |
 | 循环 | 首尾帧一致，接缝 diff ≤1 |
 
 投放宽度决定导出宽度：导出宽 ≥ 显示宽 × 1.8 才锐利。换投放位/构图后，脚本里标过的坐标全部要重标。
 
+## 交付三件套（2026-11-03 定例，录完必做）
+
+`assemble.py` 吐出的 GIF + PNG poster 只是**源**。进文档站前必须再过一道后处理，产出三份同名文件：
+
+| 产物 | 编码 | 站点用法 |
+|---|---|---|
+| `<功能名>.gif` | assemble.py 原生 | 源文件；视频加载失败时兜底 |
+| `<功能名>.mp4` | H.264 `crf 24 -preset slow` | **默认加载的就是它**（体积约为 GIF 的 1/3） |
+| `<功能名>.webp` | libwebp `q 82` | poster（视频未就绪/失败时显示；体积约为 PNG 的 1/5） |
+
+一条命令做完（裁框 → mp4 → webp → 校验）：
+
+```bash
+python .agents/skills/ide-demo-gif/scripts/deliver.py <gif 路径> --out <输出目录>
+```
+
+### 1. 必须裁窗框
+
+录制区域虽然已内缩 8px（坑 49），成片四边仍会残留 **5~7px 浅灰窗框**——2026-11-03 全量扫描 90 个站点素材，34 个有框：左/右 5~7px、底 4~7px、顶 0~1px。**逐张量、逐张裁**，不要套固定百分比（`cropdetect` 只认黑边，浅灰框得自己扫像素）。
+
+手工等价命令（`deliver.py` 内部就是这几条）：
+
+```bash
+# 裁 GIF 必须带调色板，否则体积会涨 40~277 倍；dither=none 才能逐像素一致
+ffmpeg -i in.gif -filter_complex "[0:v]crop=W:H:X:Y,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=none" -loop 0 out.gif
+# 视频（偶数尺寸才能走 yuv420p）
+ffmpeg -i in.gif -c:v libx264 -crf 24 -preset slow -pix_fmt yuv420p -movflags +faststart \
+  -vf "crop=W:H:X:Y,scale=trunc(iw/2)*2:trunc(ih/2)*2" out.mp4
+# poster 取关键定格帧再裁
+ffmpeg -i in.gif -frames:v 1 -vf "crop=W:H:X:Y" -c:v libwebp -quality 82 -compression_level 6 out.webp
+```
+
+**零损失校验**：`ffmpeg -i out -i in -filter_complex "[1:v]crop=W:H:X:Y[ref];[0:v][ref]psnr" -f null -`，PNG/poster 应为 `inf`；GIF 多数 `inf`，少数 78~89 dB（单通道 ±1，肉眼不可辨）。
+
+### 2. 体积基线（2026-11-03 全站实测）
+
+| | 原 | 现 | 降幅 |
+|---|---|---|---|
+| 69 个演示 GIF → MP4 | 52.06MB | 18.7MB | −64% |
+| 22 张 poster PNG → WebP | 6.45MB | 1.25MB | −81% |
+| `guide/configuration` 整页媒体 | 2.71MB | 0.85MB | −69% |
+
+GIF 体积不再作为预算指标（它只是源）。慢网下首屏一次拉 7MB 动图要 20 秒以上，视频可流式播放。
+
+### 3. 站点侧引用（文档站仓）
+
+- 组件（`GifPlayer`）：`src` 仍传 `.gif`，组件内部按同名推导 `.mp4`，失败回退 GIF；
+- markdown 直插动图：用 `<figure><video :src="'/demo/x.mp4'" :poster="'/demo/x.webp'" autoplay muted loop playsinline preload="metadata"><figcaption class="visually-hidden">原 alt 文案</figcaption></figure>`；
+  ⚠️ 写成 `src="/demo/x.mp4"`（非绑定字符串）会被 Vite 的 `transformAssetUrls` 当模块解析，构建报 `failed to resolve import`；
+- 静态截图同样转 WebP 后引用 `.webp`。
+
+
 ## 环境就位清单
 
-1. 启动目标 IDE。**平台决定开关**：录 262 沙盒用插件仓 `master` 的标准命令 `./gradlew runIde -PgifRecord=true -PgifRobotServer=true -Pmpvs.licenseAgent=C:/Users/USER/.7t/patch/qwdn-afb.jar --args=<demo 绝对路径>`（gifRecord 切 262；**gifRobotServer 绝不能漏**——prepareSandbox 每次重建沙盒 plugins/ 目录，漏了它 robot-server 就被清掉，2026-10-25 重启漏带导致 robot 全废重装）；**录 243 默认平台（构建 since-build 基线）用 dev 树 `.local/start-ui243.ps1`**（runIde + `-PgifRobotServer=true`、**不带 gifRecord**、init 脚本独立沙盒 + 并行登记）。启用组件定位直接靠 `-PgifRobotServer=true`（机制 A，见标定节）；不要手工拼 `idea64.exe …` 参数（见坑表 32）。**正式站点动图开录前必须验许可**——不止「标题栏无 `Start Free Trial`」，还要确认沙盒 `config/idea.key` 存在（`build/` 被 clean 过就没了，见坑 48）且 `//div[@accessiblename='Database']` 能命中。试用横幅母片只可用于本地/dev 验证，不得同名覆盖正式图。沙盒 IDE 是 java.exe，不是 idea64.exe；身份只认沙盒日志落点。沙盒可能提权，录制脚本也要同权限，且提权运行必须加 `-WindowStyle Hidden`（否则黑控制台盖住 IDE，见坑表 33/34）。
+1. 启动目标 IDE。**平台决定开关**：录 262 沙盒用插件仓 `master` 的标准命令 `./gradlew runIde -PgifRecord=true -PgifRobotServer=true -Pmpvs.licenseAgent=C:/Users/USER/.7t/patch/qwdn-afb.jar --args=<demo 绝对路径>`（gifRecord 切 262；**gifRobotServer 绝不能漏**——prepareSandbox 每次重建沙盒 plugins/ 目录，漏了它 robot-server 就被清掉，2026-10-25 重启漏带导致 robot 全废重装）；**录 243 默认平台（构建 since-build 基线）用 dev 树 `.local/start-ui243.ps1`**（runIde + `-PgifRobotServer=true`、**不带 gifRecord**、init 脚本独立沙盒 + 并行登记）。启用组件定位直接靠 `-PgifRobotServer=true`（机制 A，见标定节）；不要手工拼 `idea64.exe …` 参数（见坑表 32）。**正式站点动图开录前必须验许可**——不止「标题栏无 `Start Free Trial`」，还要确认沙盒 `config/idea.key` 存在（`build/` 被 clean 过就没了，见坑 48）且 `//div[@accessiblename='Database']` 能命中。试用横幅母片只可用于本地/dev 验证，不得同名覆盖正式图。沙盒 IDE 是 java.exe，不是 idea64.exe；身份只认沙盒日志落点。沙盒可能提权，录制脚本也要同权限，且提权运行必须加 `-WindowStyle Hidden`（否则黑控制台盖住 IDE，见坑表 33/34）。**沙盒容器 2026-11-14 起迁到归档仓**（T-SandboxReuse，P0-1）：命令不变，但容器落在 `F:/code/Java/Gitee/SongRenShuo/sql-visualizer-recording/sandbox-live/MPSV-GifFresh`——插件仓 `build/` 被 clean 不再带走沙盒（idea.key/索引/信任态随容器常驻，坑 48 的「clean 后 key 消失」场景由此消解）；旧 `build/MPSV-GifFresh` 若还在，整目录挪到 `sandbox-live/` 即继承全部状态。状态体检/备份/恢复用归档仓 `scripts/sandbox-state.py`（`check`/`backup`/`restore`，白名单制、沙盒运行中拒写）；改版后不想重启 IDE 走 `scripts/hot-reload-plugin.py` 热更新链（**免重启仅限标准安装形态**——20261114 夜 263 日常 IDE 实证 `unloaded=true`→`hot-reloaded` 全链 26s；开发沙盒=目录安装态 `unload=false`，维持重跑 runIde；硬例外＝触设置页的改动必须整轮重启）。判「加载源对不对」的利器＝**rename 探针**（目标 jar rename 成功=没被锁=没被加载）+`jcmd VM.system_properties` 对路径。判「在不在沙盒里」的日志落点随之改为 `sql-visualizer-recording/sandbox-live/MPSV-GifFresh/…/log/idea.log`。
 2. 主题切暗色基准；缩放 120%；编辑器字号确认默认 13pt。沙盒 config 可能被清理（options 只剩 updates.xml）——Islands Dark 与 13pt 是 2026.2 默认值不用动，唯二要重设的是 IDE Scale 120%（Appearance→Zoom，下拉无 120 预设但可直接输入）与关目录树，重设自动持久化。
 3. 窗口定位到录制区域：Win32 `MoveWindow(hwnd, 277, 25, 1370, 984)`（脚本须 SetProcessDpiAwareness(2)）。**等 IDE 完全空闲后再移**——启动期/改完缩放后 AWT 最小高度钳制会把窗口弹回。移完用 `GetWindowRect` 断言 `(277,25,1647,1009)`，**差一点都不行**：外框与录制区域错位会让顶部标题栏或左侧 stripe 被切掉（2026-10-25 实测把窗口挪到 (263,5) 后顶部被切 20px，成片看起来「IDE 没录全」）。
    **录制区域取 `(285,26,1354,974)`，不是外框本身**——外框四边各带 8px 圆角阴影（实测左/右/下各 8px 均值 214~226 的浅色带），照外框录会在成片四周留一圈白边。内缩 8px 后四边均值降到 40~47（IDE 深色本体），画面铺满无白边。高度须为偶数（`Recorder.start` 有断言），974 可以、975 不行。
@@ -91,6 +144,14 @@ python assemble.py perf/tN.mp4 perf/tN.gif --width 1280 --poster perf/tN.png
 
 转制后核对 `decoded 帧数 == Recorder 打印的 frames`（assemble 已修残留帧 bug，但核对是最后防线）。poster 需要指定帧时直接从 mp4 抽：`ffmpeg -i mp4 -vf "select='eq(n\,N)',scale=1280:-2" poster.png`。
 
+**转制完还有一道交付后处理**（裁窗框 → mp4 → webp，一条命令）：
+
+```bash
+python .agents/skills/ide-demo-gif/scripts/deliver.py perf/tN.gif --out perf/deliver
+```
+
+产出 `tN.gif / tN.mp4 / tN.webp` 三件套并自动校验零损失，规格见上文「交付三件套」。**交接给文档站的是 `deliver/` 下这三份**，不是 `perf/` 里未裁框的原片。
+
 **入库分层（本项目）**：可复用的 `record/scene_*.py`、`anchor.py`、`robot.py`、bootstrap 与 `_run_elev.bat` 逐项检查后显式 `git add`；`record/perf/` 存 MP4/转制帧、`record/shots/` 存过程截图、`record/templates/` 存本机模板、`record/robot-plugins/` 存下载插件，均是被 git 忽略的本地产物。一次性 `_probe*.py` / `probe_*.py`、进程检查 PS1 等**新文件放 `record/tmp/`**（本机忽略目录），不要散落在根目录；若探针需要导入 `gifkit` 等根目录模块，显式把 `record/` 加进 `sys.path`。**移入 tmp 的探针统一带幂等兜底块**（2026-10-19 定例）：`sys.path` 初始化不要只取 `dirname(__file__)`——从 record 根移进 tmp 后会只剩 tmp 在路径里、`import ac/bc_common` 直接失败。模板：
 
 ```python
@@ -102,15 +163,17 @@ for _q in (_p, _os.path.dirname(_p)):
         _sys.path.insert(0, _q)
 ```
 
-（`ROOT=Path(__file__).resolve().parents[1]` 的写法在 tmp 下正好指向 record/，无需改；硬编码绝对路径的也无需改。批量改 tmp 文件时注意 PowerShell 5.1 按 ANSI 读无 BOM 的 .ps1——脚本内容必须纯 ASCII，否则中文注释会变乱码并与下一行粘连。）已跟踪的历史 probe 文件不受忽略规则影响。提权封装生成的 `record/_elev_run.log` 也忽略。正式 GIF+PNG 在文档站 `public/demo/` 入库；先核对截图无账号、许可证和项目隐私。不要 `git add record/` 全包暂存，按明确路径提交正式脚本。
+（`ROOT=Path(__file__).resolve().parents[1]` 的写法在 tmp 下正好指向 record/，无需改；硬编码绝对路径的也无需改。批量改 tmp 文件时注意 PowerShell 5.1 按 ANSI 读无 BOM 的 .ps1——脚本内容必须纯 ASCII，否则中文注释会变乱码并与下一行粘连。）已跟踪的历史 probe 文件不受忽略规则影响。提权封装生成的 `record/_elev_run.log` 也忽略。**正式三件套（gif/mp4/webp）在文档站 `public/demo/` 入库**；先核对截图无账号、许可证和项目隐私。不要 `git add record/` 全包暂存，按明确路径提交正式脚本。
 
 ### 4. 验收
 
+- **三件套齐全且同名**：`<功能名>.gif` / `.mp4` / `.webp` 同目录同前缀；mp4 单件 ≤600KB、首页首屏合计 ≤2MB
+- **裁框后四边干净**：抽首帧扫四边，连续浅色带厚度应为 0（原片会有 5~7px）
 - 抽帧检查动作节点/定格/poster 三处内容正确；循环接缝 ≤1（结构性跳变场景除外，需注明）
-- **动画是否在播只能以真实可见渲染（用户目视 / 真实浏览器前台）为准**。IAB（ZCode 内嵌浏览器）**能正常播放 GIF**（2026-09-15 用户实测）；但 canvas 像素采样与单帧截图**不能**作为动画判据——`canvas.drawImage` 对动画 GIF 只绘制首帧（Chromium 行为），像素指纹恒定会产生「静止」假象（2026-09-15 实证：误判 IAB 不播 GIF）。自动验证只做非动画侧：资产多帧（ffprobe 帧数 >60）+ 播放组件结构就绪态 + 断图回落 + 亮暗色 + 实际列宽下文字锐利；**投放位的最终动画确认必须由用户真实可见渲染完成**
-- **断图回落形态由投放位组件决定，验收预期按组件取**：GifPlayer 直出形态（功能详解页，2026-09-15 起取消 poster 兜底）= 失败回落灰色占位盒；首页叠层形态（FeatureAlternate/DocsShowcase）= 失败回落 poster 常驻
-- 投放位建议优先「GIF 随 SSR 初始直出」的文档流 img——hydration 后 JS 动态插入 + absolute 叠层淡入的 GIF 在部分 Chromium 环境存在解码停帧（2026-09-15 用户真实浏览器实证：首页直出结构动画正常、详解页动态插入结构静止，直出后修复）
-- **站点重建后必须重启本地 preview 服务器**（sirv 启动时预扫文件表，陈旧映射对重新生成过的页面返回 404）
+- **动画是否在播只能以真实可见渲染（用户目视 / 真实浏览器前台）为准**。IAB（ZCode 内嵌浏览器）**能正常播放 GIF**（2026-09-15 用户实测）；但 canvas 像素采样与单帧截图**不能**作为动画判据——`canvas.drawImage` 对动画 GIF 只绘制首帧（Chromium 行为），像素指纹恒定会产生「静止」假象（2026-09-15 实证：误判 IAB 不播 GIF）。`<video>` 同理：自动验证只做非动画侧——`readyState === 4` + `!paused` + 实际渲染尺寸，**最终动画确认必须由用户真实可见渲染完成**；自动验证只做非动画侧：资产多帧（ffprobe 帧数 >60）+ 播放组件结构就绪态 + 断图回落 + 亮暗色 + 实际列宽下文字锐利
+- **回落形态由投放位组件决定，验收预期按组件取**：`GifPlayer`（功能详解页）= 视频加载失败回退原 `.gif`，GIF 也失败则灰色占位盒；首页 `FeatureAlternate` / `DocsShowcase` = `poster` 常驻兜底、视频失败摘掉叠层
+- 投放位建议优先「媒体随 SSR 初始直出」的文档流写法——hydration 后 JS 动态插入 + absolute 叠层淡入的动图在部分 Chromium 环境存在解码停帧（2026-09-15 用户真实浏览器实证：首页直出结构动画正常、详解页动态插入结构静止，直出后修复）
+- **站点重建后必须重启本地 preview 服务器**（sirv 启动时预扫文件表，陈旧映射对重新生成过的页面返回 404；新增的 `.mp4/.webp` 在旧进程里也一直 404）
 - 体积超预算优先降静态保留（--hold），不降宽不降帧（暗色低动态画面 0.9MB 也能全帧锐利，低体高不算缺陷）
 
 ## 自检与定位标准件（`$SKILL/scripts/locate.py` / `$SKILL/scripts/verify.py`，`$SKILL=.agents/skills/ide-demo-gif`）
@@ -119,7 +182,7 @@ for _q in (_p, _os.path.dirname(_p)):
 
 > **进阶方向（2026-10-13 专项调研，报告在插件仓 `docs/调研报告/20261013-2130-演示录制点击定位提效工具调研-调研报告.md`；2026-10-18 机制修正）**：本节的 `locate.py` 是**几何推断**（窗口矩形 / 底部偏移 / 像素剖面），控件一换布局就失效。**两条提效路线已落地成模块**（本项目 `record/`；不在本 skill 的 `scripts/`）：① `anchor.py` —— **图像锚点**（`cv2.matchTemplate` 灰度+多尺度，把关键点击点从「算坐标」改成「匹配小模板图」，天然免疫漂移与 CJK 双宽；需装 `opencv-python`——**本机原先缺 `cv2`，`pyautogui.locateCenterOnScreen(confidence=)` 在此之前根本用不了**；⚠️ 纯色区做模板会退化成「到处都 1.0」，`save_template` 已加低方差拒绝）；② `robot.py` —— **组件树定位**（IDE 内 robot-server 的 `POST /xpath/components` 用 XPath 找 Swing 组件，返回的 x/y **相对父组件**，须沿 XPath 祖先链累加到屏幕物理坐标；实测历史页签定位并点击成功）。
 >
-> **robot-server 装入只有机制 A 可用（2026-10-18 实测定案）**：`build.gradle.kts` 的 `localPlugin(...)` 在 `-PgifRobotServer=true` 时把 robot-server 随 prepareSandbox 装进沙盒——**现已与 `gifRecord` 解耦、可独立生效**。旧机制 B（`bootstrap-robot-server.py` 拷进沙盒 `config/plugins/`）**已否决**：runIde 显式钉死 `-Didea.plugins.path=<沙盒>/plugins`，`config/plugins` 不在加载路径（idea.log 零 robot 痕迹、8580 拒连）。另注意 **`-PgifRecord=true` 会把沙盒切到 262**——录 243 默认平台时不要带它；dev 树验收沙盒标准启动＝`.local/start-ui243.ps1`（runIde + `-PgifRobotServer=true`、无 gifRecord、独立 init 脚本沙盒 + 登记表）。**Windows UIA 路线已实测否决**（UIA 只看得到 Swing 顶层 `SunAwtFrame`、children=0，`jabswitch` 已开亦然）。**robot 对 JBPopup 弹层（ListPopup/右键菜单/More 折叠菜单）不可达**，弹层内定位用下表「像素带菜单定位」或键盘 Down×(n−1)+Enter（ListPopup 初始选中第一项）。
+> **robot-server 装入只有机制 A 可用（2026-10-18 实测定案）**：`build.gradle.kts` 的 `localPlugin(...)` 在 `-PgifRobotServer=true` 时把 robot-server 随 prepareSandbox 装进沙盒——**现已与 `gifRecord` 解耦、可独立生效**。旧机制 B（`bootstrap-robot-server.py` 拷进沙盒 `config/plugins/`）**已否决**：runIde 显式钉死 `-Didea.plugins.path=<沙盒>/plugins`，`config/plugins` 不在加载路径（idea.log 零 robot 痕迹、8580 拒连）。另注意 **`-PgifRecord=true` 会把沙盒切到 262**——录 243 默认平台时不要带它；dev 树验收沙盒标准启动＝`.local/start-ui243.ps1`（runIde + `-PgifRobotServer=true`、无 gifRecord、独立 init 脚本沙盒 + 登记表）。**Windows UIA 路线已实测否决**（UIA 只看得到 Swing 顶层 `SunAwtFrame`、children=0，`jabswitch` 已开亦然；20261114 用独立 UIA 客户端 agent-desktop v1.3.1 复核 262 沙盒主窗口同结论——仅 5 个窗口装饰 ref、内容零暴露，判平台级定案，复评条件与探针命令见 `docs/调研报告/20261114-1415-agent-desktop桌面自动化选型-调研报告.md`）。**robot 对 JBPopup 弹层（ListPopup/右键菜单/More 折叠菜单）不可达**，弹层内定位用下表「像素带菜单定位」或键盘 Down×(n−1)+Enter（ListPopup 初始选中第一项）。**2026-10-26 订正**：不可达结论系 XPath 写错——`ActionMenuItem` 就在主窗组件树里，`record/robot.py` 已封装 `menu_items()`（返回弹层全部菜单项屏幕坐标、按 y 排序；组件无 name/text 字段只有 className+几何，且要按屏幕边界过滤关闭后残留的旧坐标）；优先用它，像素带只作兜底。**262 录制腿替代候选**＝官方 Starter+Driver 框架（robot-server 已停更；20261114 试点打通、28s/轮语义闭环，配方见归档仓 `sql-visualizer-recording/driver-pilot/README.md`），正式切换前维持 robot-server。
 
 **定位三件套 `locate.py`（不靠目测）**
 
@@ -265,7 +328,7 @@ open_paths()   # 返回当前激活文件 + 全部打开文件，可用于开录
   **启动约定（用户 2026-10-13 定调、2026-10-13 再次强调）：沙盒只许用「上面这条命令」起，不许用任何「自己拼参数的 `idea64.exe …`」形式。** 两者区别就在这里——前者是「命令」，后者是「自定义命令指定参数」，而后者全都会「看起来正常」地起错：
 
   - `idea64.exe "-Djb.vmOptionsFile=…\sandbox.vmoptions"`：启动器**不解析该命令行参数**，静默退回默认配置 = **起了一个日常 IDE**（2026-10-12 用户连纠两次，定调严重问题）。
-  - `idea64.exe -Didea.config.path=<沙盒>/config -Didea.system.path=… -Didea.plugins.path=…`：看似把沙盒三路径都指了，但**绕过 gradle**（插件改动不重装）且**不读沙盒 `config/idea64.exe.vmoptions`**（用户保留的 agent/参数被静默漏掉）。项目记忆 `runide-demo-verify-workflow` 里那条「手工启动沙盒 IDE 的可用命令」**已作废**，勿再照做。
+  - `idea64.exe -Didea.config.path=<沙盒>/config -Didea.system.path=… -Didea.plugins.path=…`：看似把沙盒三路径都指了，但**绕过 gradle**（插件改动不重装）且**不读沙盒 `config/idea64.exe.vmoptions`**（用户保留的 agent/参数被静默漏掉）。项目记忆 `runide-demo-verify-workflow` 里那条「手工启动沙盒 IDE 的可用命令」**已作废**，勿再照做。**20261114 补实测机理**：jcmd 证实 `plugins.path` 会被启动器**静默重置回 `%APPDATA%` selector 目录**（config/system/log 反而生效）→ 实例「正常起来」却加载日常插件（同 ID 双份时 semver 正式版压过 pre-release beta）；换 `IDEA_PROPERTIES` 环境变量 + 全新 selector 也无效（插件列表仍是日常全套、目标目录 jar 未被锁）。判「加载源对不对」的利器＝**rename 探针**（目标 jar rename 成功=没被锁=没被加载）+ `jcmd VM.system_properties` 对路径。详见 `docs/调研报告/20261114-1500-…-调研报告.md` §2c。
   - `IDEA_VM_OPTIONS` + `record/sandbox_start.cmd`：口径作废（同上，只读 `record/sandbox.vmoptions`）；该 `.cmd` 文件头亦自述「FALLBACK ONLY」，不再作应急备选。
 
   **许可/插件变更会让 IDE 自己重启（`Restarter`）——别顺着走**：它会丢掉沙盒的 `-Didea.config.path`，把 IDE 拉成**日常 IDE**（坑 30），`runIde` 任务随之 exit 7。**正确处置＝杀掉那个进程，重新跑上面这条 gradle 命令**，不要接受它的重启结果。
