@@ -19,16 +19,18 @@ class SqlCompletionClauseSourceTest {
 
     @Test
     fun `子句判定必须读编辑器文档文本`() {
+        // k2j 生产 100% Java：master 的 SqlCompletionContributor.kt 对应本仓 .java。
+        // 守卫语义不变——detectClause 必须读编辑器文档文本，不得读 PSI 文本；仅字面按 Java 语法对齐。
         val src = sourceOf(
-            "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/highlight/SqlCompletionContributor.kt",
+            "src/main/java/cn/song/mybatisplus/visualizer/ui/highlight/SqlCompletionContributor.java",
         )
         assertTrue(
             "detectClause 必须喂 parameters.editor.document.text（与补全器同一坐标系）",
-            "parameters.editor.document.text" in src,
+            "parameters.getEditor().getDocument().getText()" in src,
         )
         assertFalse(
             "不得再把 position.containingFile 的 PSI 文本喂给 detectClause：补全期 PSI 可能尚未 commit",
-            "containingFile?.text" in src,
+            "cf.getText()" in src,
         )
     }
 

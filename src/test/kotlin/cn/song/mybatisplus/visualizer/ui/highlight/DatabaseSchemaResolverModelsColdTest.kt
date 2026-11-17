@@ -50,8 +50,11 @@ class DatabaseSchemaResolverModelsColdTest {
      */
     @Test
     fun `扫描入口必须在遍历前自查模型冷`() {
+        // k2j 生产 100% Java：master 的 DatabaseSchemaResolver.kt 对应本仓 .java。
+        // 守卫语义不变（tryCompute 在 dataSources 遍历前自查模型冷 + 全源 bail 后 stamp），
+        // 仅路径与方法签名字面按 Java 语法对齐。
         val src = resolverSource()
-        val tryComputeBody = src.substringAfter("private fun tryCompute").substringBefore("private fun ")
+        val tryComputeBody = src.substringAfter("private static TableMeta tryCompute").substringBefore("private static ")
         assertTrue(
             "tryCompute 必须在 dataSources 遍历前 return scanBailed（模型冷短路）",
             "modelsColdNow(project)" in tryComputeBody,
@@ -67,11 +70,11 @@ class DatabaseSchemaResolverModelsColdTest {
         while (dir != null) {
             val f = java.io.File(
                 dir,
-                "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/highlight/DatabaseSchemaResolver.kt",
+                "src/main/java/cn/song/mybatisplus/visualizer/ui/highlight/DatabaseSchemaResolver.java",
             )
             if (f.isFile) return f.readText()
             dir = dir.parentFile
         }
-        error("未找到 DatabaseSchemaResolver.kt")
+        error("未找到 DatabaseSchemaResolver.java")
     }
 }

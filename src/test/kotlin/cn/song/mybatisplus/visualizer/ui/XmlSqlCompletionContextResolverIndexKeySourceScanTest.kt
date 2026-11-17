@@ -21,12 +21,13 @@ import java.io.File
 class XmlSqlCompletionContextResolverIndexKeySourceScanTest {
 
     private val source: String by lazy {
+        // k2j 生产 100% Java：master 的 XmlSqlCompletionContextResolver.kt 对应本仓 .java。
         val candidates = listOf(
-            File("src/main/kotlin/cn/song/mybatisplus/visualizer/ui/XmlSqlCompletionContextResolver.kt"),
-            File("../src/main/kotlin/cn/song/mybatisplus/visualizer/ui/XmlSqlCompletionContextResolver.kt"),
+            File("src/main/java/cn/song/mybatisplus/visualizer/ui/XmlSqlCompletionContextResolver.java"),
+            File("../src/main/java/cn/song/mybatisplus/visualizer/ui/XmlSqlCompletionContextResolver.java"),
         )
         candidates.firstOrNull { it.isFile }?.readText(Charsets.UTF_8)
-            ?: error("找不到 XmlSqlCompletionContextResolver.kt（工作目录=${File(".").absolutePath}）")
+            ?: error("找不到 XmlSqlCompletionContextResolver.java（工作目录=${File(".").absolutePath}）")
     }
 
     /** 剥注释后再扫——KDoc 里就写着 `getAnnotations(...)` 这几个字，不剥会把说明文字当成调用点。 */

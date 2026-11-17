@@ -21,11 +21,14 @@ import java.io.File
  *
  * 命名注意：本类**刻意不含** `Guard` 且不以 `SourceScanTest` 结尾——它不是「判定内核型守卫」，
  * 不进 `convention/GuardSelfTestCoverageMetaGuardTest` 的登记面（该类只要求那两类命名登记）。
+ *
+ * k2j 适配：生产 100% Java，扫描面由 `XmlCompletionSymbols.kt` 改为 `XmlCompletionSymbols.java`；
+ * 方法体提取内核的声明正则与合成样本同步改为 Java 语法，守卫语义（方法体不得现扫、必须经清单服务）不变。
  */
 class XmlCompletionNameIndexWiringTest {
 
     private val sourceFile =
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/highlight/XmlCompletionSymbols.kt"
+        "src/main/java/cn/song/mybatisplus/visualizer/ui/highlight/XmlCompletionSymbols.java"
 
     private val wiredFns = listOf("crossFileSqlIds", "configPropertyKeys")
 
@@ -58,13 +61,13 @@ class XmlCompletionNameIndexWiringTest {
     fun `自证_方法体提取区分同前缀函数且报出老形态`() {
         val synthetic = """
             class S {
-                fun crossFileSqlIds(p: Project): List<String> = runCatching {
-                    FileTypeIndex.getFiles(X).map { it }
-                }.getOrElse { emptyList() }
+                public static List<String> crossFileSqlIds(Project p) {
+                    return FileTypeIndex.getFiles(X).stream().map(it -> it).toList();
+                }
 
-                private fun legacyCrossFileSqlIds(p: Project): List<String> = runCatching {
-                    PsiManager.getInstance(p).findFile(vf)
-                }.getOrElse { emptyList() }
+                private static List<String> legacyCrossFileSqlIds(Project p) {
+                    return PsiManager.getInstance(p).findFile(vf);
+                }
             }
         """.trimIndent()
 
@@ -83,7 +86,7 @@ class XmlCompletionNameIndexWiringTest {
             bannedTokens(legacy!!).contains("findFile("),
         )
 
-        val clean = "class C {\n    fun crossFileSqlIds(p: Project) = service.list()\n}"
+        val clean = "class C {\n    public static List<String> crossFileSqlIds(Project p) { return service.list(); }\n}"
         val cleanBody = bodyOf(clean, "crossFileSqlIds")
         assertNotNull("自证：干净形态应能定位", cleanBody)
         assertTrue("自证：干净形态不得误报：$cleanBody", bannedTokens(cleanBody!!).isEmpty())
@@ -96,9 +99,8 @@ class XmlCompletionNameIndexWiringTest {
     /**
      * 类级函数名 → 方法体文本（已剥注释）。
      *
-     * 边界按「4 空格缩进的成员起始行」切：`^ {4}` 后紧跟 `}`/`)` 的行是**表达式体的收尾行**
-     * （`}.getOrElse { … }`），不算成员起始，故方法体会完整包含它——这正是「把 `FileTypeIndex`
-     * 塞进 `.getOrElse` 也不漏」的保证。
+     * 边界按「4 空格缩进的成员起始行」切：Java 类成员同样 4 空格缩进，且 `}`/`)` 收尾行被排除，
+     * 故方法体会完整包含其内所有 8 空格缩进的语句——这正是「把 FileTypeIndex 塞进 try 块也不漏」的保证。
      */
     private fun classFnBodies(source: String): Map<String, String> {
         val lines = stripComments(source).lines()
@@ -148,13 +150,10 @@ class XmlCompletionNameIndexWiringTest {
     }
 
     private companion object {
-        /** 成员起始行：4 空格后不是 `}`/`)` 且非空白（表达式体收尾行因此被排除）。 */
+        /** 成员起始行：4 空格后不是 `}`/`)` 且非空白（方法体收尾行因此被排除）。 */
         val MEMBER_START = Regex("^ {4}(?![)}])\\S")
 
-        /** 类级函数声明（4 空格缩进；可见性修饰符与反引号名都收）。 */
-        val FUN_DECL = Regex(
-            "^ {4}(?:(?:private|internal|public|protected|override|suspend|inline)\\s+)*" +
-                "fun\\s+(`[^`]+`|[\\p{L}_][\\p{L}\\p{N}_]*)\\s*\\(",
-        )
+        /** 类级方法声明（4 空格缩进；捕获方法名——Java 语法：任意前缀后紧跟 `name(`）。 */
+        val FUN_DECL = Regex("^ {4}.*?\\b([\\p{L}_][\\p{L}\\p{N}_]*)\\s*\\(")
     }
 }

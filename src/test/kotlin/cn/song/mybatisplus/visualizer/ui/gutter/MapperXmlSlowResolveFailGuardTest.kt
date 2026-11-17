@@ -46,7 +46,7 @@ class MapperXmlSlowResolveFailGuardTest {
     fun `F1守卫自证_修复后形态放行修复前形态必红`() {
         // 修复后形态（dumb 门前移 + Unknown 留缓存 + Absent 收回缓存）必须放行。
         val fixed = """
-            if (isDumbProvider(project)) return buildStatementMarker(element)
+            if (isDumbProvider.apply(project)) return buildStatementMarker(element)
             return when (MybatisXmlTargets.lookupInterfaceMethod(project, namespace, id)) {
                 is Found -> { resolvedStatementKeys.add(key); buildStatementMarker(element) }
                 Unknown -> if (resolvedStatementKeys.contains(key)) buildStatementMarker(element) else null
@@ -59,7 +59,7 @@ class MapperXmlSlowResolveFailGuardTest {
         val legacyNoEvict = """
             val resolved = lookupInterfaceMethod(project, namespace, id)
             if (resolved != null) { resolvedStatementKeys.add(key); return buildStatementMarker(element) }
-            if (isDumbProvider(project)) return buildStatementMarker(element)
+            if (isDumbProvider.apply(project)) return buildStatementMarker(element)
             if (resolvedStatementKeys.contains(key)) return buildStatementMarker(element)
             return null
         """.trimIndent()
@@ -75,7 +75,7 @@ class MapperXmlSlowResolveFailGuardTest {
         // dumb 门挪到查询之后（索引重建期先查索引 → IndexNotReadyException）必须报红。
         val misordered = """
             val resolved = lookupInterfaceMethod(project, namespace, id)
-            if (isDumbProvider(project)) return buildStatementMarker(element)
+            if (isDumbProvider.apply(project)) return buildStatementMarker(element)
             resolvedStatementKeys.remove(key)
             if (resolvedStatementKeys.contains(key)) return buildStatementMarker(element)
             return null
@@ -116,7 +116,7 @@ class MapperXmlSlowResolveFailGuardTest {
     fun `F1守卫自证_Java侧修复后形态放行修复前形态必红`() {
         // Java 侧修复后形态（dumb 门前移 + 三态兜底）必须放行。
         val fixed = """
-            if (MapperXmlToJavaLineMarkerProvider.isDumbProvider(project)) return buildMethodMarker(element)
+            if (MapperXmlToJavaLineMarkerProvider.isDumbProvider.apply(project)) return buildMethodMarker(element)
             return when (MapperXmlLocator.locateOrUnknown(project, statementId)) {
                 is Found -> { MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add(key); buildMethodMarker(element) }
                 Unknown -> if (MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains(key)) buildMethodMarker(element) else null
@@ -129,7 +129,7 @@ class MapperXmlSlowResolveFailGuardTest {
         val legacyNoEvict = """
             val resolved = MapperXmlLocator.locateOrUnknown(project, statementId)
             if (resolved != null) { MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add(key); return buildMethodMarker(element) }
-            if (MapperXmlToJavaLineMarkerProvider.isDumbProvider(project)) return buildMethodMarker(element)
+            if (MapperXmlToJavaLineMarkerProvider.isDumbProvider.apply(project)) return buildMethodMarker(element)
             if (MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains(key)) return buildMethodMarker(element)
             return null
         """.trimIndent()
@@ -143,25 +143,26 @@ class MapperXmlSlowResolveFailGuardTest {
     // 扫描面与提取器
     // ------------------------------------------------------------------
 
-    private fun sourceFile(): File {
-        val dir = "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter"
+    // k2j 生产 100% Java：master 单文件 MapperNavigationLineMarkerProviders.kt 在本仓拆为两个 .java
+    // （XML 侧 MapperXmlToJavaLineMarkerProvider / Java 侧 MapperJavaToXmlLineMarkerProvider）。
+    // occurrence 0=XML 侧、1=Java 侧，改为按文件分别读取；守卫语义（失败分支三态兜底）不变。
+    private fun sourceFile(occurrence: Int): File {
+        val name = if (occurrence == 0) "MapperXmlToJavaLineMarkerProvider.java" else "MapperJavaToXmlLineMarkerProvider.java"
+        val dir = "src/main/java/cn/song/mybatisplus/visualizer/ui/gutter"
         var root = File(System.getProperty("user.dir")).absoluteFile
         repeat(6) {
-            if (File(root, "src/main/kotlin").isDirectory) return File(File(root, dir), "MapperNavigationLineMarkerProviders.kt")
+            if (File(root, "src/main/java").isDirectory) return File(File(root, dir), name)
             root = root.parentFile ?: return@repeat
         }
-        error("未定位到仓库根（src/main/kotlin 不存在于 user.dir 及上层）: " + System.getProperty("user.dir"))
+        error("未定位到仓库根（src/main/java 不存在于 user.dir 及上层）: " + System.getProperty("user.dir"))
     }
 
-    /** 取文件内第 `occurrence`（0 起）个 `private fun createMarker` 的配平方法体——0=XML 侧，1=Java 侧。 */
+    /** 取对应 provider 文件内 `private static LineMarkerInfo<PsiElement> createMarker` 的配平方法体。 */
     private fun extractCreateMarkerBody(occurrence: Int = 0): String? {
-        val stripped = stripComments(sourceFile().readText())
-        val marker = "private fun createMarker"
-        var start = -1
-        repeat(occurrence + 1) {
-            start = stripped.indexOf(marker, if (start < 0) 0 else start + marker.length)
-            if (start < 0) return null
-        }
+        val stripped = stripComments(sourceFile(occurrence).readText())
+        val marker = "private static LineMarkerInfo<PsiElement> createMarker"
+        val start = stripped.indexOf(marker)
+        if (start < 0) return null
         val open = stripped.indexOf('{', start + marker.length)
         if (open < 0) return null
         var depth = 0
@@ -189,7 +190,8 @@ class MapperXmlSlowResolveFailGuardTest {
         if (resolveIdx < 0) return null
         val before = body.substring(0, resolveIdx)
         val after = body.substring(resolveIdx)
-        return before.contains("isDumbProvider(") &&
+        // k2j: Kotlin isDumbProvider(project) → Java isDumbProvider.apply(project)。
+        return before.contains("isDumbProvider.apply(") &&
             after.contains("resolvedStatementKeys.contains(") &&
             after.contains("resolvedStatementKeys.remove(")
     }

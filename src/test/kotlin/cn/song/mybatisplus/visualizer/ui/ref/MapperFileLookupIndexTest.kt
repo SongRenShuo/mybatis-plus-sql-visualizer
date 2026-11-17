@@ -23,9 +23,11 @@ import java.io.File
  */
 class MapperFileLookupIndexTest {
 
+    // k2j 生产 100% Java：守卫扫描面 .kt→.java；判据不变（必须走 MapperNamespaceIndex 自定义索引、
+    // 不得回退 FileTypeIndex 全项目 XML 全扫）。
     private val indexedFiles = listOf(
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/ref/MybatisXmlTargets.kt",
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/psi/XmlCrossNsFragmentResolver.kt",
+        "src/main/java/cn/song/mybatisplus/visualizer/ui/ref/MybatisXmlTargets.java",
+        "src/main/java/cn/song/mybatisplus/visualizer/psi/XmlCrossNsFragmentResolver.java",
     )
 
     @Test

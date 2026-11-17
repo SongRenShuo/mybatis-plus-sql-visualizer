@@ -45,24 +45,23 @@ class IbatisGutterFailBranchGuardTest {
     fun `P2守卫自证_修复后形态放行修复前形态与错位形态必红`() {
         // 修复后形态：dumb 门在查询之前 + Unknown 留缓存 + Absent 收回缓存。
         val fixed = """
-            if (isDumbProvider(project)) return buildMarkers(element, first, previewEnabled)
-            return when (val lookup = lookupStatementAnchors(project, statementId, ownerNamespace)) {
-                is Lookup.Found -> { resolvedIbatisKeys.add(key); buildMarkers(element, first, previewEnabled) }
-                Lookup.Unknown -> if (resolvedIbatisKeys.contains(key)) buildMarkers(element, first, previewEnabled) else null
-                Lookup.Absent -> { resolvedIbatisKeys.remove(key); null }
-            }
+            if (isDumbProvider.apply(project)) return buildMarkers(element, first, previewEnabled)
+            Lookup lookup = lookupStatementAnchors(project, statementId, ownerNamespace);
+            if (lookup instanceof Lookup.Found) { RESOLVED_IBATIS_KEYS.add(key); return buildMarkers(element, first, previewEnabled); }
+            if (lookup instanceof Lookup.Unknown) return RESOLVED_IBATIS_KEYS.contains(key) ? buildMarkers(element, first, previewEnabled) : null;
+            RESOLVED_IBATIS_KEYS.remove(key); return null;
         """.trimIndent()
         assertEquals("修复后形态必须放行（wiring=true）", true, failureBranchWiring(fixed))
 
         // 修复前形态（P2 首版）：dumb 门与缓存命中也都在，唯独缓存**只进不出**——
         // Absent 也靠 contains 续命，改 namespace 后图标不消失。缺少 remove 一项即须报红。
         val legacyNoEvict = """
-            if (isDumbProvider(project)) return buildMarkers(element, first, previewEnabled)
-            if (lookupStatementAnchors(project, statementId, ownerNamespace).isNotEmpty()) {
-                resolvedIbatisKeys.add(key)
+            if (isDumbProvider.apply(project)) return buildMarkers(element, first, previewEnabled)
+            if (!lookupStatementAnchors(project, statementId, ownerNamespace).isEmpty()) {
+                RESOLVED_IBATIS_KEYS.add(key)
                 return buildMarkers(element, first, previewEnabled)
             }
-            if (resolvedIbatisKeys.contains(key)) return buildMarkers(element, first, previewEnabled)
+            if (RESOLVED_IBATIS_KEYS.contains(key)) return buildMarkers(element, first, previewEnabled)
             return null
         """.trimIndent()
         assertEquals("缓存只进不出（无 remove）必须报红", false, failureBranchWiring(legacyNoEvict))
@@ -76,19 +75,19 @@ class IbatisGutterFailBranchGuardTest {
 
         // dumb 门挪到索引查询之后（dumb 期先查索引 → IndexNotReadyException）同样必须报红。
         val misordered = """
-            val anchors = lookupStatementAnchors(project, statementId, ownerNamespace)
-            if (isDumbProvider(project)) return buildMarkers(element, first, previewEnabled)
-            resolvedIbatisKeys.remove(key)
-            if (resolvedIbatisKeys.contains(key)) return buildMarkers(element, first, previewEnabled)
+            Lookup anchors = lookupStatementAnchors(project, statementId, ownerNamespace);
+            if (isDumbProvider.apply(project)) return buildMarkers(element, first, previewEnabled)
+            RESOLVED_IBATIS_KEYS.remove(key)
+            if (RESOLVED_IBATIS_KEYS.contains(key)) return buildMarkers(element, first, previewEnabled)
             return null
         """.trimIndent()
         assertEquals("dumb 门晚于索引查询必须报红", false, failureBranchWiring(misordered))
 
         // 缓存分支挪到查询之前（先查缓存再解析）也必须报红——守住「判定在失败分支上」。
         val cacheFirst = """
-            if (resolvedIbatisKeys.contains(key)) return buildMarkers(element, first, previewEnabled)
-            resolvedIbatisKeys.remove(key)
-            if (lookupStatementAnchors(project, statementId, ownerNamespace) is Lookup.Found) return buildMarkers(element, first, previewEnabled)
+            if (RESOLVED_IBATIS_KEYS.contains(key)) return buildMarkers(element, first, previewEnabled)
+            RESOLVED_IBATIS_KEYS.remove(key)
+            if (lookupStatementAnchors(project, statementId, ownerNamespace) instanceof Lookup.Found) return buildMarkers(element, first, previewEnabled)
             return null
         """.trimIndent()
         assertEquals("缓存分支先于查询必须报红", false, failureBranchWiring(cacheFirst))
@@ -107,15 +106,17 @@ class IbatisGutterFailBranchGuardTest {
      */
     @Test
     fun `箭头门槛守卫_XML侧createMarker必须挂三态`() {
+        // k2j 生产 100% Java：扫描面 .kt→.java，token 按 Java 命名对齐（RESOLVED_IBATIS_CALL_KEYS 等），
+        // 守卫语义不变（dumb 门在查询前、Unknown 留缓存、Absent 收回缓存）。
         val body = extractBody(
-            "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlToJavaLineMarkerProvider.kt",
-            "private fun createMarker",
+            "src/main/java/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlToJavaLineMarkerProvider.java",
+            "private LineMarkerInfo<?> createMarker",
         ) ?: error("无法提取 IbatisXmlToJavaLineMarkerProvider.createMarker 方法体（签名形态漂移？）——守卫扫描面失效按红处理")
         val wiring = failureBranchWiring(
             body,
             anchor = "IbatisJavaCallSites.lookupCallSite(",
-            keepToken = "resolvedIbatisCallKeys.contains(",
-            evictToken = "resolvedIbatisCallKeys.remove(",
+            keepToken = "RESOLVED_IBATIS_CALL_KEYS.contains(",
+            evictToken = "RESOLVED_IBATIS_CALL_KEYS.remove(",
         )
         assertNotNull("createMarker 内必须存在 IbatisJavaCallSites.lookupCallSite 调用（扫描面漂移？）", wiring)
         assertTrue(
@@ -133,16 +134,16 @@ class IbatisGutterFailBranchGuardTest {
             failureBranchWiring(
                 "return buildMarker(element)",
                 anchor = "IbatisJavaCallSites.lookupCallSite(",
-                keepToken = "resolvedIbatisCallKeys.contains(",
-                evictToken = "resolvedIbatisCallKeys.remove(",
+                keepToken = "RESOLVED_IBATIS_CALL_KEYS.contains(",
+                evictToken = "RESOLVED_IBATIS_CALL_KEYS.remove(",
             ),
         )
         val legacy = """
             if (!requiresCallerProvider()) return buildMarker(element)
-            if (isDumbProvider(project)) return buildMarker(element)
-            val exists = IbatisJavaCallSites.lookupCallSite(project, namespace, statementId) != null
-            if (resolvedIbatisCallKeys.contains(key)) return buildMarker(element)
-            return if (exists) buildMarker(element) else null
+            if (isDumbProvider.apply(project)) return buildMarker(element)
+            boolean exists = IbatisJavaCallSites.lookupCallSite(project, namespace, statementId) != null
+            if (RESOLVED_IBATIS_CALL_KEYS.contains(key)) return buildMarker(element)
+            return exists ? buildMarker(element) : null
         """.trimIndent()
         assertEquals(
             "只进不出（缺 remove）必须报红",
@@ -150,8 +151,8 @@ class IbatisGutterFailBranchGuardTest {
             failureBranchWiring(
                 legacy,
                 anchor = "IbatisJavaCallSites.lookupCallSite(",
-                keepToken = "resolvedIbatisCallKeys.contains(",
-                evictToken = "resolvedIbatisCallKeys.remove(",
+                keepToken = "RESOLVED_IBATIS_CALL_KEYS.contains(",
+                evictToken = "RESOLVED_IBATIS_CALL_KEYS.remove(",
             ),
         )
     }
@@ -187,7 +188,7 @@ class IbatisGutterFailBranchGuardTest {
     }
 
     private fun sourceFile(): File {
-        val relative = "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisJavaToXmlLineMarkerProvider.kt"
+        val relative = "src/main/java/cn/song/mybatisplus/visualizer/ui/gutter/IbatisJavaToXmlLineMarkerProvider.java"
         var root = File(System.getProperty("user.dir")).absoluteFile
         repeat(6) {
             val candidate = File(root, relative)
@@ -200,7 +201,7 @@ class IbatisGutterFailBranchGuardTest {
     /** 取 `private fun createMarkers` 的配平方法体（该文件中唯一一次出现，形态漂移即返回 null）。 */
     private fun extractCreateMarkersBody(): String? {
         val stripped = stripComments(sourceFile().readText())
-        val marker = "private fun createMarkers"
+        val marker = "private List<LineMarkerInfo<?>> createMarkers"
         val start = stripped.indexOf(marker)
         if (start < 0) return null
         val open = stripped.indexOf('{', start + marker.length)
@@ -227,14 +228,15 @@ class IbatisGutterFailBranchGuardTest {
     private fun failureBranchWiring(
         body: String,
         anchor: String = "lookupStatementAnchors(",
-        keepToken: String = "resolvedIbatisKeys.contains(",
-        evictToken: String = "resolvedIbatisKeys.remove(",
+        keepToken: String = "RESOLVED_IBATIS_KEYS.contains(",
+        evictToken: String = "RESOLVED_IBATIS_KEYS.remove(",
     ): Boolean? {
         val resolveIdx = body.indexOf(anchor)
         if (resolveIdx < 0) return null
         val before = body.substring(0, resolveIdx)
         val after = body.substring(resolveIdx)
-        return before.contains("isDumbProvider(") &&
+        // k2j: Kotlin isDumbProvider(project) → Java isDumbProvider.apply(project)。
+        return before.contains("isDumbProvider.apply(") &&
             after.contains(keepToken) &&
             after.contains(evictToken)
     }

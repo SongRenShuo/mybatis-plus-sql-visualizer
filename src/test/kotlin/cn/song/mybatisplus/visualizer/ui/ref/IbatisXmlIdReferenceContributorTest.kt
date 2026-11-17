@@ -228,7 +228,8 @@ class IbatisXmlIdReferenceContributorTest : BasePlatformTestCase() {
      * 判据是「这个函数体里没有索引/文件清单调用」。
      */
     fun testF1_同文件解析_函数体零索引查询() {
-        val body = functionBody("fun resolveSameFileIdReference(")
+        // k2j 生产 100% Java：扫描面 .kt→.java，方法签名字面按 Java 语法对齐；守卫语义不变。
+        val body = functionBody("XmlAttributeValue resolveSameFileIdReference(")
             ?: error("无法提取 IbatisXmlStatementTargets.resolveSameFileIdReference 方法体——守卫扫描面失效按红处理")
         assertFalse("同文件 id 解析不得触发项目级索引/文件清单（热路径）", touchesProjectIndex(body))
         // 自证（防空绿）：合成样本必须被抓出——判定器退化成恒 false 即为空绿
@@ -253,7 +254,7 @@ class IbatisXmlIdReferenceContributorTest : BasePlatformTestCase() {
 
     /** 取 [IbatisXmlStatementTargets] 源码里指定函数签名的配平方法体（剥注释不做，方法体内无 `//` 陷阱）。 */
     private fun functionBody(signature: String): String? {
-        val source = repoFile("src/main/kotlin/cn/song/mybatisplus/visualizer/ui/nav/IbatisXmlStatementTargets.kt")
+        val source = repoFile("src/main/java/cn/song/mybatisplus/visualizer/ui/nav/IbatisXmlStatementTargets.java")
             ?: return null
         val text = source.readText()
         val start = text.indexOf(signature)
@@ -304,10 +305,11 @@ class IbatisXmlIdReferenceContributorTest : BasePlatformTestCase() {
 
     /** 红线守卫：本包源码不得出现校验器形态类注册面（既有 `MybatisXmlReferenceTest` 同款口径）。 */
     fun testF1_红线_本包无校验器形态() {
-        val dir = java.io.File("src/main/kotlin/cn/song/mybatisplus/visualizer/ui/ref")
+        // k2j 生产 100% Java：扫描面 .kt→.java；红线判据（不得引入校验器形态）不变。
+        val dir = java.io.File("src/main/java/cn/song/mybatisplus/visualizer/ui/ref")
         assertTrue("ui/ref 源码目录存在", dir.isDirectory)
         val banned = listOf("LocalInspectionTool", "Annotator", "ProblemHighlightType", "HighlightInfo", "InspectionManager")
-        val offenders = dir.listFiles { f -> f.name.endsWith(".kt") }.orEmpty()
+        val offenders = dir.listFiles { f -> f.name.endsWith(".java") }.orEmpty()
             .filter { f -> banned.any { f.readText().contains(it) } }
             .map { f -> f.name }
         assertFalse("ui/ref 不得引入校验器形态（红线）：$offenders", offenders.isNotEmpty())

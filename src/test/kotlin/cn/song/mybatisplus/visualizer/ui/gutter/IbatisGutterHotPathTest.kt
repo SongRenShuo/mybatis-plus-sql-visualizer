@@ -33,11 +33,12 @@ import java.io.File
  */
 class IbatisGutterHotPathTest {
 
+    // k2j 生产 100% Java：master 的 .kt 生产文件对应本仓 .java；守卫语义（热路径零 resolve/零索引）不变。
     private val providerRelativePath =
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlGutterLineMarkerProvider.kt"
+        "src/main/java/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlGutterLineMarkerProvider.java"
 
     private val detectorRelativePath =
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/xml/XmlInlineSqlDetector.kt"
+        "src/main/java/cn/song/mybatisplus/visualizer/xml/XmlInlineSqlDetector.java"
 
     /**
      * T-Ibatis2Gap 券 B 扩面：两个跳转 provider 的扫描面。
@@ -57,10 +58,10 @@ class IbatisGutterHotPathTest {
      * 两枚 marker），两份 provider 的函数名不再相同，故按文件分列；签名再漂移时提取失败会直接 error。
      */
     private val navProviderScanMarkers: Map<String, List<String>> = mapOf(
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlToJavaLineMarkerProvider.kt" to
-            listOf("override fun collectSlowLineMarkers", "private fun createMarker"),
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisJavaToXmlLineMarkerProvider.kt" to
-            listOf("override fun collectSlowLineMarkers", "private fun createMarkers"),
+        "src/main/java/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlToJavaLineMarkerProvider.java" to
+            listOf("public void collectSlowLineMarkers", "private LineMarkerInfo<?> createMarker"),
+        "src/main/java/cn/song/mybatisplus/visualizer/ui/gutter/IbatisJavaToXmlLineMarkerProvider.java" to
+            listOf("public void collectSlowLineMarkers", "private List<LineMarkerInfo<?>> createMarkers"),
     )
 
     /** 禁止 token（正则片段；判定前先剥注释，故 KDoc 里点名这些 API 不会误报）。 */
@@ -85,7 +86,7 @@ class IbatisGutterHotPathTest {
     @Test
     fun `provider热路径_getLineMarkerInfo零resolve零索引查询`() {
         val source = readMain(providerRelativePath)
-        val body = extractBracedBody(stripComments(source), "override fun getLineMarkerInfo")
+        val body = extractBracedBody(stripComments(source), "LineMarkerInfo<PsiElement> getLineMarkerInfo")
             ?: error("无法提取 getLineMarkerInfo 方法体（签名形态漂移？）——扫描面失效按红处理")
         assertNoForbidden("getLineMarkerInfo", body)
     }
@@ -93,7 +94,7 @@ class IbatisGutterHotPathTest {
     @Test
     fun `provider热路径_isStatementAnchor零resolve零索引查询`() {
         val source = readMain(providerRelativePath)
-        val body = extractBracedBody(stripComments(source), "internal fun isStatementAnchor")
+        val body = extractBracedBody(stripComments(source), "boolean isStatementAnchor")
             ?: error("无法提取 isStatementAnchor 函数体（签名形态漂移？）——扫描面失效按红处理")
         assertNoForbidden("isStatementAnchor", body)
     }
@@ -102,7 +103,7 @@ class IbatisGutterHotPathTest {
     @Test
     fun `让位判定_isClaimedByKnownStructure零resolve零索引查询`() {
         val source = readMain(detectorRelativePath)
-        val body = extractBracedBody(stripComments(source), "fun isClaimedByKnownStructure")
+        val body = extractBracedBody(stripComments(source), "boolean isClaimedByKnownStructure")
             ?: error("无法提取 isClaimedByKnownStructure 函数体（签名形态漂移？）——扫描面失效按红处理")
         assertNoForbidden("isClaimedByKnownStructure", body)
     }

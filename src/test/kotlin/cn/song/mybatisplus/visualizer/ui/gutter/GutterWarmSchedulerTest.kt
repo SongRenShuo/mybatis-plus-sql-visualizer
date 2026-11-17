@@ -54,13 +54,14 @@ class GutterWarmSchedulerTest {
     // ② 接线守卫（源码扫，剥离注释）
     // ------------------------------------------------------------------
 
+    // k2j 生产 100% Java：守卫扫描面由 .kt 改为 .java；接线语义（三条预热经调度器）不变。
     private fun repoRoot(): File {
         var dir = File(System.getProperty("user.dir")).absoluteFile
         repeat(6) {
-            if (File(dir, "src/main/kotlin").isDirectory) return dir
+            if (File(dir, "src/main/java").isDirectory) return dir
             dir = dir.parentFile ?: return@repeat
         }
-        error("未定位到仓库根（src/main/kotlin 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
+        error("未定位到仓库根（src/main/java 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
     }
 
     /** 剥离 block 注释与行注释（与 AcpTransportScopeSourceScanTest 同款）。 */
@@ -85,11 +86,11 @@ class GutterWarmSchedulerTest {
     @Test
     fun `首渲染预热必须经调度器`() {
         val source = stripComments(
-            readMainSource("src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/XmlSqlGutterLineMarkerProvider.kt"),
+            readMainSource("src/main/java/cn/song/mybatisplus/visualizer/ui/gutter/XmlSqlGutterLineMarkerProvider.java"),
         )
         val getLineMarkerInfoBody = source
-            .substringAfter("override fun getLineMarkerInfo")
-            .substringBefore("private fun prefetchMbgExample")
+            .substringAfter("LineMarkerInfo<PsiElement> getLineMarkerInfo")
+            .substringBefore("public static void kickFileWarmers")
         assertTrue(
             "getLineMarkerInfo 必须经 GutterWarmScheduler.onGutterFirstRender 调度（F2：三链合并为一个调度点）",
             getLineMarkerInfoBody.contains("GutterWarmScheduler.onGutterFirstRender("),
@@ -104,7 +105,7 @@ class GutterWarmSchedulerTest {
     @Test
     fun `调度器到点踢出必须走统一踢出点且三链齐全`() {
         val scheduler = stripComments(
-            readMainSource("src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/GutterWarmScheduler.kt"),
+            readMainSource("src/main/java/cn/song/mybatisplus/visualizer/ui/gutter/GutterWarmScheduler.java"),
         )
         assertTrue(
             "调度器必须经 XmlSqlGutterLineMarkerProvider.kickFileWarmers 踢出（三链顺序与去重语义集中在 provider）",
@@ -115,11 +116,11 @@ class GutterWarmSchedulerTest {
             scheduler.contains("shouldKickNow("),
         )
         val provider = stripComments(
-            readMainSource("src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/XmlSqlGutterLineMarkerProvider.kt"),
+            readMainSource("src/main/java/cn/song/mybatisplus/visualizer/ui/gutter/XmlSqlGutterLineMarkerProvider.java"),
         )
         val kickBody = provider
-            .substringAfter("internal fun kickFileWarmers")
-            .substringBefore("private fun warmCompletionContextOnce")
+            .substringAfter("public static void kickFileWarmers")
+            .substringBefore("private static void prefetchMbgExample")
         val missing = THREE_CHAIN_CALLS.filter { !kickBody.contains(it) }
         assertTrue("统一踢出点必须保留全部三条预热链（缺=$missing）", missing.isEmpty())
     }
@@ -140,7 +141,7 @@ class GutterWarmSchedulerTest {
             registryDecl.contains("""defaultValue="5000""""),
         )
         val scheduler = stripComments(
-            readMainSource("src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/GutterWarmScheduler.kt"),
+            readMainSource("src/main/java/cn/song/mybatisplus/visualizer/ui/gutter/GutterWarmScheduler.java"),
         )
         assertTrue(
             "delay<=0 必须走立即踢（旧行为回退通道）",
@@ -163,7 +164,7 @@ class GutterWarmSchedulerTest {
      * 提取不到方法体返回 null（调用方按红处理）。
      */
     private fun readActionWiring(schedulerSource: String): Boolean? {
-        val body = schedulerSource.substringAfter("private fun scheduleWarmIfDue", "")
+        val body = schedulerSource.substringAfter("private static void scheduleWarmIfDue", "")
         if (body.isEmpty()) return null
         val readActionIdx = body.indexOf("runReadAction(")
         if (readActionIdx < 0) return false
@@ -174,7 +175,7 @@ class GutterWarmSchedulerTest {
     @Test
     fun `延迟派发体必须包读动作`() {
         val wiring = readActionWiring(
-            stripComments(readMainSource("src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/GutterWarmScheduler.kt")),
+            stripComments(readMainSource("src/main/java/cn/song/mybatisplus/visualizer/ui/gutter/GutterWarmScheduler.java")),
         )
         assertNotNull("无法提取 scheduleWarmIfDue 方法体（签名漂移？）——守卫扫描面失效按红处理", wiring)
         assertTrue(
@@ -188,26 +189,27 @@ class GutterWarmSchedulerTest {
     @Test
     fun `守卫自证_延迟派发体漏读动作必须报红`() {
         val legacy = """
-            private fun scheduleWarmIfDue(project: Project, tag: XmlTag, fileUrl: String, remainingMs: Long) {
-                val fire = Runnable {
-                    val due = tag.isValid
-                    if (due) XmlSqlGutterLineMarkerProvider.kickFileWarmers(tag)
-                }
+            private static void scheduleWarmIfDue(Project project, XmlTag tag, String fileUrl, long remainingMs) {
+                Runnable fire = () -> {
+                    boolean due = tag.isValid();
+                    if (due) XmlSqlGutterLineMarkerProvider.kickFileWarmers(tag);
+                };
             }
         """.trimIndent()
         assertEquals("修复前形态（池线程直读 PSI）必须报红", false, readActionWiring(legacy))
 
         val fixed = """
-            private fun scheduleWarmIfDue(project: Project, tag: XmlTag, fileUrl: String, remainingMs: Long) {
-                val fire = Runnable {
-                    app.runReadAction(Computable {
-                        if (tag.isValid) XmlSqlGutterLineMarkerProvider.kickFileWarmers(tag)
-                    })
-                }
+            private static void scheduleWarmIfDue(Project project, XmlTag tag, String fileUrl, long remainingMs) {
+                Runnable fire = () -> {
+                    app.runReadAction((Computable<Void>) () -> {
+                        if (tag.isValid()) XmlSqlGutterLineMarkerProvider.kickFileWarmers(tag);
+                        return null;
+                    });
+                };
             }
         """.trimIndent()
         assertEquals("修复后形态必须放行", true, readActionWiring(fixed))
 
-        assertNull("扫描面漂移（无该方法）按红处理", readActionWiring("private fun other() {}"))
+        assertNull("扫描面漂移（无该方法）按红处理", readActionWiring("private static void other() {}"))
     }
 }
