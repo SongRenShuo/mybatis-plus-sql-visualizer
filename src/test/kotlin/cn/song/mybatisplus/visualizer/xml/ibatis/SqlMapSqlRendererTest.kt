@@ -130,7 +130,7 @@ class SqlMapSqlRendererTest {
         assertEquals("SELECT * FROM T_ORG WHERE 1=1 AND A = ?", result.sql)
         assertEquals(1, result.dollarRawCount)
         assertEquals(listOf("T_ORG"), result.dollarRenderedValues)
-        assertTrue("含 $ 直替段必须可被注入闸门识别", result.isHasDollarRawSegments())
+        assertTrue("含 $ 直替段必须可被注入闸门识别", result.hasDollarRawSegments())
     }
 
     @Test

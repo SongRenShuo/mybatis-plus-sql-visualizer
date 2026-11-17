@@ -73,7 +73,7 @@ class SqlMapParserTest {
 
         val statement = parsed.statementById("s")!!
         assertEquals("pm", statement.parameterMapRef)
-        assertTrue(statement.hasParameterMapDeclaration)
+        assertTrue(statement.isHasParameterMapDeclaration())
         assertNotNull("应按 applyNamespace 解析到声明", statement.parameterMap)
         assertTrue(
             "非动态语句声明 parameterMap 必须给出配置错误告警",
@@ -86,7 +86,7 @@ class SqlMapParserTest {
         val parsed = parser.parse("""<sqlMap><select id="s" parameterMap="missing">SELECT ?</select></sqlMap>""")
         val statement = parsed.statementById("s")!!
         assertTrue(statement.warnings.any { it.contains("找不到对应 <parameterMap>") })
-        assertTrue(statement.hasParameterMapDeclaration)
+        assertTrue(statement.isHasParameterMapDeclaration())
         assertNull(statement.parameterMap)
     }
 

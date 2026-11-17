@@ -66,7 +66,7 @@ class IbatisParamModelTest {
         assertEquals("isEqual 的比较值进条件行（面板预填值输入）", "1", m.conditionRows[2].compareValue)
         assertTrue("iterate 行清单为空", m.iterateRows.isEmpty())
         assertEquals("\$ 直替站点行（\$\$ 转义不算站点）", listOf("username"), m.dollarRows.map { it.name })
-        assertTrue(m.hasControls)
+        assertTrue(m.hasControls())
     }
 
     @Test

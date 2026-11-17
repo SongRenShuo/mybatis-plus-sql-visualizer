@@ -73,15 +73,13 @@ class IbatisParamClassQuoteHeavyTest : HeavyPlatformTestCase() {
 
     private fun backfill(id: String, values: Map<String, String>, parameterClass: String = "User"): String {
         val result = IbatisXmlPreviewService.preview(
-            xml, id,
-            project = project,
-            parameterClass = parameterClass,
+            xml, id, null, 0, project, parameterClass, null,
         )
         return ParameterReplacer.buildExecutableSql(
-            sql = result.sql,
-            sources = result.unresolvedParams,
-            paramValues = values,
-            hints = result.paramHints,
+            result.getSql(),
+            result.getUnresolvedParams(),
+            values,
+            result.getParamHints(),
         )
     }
 
@@ -106,7 +104,7 @@ class IbatisParamClassQuoteHeavyTest : HeavyPlatformTestCase() {
         val type = field?.type
         val typeHint = type?.let { IbatisParameterClassResolver.hintOfType(it) }
         val strict = runCatching {
-            IbatisParameterClassResolver.resolveStrict(project, "User", listOf("username"))
+            IbatisParameterClassResolver.resolveStrict(project, "User", listOf("username"), null)
         }
         assertFalse(
             "shortName=${byShortName.size} cls=${cls?.qualifiedName} field=${field?.name} " +
@@ -141,10 +139,10 @@ class IbatisParamClassQuoteHeavyTest : HeavyPlatformTestCase() {
     fun testMultipleSameNameCandidatesKeepsHeuristic() {
         addClassFile("UserInP.java", "package p; public class User { private String username; }")
         addClassFile("UserInQ.java", "package q; public class User { private String username; }")
-        val result = IbatisXmlPreviewService.preview(xml, "byName", project = project, parameterClass = "User")
+        val result = IbatisXmlPreviewService.preview(xml, "byName", null, 0, project, "User", null)
         assertTrue(
-            "多候选且同模块无法区分时应弃权：${result.paramHints}",
-            result.paramHints.all { it.quote == null },
+            "多候选且同模块无法区分时应弃权：${result.getParamHints()}",
+            result.getParamHints().all { it.getQuote() == null },
         )
     }
 
@@ -159,8 +157,8 @@ class IbatisParamClassQuoteHeavyTest : HeavyPlatformTestCase() {
     fun testNoProjectKeepsHeuristic() {
         addUserClass()
         val result = IbatisXmlPreviewService.preview(xml, "byName")
-        assertEquals("SELECT ID FROM T_USER WHERE USER_NAME = ?", result.sql)
-        assertTrue("无 project 时不应产 hint：${result.paramHints}", result.paramHints.all { it.quote == null })
+        assertEquals("SELECT ID FROM T_USER WHERE USER_NAME = ?", result.getSql())
+        assertTrue("无 project 时不应产 hint：${result.getParamHints()}", result.getParamHints().all { it.getQuote() == null })
     }
 
     /**
@@ -182,15 +180,13 @@ class IbatisParamClassQuoteHeavyTest : HeavyPlatformTestCase() {
             """.trimMargin(),
         )
         val result = IbatisXmlPreviewService.preview(
-            xml, "byName",
-            project = project,
-            parameterClass = "User",
-            moduleName = ModuleManager.getInstance(project).modules.first().name,
+            xml, "byName", null, 0, project, "User",
+            ModuleManager.getInstance(project).modules.first().name,
         )
         assertEquals(
-            "别名指向 p.User ⇒ 应拿到类型并加引号：${result.paramHints}",
+            "别名指向 p.User ⇒ 应拿到类型并加引号：${result.getParamHints()}",
             true,
-            result.paramHints.single().quote,
+            result.getParamHints().single().getQuote(),
         )
     }
 }
