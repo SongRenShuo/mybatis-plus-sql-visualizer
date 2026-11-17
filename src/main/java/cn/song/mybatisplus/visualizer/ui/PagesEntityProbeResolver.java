@@ -33,18 +33,8 @@ public final class PagesEntityProbeResolver {
     @Nullable
     public static PagesEntityProbe probeCheap(Project project, String name, @Nullable PsiElement context) {
         // T-Ibatis2SlowFix（master 券 0）：同步预览热路径只读别名缓存，绝不触发全项目短名扫描。
-        return probe(project, name, context, true);
-    }
-
-    @Nullable
-    public static PagesEntityProbe probe(Project project, String name, @Nullable PsiElement context) {
-        return probe(project, name, context, false);
-    }
-
-    @Nullable
-    private static PagesEntityProbe probe(Project project, String name, @Nullable PsiElement context, boolean cheap) {
         try {
-            PsiClass clazz = resolveEntityClass(project, name, context, cheap);
+            PsiClass clazz = resolveEntityClass(project, name, context);
             if (clazz == null) return null;
             cn.song.mybatisplus.visualizer.model.TableInfo table = new JpaEntityResolver().resolve(clazz, context);
             String entityName = JpaMetadataReader.entityNameOf(clazz);
@@ -59,13 +49,11 @@ public final class PagesEntityProbeResolver {
     }
 
     @Nullable
-    private static PsiClass resolveEntityClass(Project project, String name, @Nullable PsiElement context, boolean cheap) {
+    private static PsiClass resolveEntityClass(Project project, String name, @Nullable PsiElement context) {
         EntityClassResolver.Resolution byName;
         try {
-            // 同步热路径（probeCheap）只读缓存；全量扫描形态（resolve）单次约 1s，历史实测可冻结 EDT。
-            byName = cheap
-                    ? EntityAliasSweep.resolveCachedOnly(project, name, context)
-                    : EntityAliasSweep.resolve(project, name, context);
+            // 同步热路径只读别名缓存：全量扫描形态（resolve）单次约 1s，历史实测可冻结 EDT。
+            byName = EntityAliasSweep.resolveCachedOnly(project, name, context);
         } catch (Throwable ignored) {
             byName = null;
         }

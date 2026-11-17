@@ -169,11 +169,17 @@ public final class PagesXmlPreviewService {
         }
     }
 
-    /** 实体探针：名字 → (实体名, 表名)；解析不到返回 null（与通用 XML 链共用同一实现）。 */
+    /**
+     * 实体探针：名字 → (实体名, 表名)；解析不到返回 null（与通用 XML 链共用同一实现）。
+     *
+     * <p>券 0（T-Ibatis2SlowFix）：走<b>零扫描</b>形态——本链是同步预览热路径，{@code <datasource>} 的根标识符
+     * 常是物理表名，全项目别名反查必然打空却要先付整段预算（弹窗等约 1s）。判定结果与改动前一致：
+     * 反查触顶本就按未解析返回，而 {@code entityClass} 在场的常规形态由直查覆盖（见 {@link PagesEntityProbeResolver}）。</p>
+     */
     @Nullable
     private static PagesEntityProbe resolveProbe(@NotNull Project project, @NotNull String name,
                                                  @Nullable PsiElement context) {
-        return PagesEntityProbeResolver.probe(project, name, context);
+        return PagesEntityProbeResolver.probeCheap(project, name, context);
     }
 
     // ------------------------------------------------------------------
