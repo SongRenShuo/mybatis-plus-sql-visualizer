@@ -27,11 +27,6 @@ import static org.junit.Assert.assertTrue;
  */
 public class ProxyFrameDecoderTest {
 
-    /** 模拟业务 mapper 接口（不在任何框架前缀内）。 */
-    interface DemoMapper {
-        void selectById();
-    }
-
     /** 框架接口（java. 前缀，须被框架门拦下）。 */
     interface FrameworkFlavored extends Runnable {
     }
@@ -61,7 +56,7 @@ public class ProxyFrameDecoderTest {
     @Test
     public void decodeJdkProxyIdentityReturnsBusinessInterface() {
         ClassLoader loader = getClass().getClassLoader();
-        Object proxy = Proxy.newProxyInstance(loader, new Class<?>[]{DemoMapper.class},
+        Object proxy = Proxy.newProxyInstance(loader, new Class<?>[]{fixtureproxy.SampleMapper.class},
                 new InvocationHandler() {
                     @Override
                     public Object invoke(Object proxy, Method method, Object[] args) {
@@ -70,7 +65,7 @@ public class ProxyFrameDecoderTest {
                 });
         String proxyName = proxy.getClass().getName();
         assertTrue(ProxyFrameDecoder.isJdkProxyName(proxyName));
-        assertEquals(DemoMapper.class.getName(),
+        assertEquals(fixtureproxy.SampleMapper.class.getName(),
                 ProxyFrameDecoder.decodeJdkProxyIdentity(proxyName, loader));
     }
 
@@ -103,8 +98,8 @@ public class ProxyFrameDecoderTest {
     @Test
     public void stackDigestDecodesProxyFrameToInterface() throws Exception {
         ClassLoader loader = getClass().getClassLoader();
-        final DemoMapper mapper = (DemoMapper) Proxy.newProxyInstance(loader,
-                new Class<?>[]{DemoMapper.class},
+        final fixtureproxy.SampleMapper mapper = (fixtureproxy.SampleMapper) Proxy.newProxyInstance(loader,
+                new Class<?>[]{fixtureproxy.SampleMapper.class},
                 new InvocationHandler() {
                     @Override
                     public Object invoke(Object proxy, Method method, Object[] args) {
@@ -120,7 +115,7 @@ public class ProxyFrameDecoderTest {
         // hint 必须能看见代理类——传测试类自己的 loader
         String digest = StackDigest.build(frames, 24, loader, null, null);
         assertTrue("快照应含反解后的接口名：" + digest,
-                digest.contains(DemoMapper.class.getName() + "#selectById"));
+                digest.contains(fixtureproxy.SampleMapper.class.getName() + "#selectById"));
         assertFalse("快照不应保留原始代理类名：" + digest, digest.contains("$Proxy"));
         // CGLIB 帧同批反解为基类
         StackTraceElement[] cglibStack = new StackTraceElement[]{
