@@ -834,6 +834,40 @@ public final class PreviewResult {
                 statementTypeOptions, statementTypeSwitch);
     }
 
+    /**
+     * T-PreviewStmtTypeScope：派生出携带判型依据 / 候选集 / 可切换档位的新结果
+     * （Kotlin data class {@code copy(decidingConsumption, otherConsumptions, statementTypeOptions,
+     * statementTypeSwitch = …)} 的 Java 等价），其余字段全量保留。
+     */
+    public PreviewResult withStatementTypeInfo(WrapperConsumption deciding,
+                                                List<WrapperConsumption> others,
+                                                List<ConsumptionKind> options,
+                                                Function1<ConsumptionKind, PreviewResult> switcher) {
+        return new PreviewResult(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning,
+                columns, columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel,
+                xmlModel, initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns,
+                namedParamHints, stackDigest, threadName, hasDollarRawSegments, countSql, paginationLimitLine,
+                placeholderParamNames, duplicateParamNames, diagramStatement, historyFingerprintSeed,
+                paginationParamSources, renderedDialect, dialectDecision, historyEntryId, actualSql,
+                sourceLanguage, originalSql, degradations, runtimeSlots,
+                retryWhenIndexReady, m2AwaitKey, informationalWarning,
+                ibatisParamModel, rerender, deciding, others, options, switcher);
+    }
+
+    /** T-PreviewStmtTypeScope：派生出仅改写 sql/compactSql 的新结果（exists 外层包裹用），其余字段全量保留。 */
+    public PreviewResult withSql(String newSql, String newCompactSql) {
+        return new PreviewResult(newSql, newCompactSql, unresolvedParams, paramTable, wrapperType, tableName, warning,
+                columns, columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel,
+                xmlModel, initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns,
+                namedParamHints, stackDigest, threadName, hasDollarRawSegments, countSql, paginationLimitLine,
+                placeholderParamNames, duplicateParamNames, diagramStatement, historyFingerprintSeed,
+                paginationParamSources, renderedDialect, dialectDecision, historyEntryId, actualSql,
+                sourceLanguage, originalSql, degradations, runtimeSlots,
+                retryWhenIndexReady, m2AwaitKey, informationalWarning,
+                ibatisParamModel, rerender, decidingConsumption, otherConsumptions,
+                statementTypeOptions, statementTypeSwitch);
+    }
+
     /** T-PreviewOpenPerfM2 M9：索引未就绪时的重试闭包（null = 无需重试）。 */
     public Function0<PreviewResult> getRetryWhenIndexReady() {
         return retryWhenIndexReady;

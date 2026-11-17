@@ -574,6 +574,26 @@ public final class SqlPreviewServiceEnhancementsKt {
             @Nullable String historyFingerprintSeed,
             @NotNull Dialect dialect,
             @Nullable cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision dialectDecision) {
+        return buildPreviewResult(p, wrapperType, table, statement, countSql, historyFingerprintSeed,
+                dialect, dialectDecision, null, List.of());
+    }
+
+    /**
+     * T-PreviewStmtTypeScope：携带判型依据 / 全部消费候选的构建形态（Kotlin 具名实参
+     * {@code decidingConsumption/otherConsumptions} 等价），其余与全量形态一致。
+     */
+    @NotNull
+    public static PreviewResult buildPreviewResult(
+            @NotNull SqlPreviewService p,
+            @Nullable WrapperType wrapperType,
+            @NotNull TableInfo table,
+            @NotNull SqlStatement statement,
+            @Nullable String countSql,
+            @Nullable String historyFingerprintSeed,
+            @NotNull Dialect dialect,
+            @Nullable cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision dialectDecision,
+            @Nullable cn.song.mybatisplus.visualizer.model.WrapperConsumption decidingConsumption,
+            @NotNull List<cn.song.mybatisplus.visualizer.model.WrapperConsumption> otherConsumptions) {
         boolean compact = !p.formatSql();
         cn.song.mybatisplus.visualizer.sql.GeneratedSql generated =
                 SqlGenerator.generateWithParams(statement, compact, dialect, null);
@@ -591,7 +611,7 @@ public final class SqlPreviewServiceEnhancementsKt {
         // F-1 修复：JOIN 图判据独立于 previewModel（无条件联表链 previewModel 为 null，但仍含 JOIN 可画图）
         SelectStatement selForDiagram = (statement instanceof SelectStatement) ? (SelectStatement) statement : null;
         SelectStatement diagramStatement = (selForDiagram != null && !selForDiagram.getJoins().isEmpty()) ? selForDiagram : null;
-        return new PreviewResult(
+        PreviewResult result = new PreviewResult(
                 generated.getSql(),
                 SqlGenerator.generate(statement, true, dialect, null),
                 generated.getUnresolvedParams(),
@@ -628,6 +648,8 @@ public final class SqlPreviewServiceEnhancementsKt {
                 dialectDecision,
                 null,
                 null);
+        // T-PreviewStmtTypeScope：判型依据随结果进面板（meta 行 + 悬停）
+        return result.withStatementTypeInfo(decidingConsumption, otherConsumptions, List.of(), null);
     }
 
     /**

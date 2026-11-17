@@ -40,6 +40,7 @@ import cn.song.mybatisplus.visualizer.model.ColumnRole;
 import cn.song.mybatisplus.visualizer.model.Condition;
 import cn.song.mybatisplus.visualizer.model.ConditionToggle;
 import cn.song.mybatisplus.visualizer.model.ConditionView;
+import cn.song.mybatisplus.visualizer.model.ConsumptionKind;
 import cn.song.mybatisplus.visualizer.model.DeleteStatement;
 import cn.song.mybatisplus.visualizer.model.FillClause;
 import cn.song.mybatisplus.visualizer.model.JoinClause;
@@ -57,6 +58,7 @@ import cn.song.mybatisplus.visualizer.model.TableInfo;
 import cn.song.mybatisplus.visualizer.model.UpdateStatement;
 import cn.song.mybatisplus.visualizer.model.WrapperCall;
 import cn.song.mybatisplus.visualizer.model.WrapperChain;
+import cn.song.mybatisplus.visualizer.model.WrapperConsumption;
 import cn.song.mybatisplus.visualizer.model.WrapperType;
 import cn.song.mybatisplus.visualizer.model.BatchPreview;
 import cn.song.mybatisplus.visualizer.psi.BatchOperationConverter;
@@ -137,6 +139,7 @@ import org.jetbrains.annotations.Nullable;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -381,7 +384,17 @@ public final class SqlPreviewService {
      */
     @Nullable
     public PreviewResult preview(@NotNull PsiElement anchor) {
-        return preview(anchor, null);
+        return preview(anchor, (PreviewSourceContext) null);
+    }
+
+    /**
+     * T-PreviewStmtTypeScope D-3：按指定档位重算预览（面板「预览目标」切换用）。
+     * {@code preferredConsumption} 为 null 时按 D-2 依锚点位置判型。
+     */
+    @Nullable
+    public PreviewResult preview(@NotNull PsiElement anchor,
+                                 @Nullable ConsumptionKind preferredConsumption) {
+        return preview(anchor, null, preferredConsumption);
     }
 
     /** Wrapper 的 owner 是调用所在源码文件，不是实体类文件，也不是把 Java/Kotlin 当成 SQL PSI。 */
@@ -407,6 +420,16 @@ public final class SqlPreviewService {
 
     @Nullable
     public PreviewResult preview(@NotNull PsiElement anchor, @Nullable PreviewSourceContext sourceContext) {
+        return preview(anchor, sourceContext, null);
+    }
+
+    /**
+     * T-PreviewStmtTypeScope D-3：{@code preferredConsumption} 进缓存签名——同一锚点在不同
+     * 「预览目标」下是不同结果，不区分就会切回旧档位的 SQL。
+     */
+    @Nullable
+    public PreviewResult preview(@NotNull PsiElement anchor, @Nullable PreviewSourceContext sourceContext,
+                                 @Nullable ConsumptionKind preferredConsumption) {
         // JDBC 模板 SQL 字符串预览（正向）：queryForList/update 等方法的字符串 SQL 实参 → 预览
         // 放在最前：JDBC 分支不写 Wrapper 缓存、不依赖实体解析，与既有路径完全隔离
         boolean jdbcPreviewOff = settings != null && settings.getState() != null
@@ -440,11 +463,14 @@ public final class SqlPreviewService {
         // T-M19.4（用户实测：表名配置修改后预览不生效）：缓存键含**表配置签名**——设置变更
         // （文件戳不变的场景）不再命中旧结果
         boolean resolveVariables = effectiveReplaceParams();
+        // T-PreviewStmtTypeScope D-3：强制档位进缓存签名——同一锚点在不同「预览目标」下是不同结果。
+        String consumptionSignature = preferredConsumption != null ? preferredConsumption.name() : "";
         LocatedWrapper located = cache.getOrCompute(
                 file, anchor.getTextRange().getStartOffset(), resolveVariables,
                 tableConfigSignature() + "|" + decision.status() + "|" + decision.dialectName()
-                        + "|" + decision.source() + "|" + decision.dataSourceIds(),
-                () -> WrapperLocator.locateWithTable(anchor, resolveVariables));
+                        + "|" + decision.source() + "|" + decision.dataSourceIds()
+                        + "|kind:" + consumptionSignature,
+                () -> WrapperLocator.locateWithTable(anchor, resolveVariables, preferredConsumption));
         // T-M19.4（用户实测：实体文件新增/修改 @TableName 后预览不生效——缓存按**锚点文件**戳失效，
         // 实体文件变化不触发）：命中缓存时校验实体文件戳，变更则重算
         LocatedWrapper effectiveLocated = (located != null && !located.entityFileValid())
@@ -501,6 +527,13 @@ public final class SqlPreviewService {
             } else if (chain.getUpdateEntityConsumed() && !UPDATE_DELETE_JOIN_TYPES.contains(chain.getWrapperType())) {
                 // 实体更新消费：service.update(entity, wrapper) 双参——wrapper 无 set 时用实体字段展开 SET 列
                 SelectStatement parsed = new QueryWrapperParser(table).parse(chain);
+                // T-PreviewStmtTypeScope：SET 占位符逐列给出来源（patch.order_no），此前六列共用 "?"
+                // 被面板按来源去重成一行，填一个值就把整列 SET 填成同一个数。
+                WrapperConsumption updateEvidence = chain.getDecidingConsumption();
+                String entityExpr = (updateEvidence != null
+                        && updateEvidence.kind() == ConsumptionKind.UPDATE_ENTITY
+                        && updateEvidence.detail() != null && !updateEvidence.detail().isBlank())
+                        ? updateEvidence.detail() : ENTITY_PARAM_FALLBACK;
                 List<SetClause> sets = new ArrayList<>();
                 for (ColumnInfo col : table.getColumns()) {
                     if (col.isId()) continue;
@@ -508,7 +541,7 @@ public final class SqlPreviewService {
                     if (col.getColumnName().equals(table.getVersionColumn())) continue;
                     sets.add(new SetClause(
                             new ColumnRef(null, col.getColumnName(), null, null, null, null, null),
-                            new SqlValue.Placeholder("?"), null));
+                            new SqlValue.Placeholder(entityExpr + "." + col.getColumnName()), null));
                 }
                 statement = new UpdateStatement(table, sets, parsed.getConditions(), null, null, List.of());
             } else if (chain.getDeleteConsumed()
@@ -563,22 +596,38 @@ public final class SqlPreviewService {
             // R12 T-PaginationSim：分页 COUNT 包裹预览（D1=A 预览附第二条语句；D2=A 基础包裹形态；
             // D3=A searchCount=false 跳过；count/exists 消费不产 COUNT——复用 T-M29-02/03 分页消费口径）
             String countSql = paginationCountSql(chain, pagedStatement, dialect);
+            // T-PreviewStmtTypeScope：判型依据随结果进面板（meta 行 + 悬停）
+            WrapperConsumption deciding = chain.getDecidingConsumption();
+            List<WrapperConsumption> others = new ArrayList<>(chain.getAllConsumptions());
+            others.remove(deciding);
             PreviewResult result = SqlPreviewServiceEnhancementsKt.buildPreviewResult(
                     this, chain.getWrapperType(), table, pagedStatement, countSql, historyFingerprintSeed,
-                    dialect, decision);
+                    dialect, decision, deciding, others);
             recordHistory(result, anchor);
-            // exists 消费：外层包裹 SELECT EXISTS
-            if (chain.getExistsConsumed() && isQueryLike(chain.getWrapperType())) {
-                return new PreviewResult(
-                        "SELECT EXISTS (" + result.getSql() + ")",
-                        "SELECT EXISTS (" + result.getCompactSql() + ")",
-                        result.getUnresolvedParams(), result.getParamTable(), result.getWrapperType(), result.getTableName(),
-                        result.getWarning(), result.getColumns(), result.getColumnComments(), result.getTableComment(),
-                        result.getPreviewModel(), result.getParamHints(), result.getCandidateTables(), result.getBatchModel(),
-                        result.getXmlModel(), result.getInitialParamValues(), result.getPerfWarnings(), result.getFillClauses(),
-                        result.getPreviousSql(), result.getPagesColumns());
+            // T-PreviewStmtTypeScope D-3：同一 wrapper 多种消费写法时不替用户拍板——把可切换的
+            // 「预览目标」随结果带到面板；只有 ≥2 档才挂重算闭包（单档不持有 PSI 引用）。
+            List<ConsumptionKind> statementTypeOptions = new ArrayList<>();
+            for (WrapperConsumption c : chain.getAllConsumptions()) {
+                if (c.kind() != ConsumptionKind.PAGE && !statementTypeOptions.contains(c.kind())) {
+                    statementTypeOptions.add(c.kind());
+                }
             }
-            return result;
+            statementTypeOptions.sort(Comparator.comparingInt(STATEMENT_TYPE_ORDER::indexOf));
+            Function1<ConsumptionKind, PreviewResult> statementTypeSwitch = null;
+            if (statementTypeOptions.size() > 1) {
+                final PsiElement switchAnchor = anchor;
+                final PreviewSourceContext switchContext = context;
+                statementTypeSwitch = kind -> preview(switchAnchor, switchContext, kind);
+            }
+            PreviewResult withChoices = result.withStatementTypeInfo(
+                    deciding, others, statementTypeOptions, statementTypeSwitch);
+            // exists 消费：外层包裹 SELECT EXISTS（保留判型/切换字段）
+            if (chain.getExistsConsumed() && isQueryLike(chain.getWrapperType())) {
+                return withChoices.withSql(
+                        "SELECT EXISTS (" + withChoices.getSql() + ")",
+                        "SELECT EXISTS (" + withChoices.getCompactSql() + ")");
+            }
+            return withChoices;
         }
 
         // 2. 批量操作识别（anchor 或其父链上的方法调用）
@@ -2516,6 +2565,20 @@ public final class SqlPreviewService {
 
     /** 联表更新/删除 Wrapper 类型集合（T-M21-08）。 */
     private static final Set<WrapperType> UPDATE_DELETE_JOIN_TYPES = Set.of(WrapperType.UPDATE_JOIN, WrapperType.DELETE_JOIN);
+
+    /**
+     * T-PreviewStmtTypeScope：实体更新 SET 占位符的来源前缀兜底——实体实参文本取不到时用「实体」，
+     * 面板参数行仍逐列可辨（{@code 实体.order_no}）。
+     */
+    private static final String ENTITY_PARAM_FALLBACK = "实体";
+
+    /**
+     * T-PreviewStmtTypeScope D-3：面板「预览目标」切换列表的档位顺序（与判型分派优先级同源：
+     * count > exists > update > delete）。PAGE 不进列表（只追加 LIMIT，不改变语句类型）。
+     */
+    private static final List<ConsumptionKind> STATEMENT_TYPE_ORDER = List.of(
+            ConsumptionKind.COUNT, ConsumptionKind.EXISTS,
+            ConsumptionKind.UPDATE_ENTITY, ConsumptionKind.DELETE);
 
     /**
      * 统一展示入口（M10-03）：恒以弹窗（SqlPreviewDialog）展示预览结果。
