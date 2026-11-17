@@ -35,8 +35,17 @@ class MapperXmlToJavaLineMarkerProvider : LineMarkerProvider {
     //  （点击后静默无跳转，handler null-safe）远小于冷窗误摘整批图标的代价，不对称偏向
     //  「宁多不缺」。
     companion object {
-        /** F1-a 会话级正缓存：本会话解析成功过的 `namespace#id`。无失效，取舍见类头注释。 */
+        /** F1-a 会话级正缓存：本会话解析成功过的语句键（形态见 [cacheKey]）。无失效，取舍见类头注释。 */
         internal val resolvedStatementKeys: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+        /**
+         * T-PerfSweep32 券02：缓存键带 `project.locationHash` 前缀——[resolvedStatementKeys] 是
+         * 应用级容器、项目关闭不清理，键不含项目身份时两工程同名 namespace+statement 会跨项目串号
+         * （A 工程确认过，B 工程直接信）。与 [IbatisJavaToXmlLineMarkerProvider.cacheKey]
+         * （T-PerfSweep31 券04）同口径；locationHash 会话内稳定，作键仅限会话级去重语义。
+         */
+        internal fun cacheKey(project: Project, namespace: String, statementId: String): String =
+            "${project.locationHash}|$namespace|$statementId"
 
         /** 测试缝：dumb 判定（生产＝`DumbService.isDumb`，F1-b 乐观产出用），形态承 MbgExampleCallResolver。
          *  F1' 起双侧共用（Java 侧 `MapperJavaToXmlLineMarkerProvider` 的失败分支同读此缝）。 */
@@ -94,8 +103,8 @@ class MapperXmlToJavaLineMarkerProvider : LineMarkerProvider {
         // ③ 暂时查不了（索引重建中）→ 缓存命中仍产出、不动缓存（F1-a/S2 兜底）
         // ④ 确定不存在（接口方法删了 / namespace 改了）→ 收回缓存并摘图标（P2.1）
         // ⑤ 其余不产出。注意不 catch ProcessCanceledException（平台契约禁吞 PCE；BannedApiScanRuleTest 会拦）。
-        val key = "$namespace#$id"
         val project = element.project
+        val key = cacheKey(project, namespace, id)
         if (isDumbProvider(project)) return buildStatementMarker(element)
         return when (MybatisXmlTargets.lookupInterfaceMethod(project, namespace, id)) {
             is MybatisXmlTargets.MethodLookup.Found -> {
@@ -164,8 +173,8 @@ class MapperJavaToXmlLineMarkerProvider : LineMarkerProvider {
         // 真机 2026-11-15 实证：CustChannelMapper/CustAddressMapper 全部方法行无图标，daemon 重跑即回。
         // 与 XML 侧同不变式：图标只在「确认真没有」时缺席，不在「还没查到」时缺席。
         // 注意不 catch ProcessCanceledException（平台契约禁吞 PCE；BannedApiScanRuleTest 会拦）。
-        val key = "$namespace#${method.name}"
         val project = element.project
+        val key = MapperXmlToJavaLineMarkerProvider.cacheKey(project, namespace, method.name)
         // T-MapperGutterEvict P2.1（2026-11-16）：与 XML 侧同构五段式——dumb 乐观 / 确定存在入缓存 /
         // 暂时查不了保留缓存命中 / 确定不存在收回缓存并摘图标。dumb 门前移，避免在索引重建期查索引。
         if (MapperXmlToJavaLineMarkerProvider.isDumbProvider(project)) return buildMethodMarker(element)

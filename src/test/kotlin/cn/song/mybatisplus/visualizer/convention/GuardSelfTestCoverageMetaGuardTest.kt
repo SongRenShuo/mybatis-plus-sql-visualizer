@@ -662,6 +662,22 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "自证语料=testGuardCatchesEdtDirectWrite 用「落盘挪回 EDT 回调」的合成源码直接断言内核报出该形态。",
             ),
             GuardEntry(
+                "convention/MapperNavCacheKeyProjectIdentityGuardTest.kt",
+                listOf(DecisionFn("violationsIn", FnKind.VIOLATIONS)),
+                "T-PerfSweep32 券02 守卫（性能分析第九期 §5.2 P3）：resolvedStatementKeys（Mapper 双向导航" +
+                    "共享正缓存）的键必须带 project.locationHash 前缀——判定内核 violationsIn 返回违规说明" +
+                    "集合（缺统一 cacheKey 构造 / 函数体无 locationHash / 裸键旧形态 \"\$namespace# 残留 / " +
+                    "cacheKey(project, 调用点不足 2 处）。自证=含旧形态合成样本必被抓出 + 干净样本放行两用例。",
+            ),
+            GuardEntry(
+                "convention/TestClassVisibilityGuardTest.kt",
+                listOf(DecisionFn("violationsIn", FnKind.VIOLATIONS)),
+                "T-PerfSweep32 收口轮元守卫：测试类「有 test 方法却 JUnit3/JUnit4 双扫描器均不可见」的静默" +
+                    "零执行形态（IbatisTypeAliasResolverHotPathTest 三方法缺 @Test 且无 TestCase 血统，" +
+                    "守卫死了一整轮直到反向验证跑不红才暴露）——判定内核 violationsIn 返回违规说明集合。" +
+                    "自证=无注解无血统合成样本必被抓出 + 带 @Test / TestCase 血统样本放行两用例。",
+            ),
+            GuardEntry(
                 "update/HotUpdateSettingsGuardTest.kt",
                 emptyList(),
                 "T-HotUpdateSettingsGuard 守卫：热更新（动态装载）后设置页「确定」无反应的兜底判定——" +
