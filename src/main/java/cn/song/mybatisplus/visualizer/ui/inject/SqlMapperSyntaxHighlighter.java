@@ -91,6 +91,10 @@ public class SqlMapperSyntaxHighlighter extends SyntaxHighlighterBase {
             return PARAM_DOLLAR_KEYS;
         } else if (tokenType == SqlMapperTT.STATIC_REF) {
             return STATIC_REF_KEYS;
+        } else if (tokenType == SqlMapperTT.IBATIS_ESCAPE) {
+            // 券 D：iBatis 转义字面量 `##`/`$$` **有意不配色**——语义就是「字面 `#`/`$`」，
+            // 渲染为普通文本才是正确观感（给它任一颜色都会读成「某种占位符」）。
+            return EMPTY_KEYS;
         } else {
             return EMPTY_KEYS;
         }
