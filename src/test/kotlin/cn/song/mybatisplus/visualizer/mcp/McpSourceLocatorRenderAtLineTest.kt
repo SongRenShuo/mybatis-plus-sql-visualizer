@@ -149,8 +149,16 @@ class McpSourceLocatorRenderAtLineTest : BasePlatformTestCase() {
     private fun addSqlMap(): com.intellij.psi.PsiFile {
         val file = myFixture.addFileToProject("sqlmap/User.xml", sqlMap)
         // 强制目标索引追平（长分片 CI 里索引可能还在异步建）
+        // 边 pump EDT 边等索引追平（dumb 已在上层 setUp 清过；这里再兜一次 write 触发的二次 dumb）
+        var spin = 0
+        while (DumbService.isDumb(project) && spin++ < 600) {
+            UIUtil.dispatchAllInvocationEvents()
+            Thread.sleep(10)
+        }
         FileBasedIndex.getInstance().ensureUpToDate(
             SqlMapNamespaceIndex.NAME, project, GlobalSearchScope.projectScope(project))
+        val seen = SqlMapNamespaceIndex.getAllSqlMapFiles(project)
+        assertTrue("sqlMap 必须进 SqlMapNamespaceIndex，实际候选=$seen", seen.isNotEmpty())
         return file
     }
 
