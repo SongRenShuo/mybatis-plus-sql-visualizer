@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelResultViewKt.stmtTypeSourceText
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelResultViewKt.stmtTypeCandidatesSection
 import cn.song.mybatisplus.visualizer.model.ConsumptionKind
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.WrapperConsumption
