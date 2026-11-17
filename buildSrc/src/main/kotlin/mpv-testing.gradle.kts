@@ -106,6 +106,23 @@ val mpvTestLaneLimiter: Provider<MpvTestLaneLimiterService> = run {
 // 沙盒环境）。T-TestPerf14 S2：五类拆 testDb* 任务后按前缀特判（原单任务名 testDatabase
 // 判断保留，兼容旧树/聚合容器同名不冲突）。
 tasks.withType<Test>().configureEach {
+    // 20261117：测试 JVM 关闭「VFS roots 访问检查」。
+    // 本插件 plugin.xml 用 com.intellij.standardResource 登记 iBATIS DTD 离线映射，平台据此把
+    // 「承载该资源的 jar」＝**插件自身 jar**算进索引根（ExternalResourcesRootsProvider →
+    // IndexableSetContributorDescriptor → VirtualFileManagerImpl.findFileByUrl）。测试 JVM 里该 jar
+    // 位于 <build>/test-sandbox/<分片>/plugins_<任务>/…/lib/*.jar，不在 VfsRootAccess 的放行集合
+    // （temp / build/classes / IDE 安装目录 / 家目录 / config）内 ⇒ **冷沙盒首次建索引**时抛
+    // VfsRootAccessNotAllowedError → 扫描任务被判 "Task interrupted" → dumb mode 永不退出 →
+    // EDT 侧 IndexingTestUtil.waitAfterWriteAction 在 waitWithEventsDispatching 里无限自旋 →
+    // 整个分片一个用例都不落盘，CI 步骤级 30 分钟超时（日志零输出，看不出停在哪个类）。
+    // 热沙盒不触发：持久化索引里已有该根，findInPersistence 不再走文件系统，守卫不介入——
+    // 所以本地反复复跑看不出来，CI 天生冷树才暴露（testShard5 连轮 31m2x 超时即此）。
+    // 平台官方逃生门：VfsRootAccess.<clinit> 读 env/系统属性 NO_FS_ROOTS_ACCESS_CHECK，
+    // 置位即 SHOULD_PERFORM_ACCESS_CHECK=false（异常文案亦如此提示）。
+    // 代价：测试期不再断言「越界访问真实文件系统」；本仓测试不依赖该断言，且不关掉就无法在
+    // 冷沙盒建索引（硬阻断）。「只放行单条路径」试过不可行：检查发生在 HeavyPlatformTestCase
+    // 的 super.setUp() 建项目/起扫描期间，早于测试自己 setUp 里的 allowRootAccess。
+    environment("NO_FS_ROOTS_ACCESS_CHECK", "1")
     val isDbIntegration = name == "testDatabase" || name.startsWith("testDb")
     // T-ReleasePerf9：测试链并发限流挂接（mpvTestLaneLimiter 注册块见上方）——testShardN 分片、
     // testExternal、默认 test/testFast 全部在此面内；DB 集成桶豁免（testDb* 七路并行语义保持）。
