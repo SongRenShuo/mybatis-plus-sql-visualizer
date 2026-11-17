@@ -78,7 +78,7 @@ class XmlPreviewBannerRefreshTest : BasePlatformTestCase() {
             emptyMap(),
         )
         val panel = SqlPreviewPanel(project)
-        SqlPreviewPanelResultViewKt.showResult(panel, XmlPreviewService.toResult(model, includeRenderErrors = false))
+        SqlPreviewPanelResultViewKt.showResult(panel, XmlPreviewService.toResult(model, false))
         return panel
     }
 
@@ -149,7 +149,7 @@ class XmlPreviewBannerRefreshTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         val banner = panel.degradationBannerForTest()
         try {
-            SqlPreviewPanelResultViewKt.showResult(panel, XmlPreviewService.toResult(model, includeRenderErrors = false))
+            SqlPreviewPanelResultViewKt.showResult(panel, XmlPreviewService.toResult(model, false))
             panel.renderSqlForTest()
             assertEquals("入场即无 WHERE 的全表写", FullTableWriteRisk.DELETE, panel.writeRiskWarning)
             assertEquals(

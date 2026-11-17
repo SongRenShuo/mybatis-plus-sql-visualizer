@@ -192,7 +192,7 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
     fun testF1ResolveUnknownWithCacheHitStillProducesMarker() {
         // 冷窗形态（S2）：查询**没算完**（Unknown），不是「确定没有」——已确认过的图标必须留着。
         MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add("com.demo.UserMapper#count")
-        MybatisXmlTargets.methodLookupOverrideForTest = { _, _, _ -> MybatisXmlTargets.MethodLookup.Unknown }
+        MybatisXmlTargets.methodLookupOverrideForTest = { _, _, _ -> MybatisXmlTargets.Unknown.UNKNOWN }
         MapperXmlToJavaLineMarkerProvider.isDumbProvider = { false }
         val xmlProvider = MapperXmlToJavaLineMarkerProvider()
         val xml = addXml("<select id=\"count\">SELECT 1</select>")
@@ -210,7 +210,7 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
      */
     fun testF1ResolveAbsentEvictsPositiveCacheAndProducesNoMarker() {
         MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add("com.demo.UserMapper#count")
-        MybatisXmlTargets.methodLookupOverrideForTest = { _, _, _ -> MybatisXmlTargets.MethodLookup.Absent }
+        MybatisXmlTargets.methodLookupOverrideForTest = { _, _, _ -> MybatisXmlTargets.Absent.ABSENT }
         MapperXmlToJavaLineMarkerProvider.isDumbProvider = { false }
         val xmlProvider = MapperXmlToJavaLineMarkerProvider()
         val xml = addXml("<select id=\"count\">SELECT 1</select>")
@@ -274,7 +274,7 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
     fun testF1JavaLocateUnknownWithCacheHitStillProducesMarker() {
         // 冷窗形态：locate **没算完**（Unknown）——缓存命中必须照常产出，缓存不动。
         MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add("com.demo.UserMapper#count")
-        MapperXmlLocator.lookupOverrideForTest = { _, _ -> MapperXmlLocator.Lookup.Unknown }
+        MapperXmlLocator.lookupOverrideForTest = { _, _ -> MapperXmlLocator.Unknown.UNKNOWN }
         MapperXmlToJavaLineMarkerProvider.isDumbProvider = { false }
         val marker = markers(javaProvider, addMapper())
         assertEquals("Unknown + 缓存命中必须照常产出（图标不缺席）", 1, marker.size)
@@ -288,7 +288,7 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
     /** P2.1（T-MapperGutterEvict，2026-11-16）：Java 侧确定不存在时摘图标并收回缓存。 */
     fun testF1JavaLocateAbsentEvictsPositiveCacheAndProducesNoMarker() {
         MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add("com.demo.UserMapper#count")
-        MapperXmlLocator.lookupOverrideForTest = { _, _ -> MapperXmlLocator.Lookup.Absent }
+        MapperXmlLocator.lookupOverrideForTest = { _, _ -> MapperXmlLocator.Absent.ABSENT }
         MapperXmlToJavaLineMarkerProvider.isDumbProvider = { false }
         assertEmpty(markers(javaProvider, addMapper()))
         assertFalse(

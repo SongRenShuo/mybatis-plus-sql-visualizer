@@ -557,22 +557,49 @@ class PreviewStmtTypeScopeTest : BasePlatformTestCase() {
         assertFalse("不再出现整列共用的裸 \"?\" 来源: ${result.unresolvedParams}", result.unresolvedParams.contains("?"))
     }
 
+    /** k2j 适配：WrapperConsumption 为 Java record，无 data class copy()，按字段构造新实例。 */
+    private fun WrapperConsumption.withChanges(
+        kind: ConsumptionKind = this.kind(),
+        methodName: String = this.methodName(),
+        line: Int = this.line(),
+    ) = WrapperConsumption(
+        kind, methodName, referenceOffset(), statementRange(), line, fileName(), detail(),
+    )
+
+    /** k2j 适配：Java 构造器不支持具名实参，otherConsumptions 只在 49 参全量构造里；其余按默认槽填。 */
+    private fun resultWithConsumptions(consumptions: List<WrapperConsumption>) = PreviewResult(
+        "SELECT 1", "SELECT 1", emptyList(), null, null, null,
+        null, emptyList(), emptyMap(), null, null,
+        emptyList(), emptyList(), null, null,
+        emptyMap(), emptyList(), emptyList(), null, emptyList(),
+        emptyMap(), null, null, false,
+        null, null, emptyList(), emptySet(),
+        null, null, emptyList(), null, null, null, null,
+        null, null, emptyList(), emptyList(),
+        null, null, false,
+        null, null, null,
+        consumptions, emptyList(), null,
+    )
+
     fun testEvidenceTextAndCandidateSection() {
         val evidence = evidence(ConsumptionKind.UPDATE_ENTITY, "update", 0, IntRange.EMPTY, line = 120)
         val text = stmtTypeSourceText(evidence)
         assertTrue("可见行文案含方法名: $text", text.contains("update()"))
         assertTrue("可见行文案含行号: $text", text.contains("120"))
-        val noLine = stmtTypeSourceText(evidence.copy(line = 0))
+        val noLine = stmtTypeSourceText(evidence.withChanges(line = 0))
         assertFalse("行号不可得时不显示『第 0 行』: $noLine", noLine.contains("0"))
 
-        val result = PreviewResult(
-            sql = "SELECT 1", compactSql = "SELECT 1", unresolvedParams = emptyList(),
-            paramTable = null, wrapperType = null, tableName = null,
-            otherConsumptions = listOf(evidence, evidence.copy(kind = ConsumptionKind.DELETE, methodName = "remove", line = 130)),
+        val removed = evidence.withChanges(
+            kind = ConsumptionKind.DELETE, methodName = "remove", line = 130,
         )
+        val result = resultWithConsumptions(listOf(evidence, removed))
         val section = stmtTypeCandidatesSection(result)
         assertTrue("悬停段含位置: $section", section.contains("Demo.java:120"))
         assertTrue("悬停段含方法名与语句形态: $section", section.contains("remove()") && section.contains("DELETE"))
-        assertEquals("无落选者时不加悬停段", "", stmtTypeCandidatesSection(result.copy(otherConsumptions = emptyList())))
+        assertEquals(
+            "无落选者时不加悬停段",
+            "",
+            stmtTypeCandidatesSection(resultWithConsumptions(emptyList())),
+        )
     }
 }
