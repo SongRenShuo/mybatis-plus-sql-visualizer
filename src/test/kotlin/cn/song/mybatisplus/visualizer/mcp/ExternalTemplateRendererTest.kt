@@ -235,7 +235,14 @@ class ExternalTemplateRendererTest {
         try {
             echo.writeText("process.stdout.write(JSON.stringify(process.argv.slice(2)))")
             val json = """{"planYear":"2026"}"""
-            val result = ExternalTemplateRenderer.run(listOf(node!!, echo.absolutePath, json), null, 30)
+            // 本用例验的是 Windows argv 引号契约，不是计时；复用生产默认 30s 在 CI 并发门禁轮里
+            // 会被 node 冷启动 + AV 扫临时脚本挤爆（T-BranchAlignMerge 实证 1 例 30s 超时，master 历轮
+            // 从未红）。测试侧给宽预算 60s（生产上限 120 内），超时重试一次——引号丢失是确定性失败
+            // 形态，重试不会掩盖真契约回归，只容忍负载抖动。
+            var result = ExternalTemplateRenderer.run(listOf(node!!, echo.absolutePath, json), null, 60)
+            if (result.error?.contains("timed out after") == true) {
+                result = ExternalTemplateRenderer.run(listOf(node, echo.absolutePath, json), null, 60)
+            }
             assertNull("真实进程不应失败: ${result.error}", result.error)
             assertEquals("子进程收到的 JSON 必须保留双引号", """["{\"planYear\":\"2026\"}"]""", result.sql)
         } finally {
