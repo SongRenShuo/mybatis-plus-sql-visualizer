@@ -55,6 +55,9 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         IbatisXmlStatementTargets.resetPerfLogForTest()
         IbatisJavaToXmlLineMarkerProvider.resetResolvedCacheForTest()
         IbatisXmlToJavaLineMarkerProvider.resetCallKeysCacheForTest()
+        // 静态接缝是 JVM 级全局态：同分片前序用例若异常中断可能漏复位，setUp 先清一次兜底
+        IbatisXmlStatementTargets.lookupOverrideForTest = null
+        IbatisJavaCallSites.lookupOverrideForTest = null
     }
 
     override fun tearDown() {
@@ -62,6 +65,11 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
             IbatisXmlStatementTargets.resetPerfLogForTest()
             IbatisJavaToXmlLineMarkerProvider.resetResolvedCacheForTest()
             IbatisXmlToJavaLineMarkerProvider.resetCallKeysCacheForTest()
+            // 这两个 lookupOverrideForTest 是 object 级全局缝，用例里被置成 Unknown/Absent 后
+            // 不复位就会漏到同 JVM 后续用例（CI 分片里 McpSourceLocatorRenderAtLineTest 的
+            // iBatis 调用行因此拿到空锚 → SOURCE_NOT_FOUND）：用完必须清回生产链。
+            IbatisXmlStatementTargets.lookupOverrideForTest = null
+            IbatisJavaCallSites.lookupOverrideForTest = null
             PluginSettings.getInstance().state.showGutterIcon = true
             PluginSettings.getInstance().state.gutterGroupMapperXml = true
             PluginSettings.getInstance().state.ibatisXmlEnabled = true
