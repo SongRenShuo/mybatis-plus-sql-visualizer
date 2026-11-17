@@ -74,7 +74,7 @@ class MapperNavigationGotoDeclarationHandlerTest : BasePlatformTestCase() {
 
     /** handler 不读 editor/offset（纯元素形态判定），传 null 即可。 */
     private fun targets(element: PsiElement): List<PsiElement> =
-        handler.getGotoDeclarationTargets(element, element.textOffset, null)?.toList().orEmpty()
+        handler.getGotoDeclarationTargets(element, element.textOffset, null)?.filterNotNull().orEmpty()
 
     // ------------------------------------------------------------------
     // Java → XML

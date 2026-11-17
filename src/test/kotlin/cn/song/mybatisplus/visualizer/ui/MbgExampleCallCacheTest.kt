@@ -22,8 +22,8 @@ class MbgExampleCallCacheTest {
     }
 
     private fun entry(tag: String) = MbgExampleCallResolver.CachedResolution(
-        elements = mapOf("criteria.criteria" to listOf(MockObject(mapOf("condition" to tag)))),
-        stamps = emptyMap(),
+        mapOf("criteria.criteria" to listOf(MockObject(mapOf("condition" to tag)))),
+        emptyMap(),
     )
 
     @Test
@@ -37,8 +37,8 @@ class MbgExampleCallCacheTest {
 
         assertEquals(first, second)
         assertEquals("compute（即 ReferencesSearch）只应执行一次", 1, runs)
-        assertEquals(1, MbgExampleCallResolver.searchRuns)
-        assertEquals(1, MbgExampleCallResolver.cacheHits)
+        assertEquals(1, MbgExampleCallResolver.getSearchRuns())
+        assertEquals(1, MbgExampleCallResolver.getCacheHits())
     }
 
     @Test
@@ -51,7 +51,7 @@ class MbgExampleCallCacheTest {
         MbgExampleCallResolver.resolveCached("ns#s2", compute)
 
         assertEquals(2, runs)
-        assertEquals(0, MbgExampleCallResolver.cacheHits)
+        assertEquals(0, MbgExampleCallResolver.getCacheHits())
     }
 
     @Test
@@ -65,6 +65,6 @@ class MbgExampleCallCacheTest {
 
         // 「当时索引没就绪 / 找不到调用点」不得被固化——下次必须再试
         assertEquals(2, runs)
-        assertEquals(0, MbgExampleCallResolver.cacheHits)
+        assertEquals(0, MbgExampleCallResolver.getCacheHits())
     }
 }

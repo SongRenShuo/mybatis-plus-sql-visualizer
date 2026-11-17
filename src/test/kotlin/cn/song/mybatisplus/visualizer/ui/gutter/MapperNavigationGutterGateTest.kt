@@ -225,7 +225,10 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
         val settings = PluginSettings.getInstance()
         val before = settings.state
         try {
-            settings.loadState(before.copy(mapperNavYieldToCodeHelper = false))
+            // k2j 适配：Java State.copy() 无具名参，拷贝后逐字段 setter
+            val disabled = before.copy()
+            disabled.mapperNavYieldToCodeHelper = false
+            settings.loadState(disabled)
             block()
         } finally {
             settings.loadState(before)

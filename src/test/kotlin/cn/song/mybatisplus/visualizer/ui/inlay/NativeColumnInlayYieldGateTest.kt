@@ -105,21 +105,21 @@ class NativeColumnInlayYieldGateTest {
     @Test
     fun testProbe_原生在位即让位() {
         NativeColumnInlayYieldGate.resetForTest()
-        NativeColumnInlayYieldGate.probe = Function0<Boolean> { true }
+        NativeColumnInlayYieldGate.probe = { true }
         assertTrue("探针报在位时应让位", NativeColumnInlayYieldGate.shouldYield())
     }
 
     @Test
     fun testProbe_原生不在位保留本插件提示() {
         NativeColumnInlayYieldGate.resetForTest()
-        NativeColumnInlayYieldGate.probe = Function0<Boolean> { false }
+        NativeColumnInlayYieldGate.probe = { false }
         assertFalse("探针报不在位时应保留本插件提示", NativeColumnInlayYieldGate.shouldYield())
     }
 
     @Test
     fun testProbe_探测抛异常降级为不在位() {
         NativeColumnInlayYieldGate.resetForTest()
-        NativeColumnInlayYieldGate.probe = Function0<Boolean> { throw IllegalStateException("probe boom") }
+        NativeColumnInlayYieldGate.probe = { throw IllegalStateException("probe boom") }
         assertFalse("探测失败必须降级为不在位（宁重复不丢功能）", NativeColumnInlayYieldGate.shouldYield())
     }
 
@@ -129,7 +129,7 @@ class NativeColumnInlayYieldGateTest {
     fun testCache_同会话只探测一次() {
         NativeColumnInlayYieldGate.resetForTest()
         val counter = AtomicInteger(0)
-        NativeColumnInlayYieldGate.probe = Function0<Boolean> {
+        NativeColumnInlayYieldGate.probe = {
             counter.incrementAndGet()
             true
         }
@@ -141,13 +141,13 @@ class NativeColumnInlayYieldGateTest {
     fun testCache_重置后重新探测() {
         NativeColumnInlayYieldGate.resetForTest()
         val counter = AtomicInteger(0)
-        NativeColumnInlayYieldGate.probe = Function0<Boolean> {
+        NativeColumnInlayYieldGate.probe = {
             counter.incrementAndGet()
             false
         }
         assertFalse(NativeColumnInlayYieldGate.shouldYield())
         NativeColumnInlayYieldGate.resetForTest()
-        NativeColumnInlayYieldGate.probe = Function0<Boolean> {
+        NativeColumnInlayYieldGate.probe = {
             counter.incrementAndGet()
             true
         }

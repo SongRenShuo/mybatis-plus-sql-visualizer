@@ -149,7 +149,7 @@ class IbatisStatementHostRootTest : BasePlatformTestCase() {
     fun test券D_折叠_sqlMap多行语句建区() {
         val select = configureIbatis()
         val document: Document = PsiDocumentManager.getInstance(project).getDocument(myFixture.file)!!
-        val regions = SqlMapperFoldingBuilder().buildFoldRegions(myFixture.file, document, quick = false)
+        val regions = SqlMapperFoldingBuilder().buildFoldRegions(myFixture.file, document, false)
         assertEquals("iBatis 多行 select 应建一个 fold 区", 1, regions.size)
         assertEquals("占位文本仍为 `标签名#id`", "select#findById", regions.single().placeholderText)
         assertEquals("折叠范围须为整个语句标签", select.textRange, regions.single().range)
@@ -161,7 +161,7 @@ class IbatisStatementHostRootTest : BasePlatformTestCase() {
             "<configuration><select id=\"s\">\n  SELECT 1\n</select></configuration>",
         )
         val document: Document = PsiDocumentManager.getInstance(project).getDocument(myFixture.file)!!
-        val regions = SqlMapperFoldingBuilder().buildFoldRegions(myFixture.file, document, quick = false)
+        val regions = SqlMapperFoldingBuilder().buildFoldRegions(myFixture.file, document, false)
         assertEquals("非语句宿主根不得建区", 0, regions.size)
     }
 

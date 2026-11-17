@@ -36,7 +36,7 @@ class PreviewConsoleEagerTest : com.intellij.testFramework.fixtures.BasePlatform
         PreviewConsoleEager.enabledForTest = false
         assertFalse(PreviewConsoleEager.enabled())
         PreviewConsoleEager.recordDeferred()
-        assertEquals("延后计数用于守卫", 1, PreviewConsoleEager.deferredCount.get())
+        assertEquals("延后计数用于守卫", 1, PreviewConsoleEager.DEFERRED_COUNT.get())
     }
 
     fun test显式置旧行为() {

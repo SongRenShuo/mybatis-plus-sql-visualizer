@@ -62,7 +62,11 @@ class PreviewStmtTypeScopeTest : BasePlatformTestCase() {
         referenceOffset: Int,
         statementRange: IntRange,
         line: Int = 1,
-    ) = WrapperConsumption(kind, methodName, referenceOffset, statementRange, line, "Demo.java")
+    ) = WrapperConsumption(
+        kind, methodName, referenceOffset,
+        WrapperConsumption.IntRangeLike(statementRange.first, statementRange.last),
+        line, "Demo.java", "",
+    )
 
     // ------------------------------------------------------------------
     // F1 判型作用域（D-2）

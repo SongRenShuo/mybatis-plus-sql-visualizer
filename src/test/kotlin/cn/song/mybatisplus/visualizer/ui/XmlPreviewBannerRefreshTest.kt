@@ -68,13 +68,16 @@ class XmlPreviewBannerRefreshTest : BasePlatformTestCase() {
 
     private fun panelWithDeleteByExample(): SqlPreviewPanel {
         val parsed = XmlMapperParser().parse(deleteByExampleXml)
+        // k2j 适配：Java 门面 9 参位置构造，缺省槽按 master Kotlin 默认值补齐
         val model = XmlPreviewModel.from(
             parsed.statements.first { it.id == "deleteByExample" },
             parsed.errors,
-            profile = XmlPreviewProfile.MBG_EXAMPLE,
+            emptySet(), emptyMap(), emptyMap(), emptyMap(), emptyMap(),
+            XmlPreviewProfile.MBG_EXAMPLE,
+            emptyMap(),
         )
         val panel = SqlPreviewPanel(project)
-        panel.showResult(XmlPreviewService.toResult(model, includeRenderErrors = false))
+        SqlPreviewPanelResultViewKt.showResult(panel, XmlPreviewService.toResult(model, includeRenderErrors = false))
         return panel
     }
 
@@ -125,7 +128,7 @@ class XmlPreviewBannerRefreshTest : BasePlatformTestCase() {
                 panel.currentWarning.orEmpty().contains("求值为空"),
             )
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 
@@ -145,7 +148,7 @@ class XmlPreviewBannerRefreshTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         val banner = panel.degradationBannerForTest()
         try {
-            panel.showResult(XmlPreviewService.toResult(model, includeRenderErrors = false))
+            SqlPreviewPanelResultViewKt.showResult(panel, XmlPreviewService.toResult(model, includeRenderErrors = false))
             panel.renderSqlForTest()
             assertEquals("入场即无 WHERE 的全表写", FullTableWriteRisk.DELETE, panel.writeRiskWarning)
             assertEquals(
@@ -154,7 +157,7 @@ class XmlPreviewBannerRefreshTest : BasePlatformTestCase() {
                 banner.kindForTest(),
             )
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 
@@ -181,7 +184,7 @@ class XmlPreviewBannerRefreshTest : BasePlatformTestCase() {
                 panel.xmlForEachInertLabels.single().second.isVisible,
             )
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 

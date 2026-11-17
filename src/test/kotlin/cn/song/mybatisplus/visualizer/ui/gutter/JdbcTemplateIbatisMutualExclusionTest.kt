@@ -207,13 +207,13 @@ class JdbcTemplateIbatisMutualExclusionTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     fun test让位判据_标识符形态与SQL文本() {
-        assertTrue("id 形态", IbatisCallYieldGate.isStatementIdShape("selectById"))
-        assertTrue("ns.id 形态", IbatisCallYieldGate.isStatementIdShape("User.selectById"))
-        assertTrue("带下划线/美元符/数字", IbatisCallYieldGate.isStatementIdShape("app_user.get_by_$1"))
-        assertTrue("SQL 文本不命中", !IbatisCallYieldGate.isStatementIdShape("SELECT ID FROM T_USER WHERE ID = ?"))
-        assertTrue("带空格不命中", !IbatisCallYieldGate.isStatementIdShape("User.select ById"))
-        assertTrue("含括号不命中", !IbatisCallYieldGate.isStatementIdShape("fn(x)"))
-        assertTrue("空串不命中", !IbatisCallYieldGate.isStatementIdShape("   "))
-        assertTrue("以数字开头不命中", !IbatisCallYieldGate.isStatementIdShape("1abc"))
+        assertTrue("id 形态", IbatisCallYieldGate.INSTANCE.isStatementIdShape("selectById"))
+        assertTrue("ns.id 形态", IbatisCallYieldGate.INSTANCE.isStatementIdShape("User.selectById"))
+        assertTrue("带下划线/美元符/数字", IbatisCallYieldGate.INSTANCE.isStatementIdShape("app_user.get_by_$1"))
+        assertTrue("SQL 文本不命中", !IbatisCallYieldGate.INSTANCE.isStatementIdShape("SELECT ID FROM T_USER WHERE ID = ?"))
+        assertTrue("带空格不命中", !IbatisCallYieldGate.INSTANCE.isStatementIdShape("User.select ById"))
+        assertTrue("含括号不命中", !IbatisCallYieldGate.INSTANCE.isStatementIdShape("fn(x)"))
+        assertTrue("空串不命中", !IbatisCallYieldGate.INSTANCE.isStatementIdShape("   "))
+        assertTrue("以数字开头不命中", !IbatisCallYieldGate.INSTANCE.isStatementIdShape("1abc"))
     }
 }

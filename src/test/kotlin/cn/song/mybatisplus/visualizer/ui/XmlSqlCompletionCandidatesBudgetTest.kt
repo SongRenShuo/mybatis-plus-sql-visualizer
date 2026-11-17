@@ -69,24 +69,24 @@ class XmlSqlCompletionCandidatesBudgetTest : BasePlatformTestCase() {
             .first { it.getAttributeValue("id") == "selectAll" }
 
         val t0 = System.currentTimeMillis()
-        val first = XmlSqlCompletionContextResolver.resolveXml(project, tag)
+        val first = XmlSqlCompletionContextResolver.INSTANCE.resolveXml(project, tag)
         val firstMs = System.currentTimeMillis() - t0
 
         val t1 = System.currentTimeMillis()
-        val second = XmlSqlCompletionContextResolver.resolveXml(project, tag)
+        val second = XmlSqlCompletionContextResolver.INSTANCE.resolveXml(project, tag)
         val secondMs = System.currentTimeMillis() - t1
 
         assertTrue("候选必须按上限截断（实际 ${first.candidates.size}）", first.candidates.size <= 50)
         assertEquals("缓存命中后候选数必须一致", first.candidates.size, second.candidates.size)
         assertTrue(
-            "实体解析次数必须被上限截断（实际解析 ${XmlSqlCompletionContextResolver.entitiesResolved} 个，" +
+            "实体解析次数必须被上限截断（实际解析 ${XmlSqlCompletionContextResolver.getEntitiesResolved()} 个，" +
                 "工程内共 60 个 @TableName 实体；真机就是这一项把它变成 6~10s）",
-            XmlSqlCompletionContextResolver.entitiesResolved <= 50,
+            XmlSqlCompletionContextResolver.getEntitiesResolved() <= 50,
         )
         assertEquals(
             "同会话第二次解析必须命中候选缓存（真机实测第二次仍 5924ms 就是没缓存）",
             1,
-            XmlSqlCompletionContextResolver.candidatesCacheHits,
+            XmlSqlCompletionContextResolver.getCandidatesCacheHits(),
         )
         assertTrue(
             "同会话第二次解析必须走缓存（实测 首次=${firstMs}ms 二次=${secondMs}ms）",
@@ -97,7 +97,7 @@ class XmlSqlCompletionCandidatesBudgetTest : BasePlatformTestCase() {
     /** §二十一：只读候选缓存不得触发解析（补全上下文构造会走这条，绝不能变贵）。 */
     fun test只读候选缓存不触发解析() {
         assertEquals("冷缓存应为空", 0, XmlSqlCompletionContextResolver.cachedCandidateTables(project).size)
-        assertEquals("只读访问不得解析实体", 0, XmlSqlCompletionContextResolver.entitiesResolved)
+        assertEquals("只读访问不得解析实体", 0, XmlSqlCompletionContextResolver.getEntitiesResolved())
     }
 
     /** §二十一：后台补齐后，只读缓存能取到候选（预览打开后补全表名靠它回填）。 */
@@ -113,7 +113,7 @@ class XmlSqlCompletionCandidatesBudgetTest : BasePlatformTestCase() {
             .filter { it.name?.startsWith("WarmEntity") == true }
         XmlSqlCompletionContextResolver.tableNameEntitiesProviderForTest = { entityClasses }
 
-        assertTrue("后台补齐应成功", XmlSqlCompletionContextResolver.warmCandidates(project))
+        assertTrue("后台补齐应成功", XmlSqlCompletionContextResolver.INSTANCE.warmCandidates(project))
         val cached = XmlSqlCompletionContextResolver.cachedCandidateTables(project)
         assertTrue("补齐后只读缓存应有候选（实际 ${cached.size}）", cached.isNotEmpty())
     }
@@ -146,10 +146,10 @@ class XmlSqlCompletionCandidatesBudgetTest : BasePlatformTestCase() {
         val tag = PsiTreeUtil.findChildrenOfType(myFixture.file, XmlTag::class.java)
             .first { it.getAttributeValue("id") == "selectSkip" }
 
-        val ctx = XmlSqlCompletionContextResolver.resolveXml(project, tag, includeCandidates = false)
+        val ctx = XmlSqlCompletionContextResolver.INSTANCE.resolveXml(project, tag, false)
 
         assertEquals("预览打开不得产出候选", 0, ctx.candidates.size)
-        assertEquals("预览打开不得解析任何实体", 0, XmlSqlCompletionContextResolver.entitiesResolved)
+        assertEquals("预览打开不得解析任何实体", 0, XmlSqlCompletionContextResolver.getEntitiesResolved())
     }
 
     /**
@@ -182,7 +182,7 @@ class XmlSqlCompletionCandidatesBudgetTest : BasePlatformTestCase() {
         val tag = com.intellij.psi.util.PsiTreeUtil.findChildrenOfType(myFixture.file, XmlTag::class.java)
             .first { it.getAttributeValue("id") == "selectCold" }
 
-        val first = XmlSqlCompletionContextResolver.resolveXml(project, tag, includeCandidates = true)
+        val first = XmlSqlCompletionContextResolver.INSTANCE.resolveXml(project, tag, true)
         assertTrue(
             "冷态首次不得同步解析候选（实际拿到 ${first.candidates.size} 个）",
             first.candidates.size <= 1,
@@ -193,7 +193,7 @@ class XmlSqlCompletionCandidatesBudgetTest : BasePlatformTestCase() {
             "预热落地后只读候选缓存应有内容",
             XmlSqlCompletionContextResolver.cachedCandidateTables(project).isNotEmpty(),
         )
-        val second = XmlSqlCompletionContextResolver.resolveXml(project, tag, includeCandidates = true)
+        val second = XmlSqlCompletionContextResolver.INSTANCE.resolveXml(project, tag, true)
         assertTrue("预热后下一次应拿到候选（实际 ${second.candidates.size} 个）", second.candidates.size >= 2)
     }
 }

@@ -29,7 +29,7 @@ class SqlPreviewPanelXmlDefaultsTest : BasePlatformTestCase() {
 
     override fun tearDown() {
         // 面板持有编辑器，不显式释放会让平台报 "Editor ... hasn't been released"（Disposer 泄漏）
-        runCatching { panel?.clear() }
+        runCatching { panel?.let { SqlPreviewPanelSqlViewKt.clear(it) } }
         panel = null
         super.tearDown()
     }
@@ -73,10 +73,13 @@ class SqlPreviewPanelXmlDefaultsTest : BasePlatformTestCase() {
     fun testPanelInitialSelectionMatchesDefaultState() {
         val criteria = listOf(MbgCriterionMock("CUST_ID =", listOf("1"), MbgCriterionKind.LIST_VALUE))
         val parsed = XmlMapperParser().parse(mapper)
+        // k2j 适配：Java 门面 9 参位置构造，缺省槽按 master Kotlin 默认值补齐
+        // （extraParamProps/staticFieldValues/extraBindings/paramQuotes/paramTypes 均空）
         val model = XmlPreviewModel.from(
             parsed.statements.single(), parsed.errors,
-            profile = XmlPreviewProfile.MBG_EXAMPLE,
-            collectionElements = mapOf(
+            emptySet(), emptyMap(), emptyMap(), emptyMap(), emptyMap(),
+            XmlPreviewProfile.MBG_EXAMPLE,
+            mapOf(
                 "oredCriteria" to listOf(MbgCriterionMock.criteriaOf(criteria)),
                 "criteria.criteria" to criteria.map { it.toMockObject() },
             ),
@@ -85,15 +88,30 @@ class SqlPreviewPanelXmlDefaultsTest : BasePlatformTestCase() {
         val p = SqlPreviewPanel(project)
         panel = p
         Disposer.register(testRootDisposable, p)
-        p.showResult(
+        // k2j 适配：Java 20 参位置构造，具名实参→位置实参，缺省槽按 master Kotlin 默认值补齐
+        SqlPreviewPanelResultViewKt.showResult(
+            p,
             PreviewResult(
-                sql = "",
-                compactSql = "",
-                unresolvedParams = emptyList(),
-                paramTable = null,
-                wrapperType = null,
-                tableName = null,
-                xmlModel = model,
+                "",                 // sql
+                "",                 // compactSql
+                emptyList(),        // unresolvedParams
+                null,               // paramTable
+                null,               // wrapperType
+                null,               // tableName
+                null,               // warning
+                emptyList(),        // columns
+                emptyMap(),         // columnComments
+                null,               // tableComment
+                null,               // previewModel
+                emptyList(),        // paramHints
+                emptyList(),        // candidateTables
+                null,               // batchModel
+                model,              // xmlModel
+                emptyMap(),         // initialParamValues
+                emptyList(),        // perfWarnings
+                emptyList(),        // fillClauses
+                null,               // previousSql
+                emptyList(),        // pagesColumns
             ),
         )
 

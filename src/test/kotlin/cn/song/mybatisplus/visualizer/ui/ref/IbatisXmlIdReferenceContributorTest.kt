@@ -49,7 +49,7 @@ class IbatisXmlIdReferenceContributorTest : BasePlatformTestCase() {
     private fun refsOf(attrName: String): List<PsiReference> {
         val file = myFixture.file as XmlFile
         val value = attributeValue(file, attrName)
-        return IbatisXmlAttributeReferenceProvider.getReferencesByElement(value, ProcessingContext()).toList()
+        return IbatisXmlAttributeReferenceProvider.INSTANCE.getReferencesByElement(value, ProcessingContext()).toList()
     }
 
     private fun attributeValue(file: XmlFile, attrName: String, attrValue: String? = null): XmlAttributeValue =
@@ -175,7 +175,7 @@ class IbatisXmlIdReferenceContributorTest : BasePlatformTestCase() {
         val value = attributeValue(myFixture.file as XmlFile, "refid")
         assertTrue(
             "「根标签名 != sqlMap」须零引用（MyBatis 文件行为逐字节不变）",
-            IbatisXmlAttributeReferenceProvider.getReferencesByElement(value, ProcessingContext()).isEmpty(),
+            IbatisXmlAttributeReferenceProvider.INSTANCE.getReferencesByElement(value, ProcessingContext()).isEmpty(),
         )
     }
 
@@ -188,7 +188,7 @@ class IbatisXmlIdReferenceContributorTest : BasePlatformTestCase() {
         val value = attributeValue(myFixture.file as XmlFile, "resultMap")
         assertTrue(
             "非 sqlMap 文件不产引用（根守卫）",
-            IbatisXmlAttributeReferenceProvider.getReferencesByElement(value, ProcessingContext()).isEmpty(),
+            IbatisXmlAttributeReferenceProvider.INSTANCE.getReferencesByElement(value, ProcessingContext()).isEmpty(),
         )
     }
 
@@ -201,7 +201,7 @@ class IbatisXmlIdReferenceContributorTest : BasePlatformTestCase() {
         val value = attributeValue(myFixture.file as XmlFile, "resultClass")
         assertTrue(
             "未覆盖属性不产引用",
-            IbatisXmlAttributeReferenceProvider.getReferencesByElement(value, ProcessingContext()).isEmpty(),
+            IbatisXmlAttributeReferenceProvider.INSTANCE.getReferencesByElement(value, ProcessingContext()).isEmpty(),
         )
     }
 
@@ -214,7 +214,7 @@ class IbatisXmlIdReferenceContributorTest : BasePlatformTestCase() {
         val value = attributeValue(myFixture.file as XmlFile, "extends")
         assertTrue(
             "extends 只在 <resultMap> 上产引用",
-            IbatisXmlAttributeReferenceProvider.getReferencesByElement(value, ProcessingContext()).isEmpty(),
+            IbatisXmlAttributeReferenceProvider.INSTANCE.getReferencesByElement(value, ProcessingContext()).isEmpty(),
         )
     }
 

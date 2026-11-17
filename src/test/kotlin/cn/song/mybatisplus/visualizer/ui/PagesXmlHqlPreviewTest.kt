@@ -54,7 +54,7 @@ class PagesXmlHqlPreviewTest : BasePlatformTestCase() {
         myFixture.configureByText("pages.xml", xml)
         val file = myFixture.file
         val tag = PsiTreeUtil.findChildrenOfType(file, XmlTag::class.java).first { it.name == "maintainPage" }
-        return PagesXmlPreviewService.preview(file.text, pageId, project, tag)
+        return PagesXmlPreviewService.INSTANCE.preview(file.text, pageId, project, tag)
     }
 
     fun testHqlWithEntityClassAndFrameworkPlaceholder_isConverted() {

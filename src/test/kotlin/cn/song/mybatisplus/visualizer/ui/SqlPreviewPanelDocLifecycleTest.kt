@@ -257,7 +257,7 @@ class SqlPreviewPanelDocLifecycleTest : BasePlatformTestCase() {
      */
     fun testDisposeReleasesPreviewEditorAndAutoPopupListener() {
         val panel = SqlPreviewPanel(project)
-        panel.showResult(result(sql = "SELECT * FROM user", compact = "SELECT * FROM user"))
+        SqlPreviewPanelResultViewKt.showResult(panel, result(sql = "SELECT * FROM user", compact = "SELECT * FROM user"))
         assertNotNull("前置：应已装配预览编辑器", panel.editorForTest())
         assertNotNull("前置：应已挂 autopopup 监听 disposable", panel.autoPopupDisposable)
 

@@ -111,7 +111,7 @@ class XmlInlineSqlPreviewServiceTest : BasePlatformTestCase() {
             """.trimIndent(),
         )
         xmlFile("<root><dataValue><![CDATA[SELECT qc.code FROM WmsQuality qc]]></dataValue></root>")
-        val result = XmlInlineSqlPreviewService.preview(project, tagNamed("dataValue"))
+        val result = XmlInlineSqlPreviewService.INSTANCE.preview(project, tagNamed("dataValue"))
         assertEquals("应自动识别为 HQL", SourceLanguage.HQL, result.sourceLanguage)
         assertTrue("实体名应映射为表名，实际：${result.sql}", result.sql.contains("wms_quality"))
         assertEquals("原文应保留", "SELECT qc.code FROM WmsQuality qc", result.originalSql)
@@ -119,7 +119,7 @@ class XmlInlineSqlPreviewServiceTest : BasePlatformTestCase() {
 
     fun test无type无entityClass_原生SQL保持直显() {
         xmlFile("<root><dataValue><![CDATA[SELECT * FROM t_order]]></dataValue></root>")
-        val result = XmlInlineSqlPreviewService.preview(project, tagNamed("dataValue"))
+        val result = XmlInlineSqlPreviewService.INSTANCE.preview(project, tagNamed("dataValue"))
         assertEquals("根名不可解析为实体 → 保持 SQL", SourceLanguage.SQL, result.sourceLanguage)
         assertNull(result.originalSql)
         assertEquals("SELECT * FROM t_order", result.sql)
@@ -142,7 +142,7 @@ class XmlInlineSqlPreviewServiceTest : BasePlatformTestCase() {
         myFixture.addFileToProject("Foo.java", "@jakarta.persistence.Entity(name=\"Shared\") class Foo {}")
         xmlFile("<root><dataValue><![CDATA[SELECT o.id FROM t_order o WHERE o.id = ?]]></dataValue></root>")
         EntityAliasSweep.resetScanCountForTest()
-        val result = XmlInlineSqlPreviewService.preview(project, tagNamed("dataValue"))
+        val result = XmlInlineSqlPreviewService.INSTANCE.preview(project, tagNamed("dataValue"))
         assertEquals("物理表名不可解析为实体 → 保持 SQL", SourceLanguage.SQL, result.sourceLanguage)
         assertEquals("同步预览不得触发别名反查全扫", 0, EntityAliasSweep.scanCountForTest())
     }

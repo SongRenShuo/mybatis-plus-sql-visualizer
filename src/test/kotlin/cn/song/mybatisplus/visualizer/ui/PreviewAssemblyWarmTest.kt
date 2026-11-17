@@ -47,7 +47,7 @@ class PreviewAssemblyWarmTest : BasePlatformTestCase() {
         PreviewAssemblyWarm.enabledProvider = { false }
         PreviewAssemblyWarm.syncForTest = true
         PreviewAssemblyWarm.warmOnce(mapperTag())
-        assertEquals("Registry 关掉必须整段早退（回到点击时才装配）", 0, PreviewAssemblyWarm.runCount.get())
+        assertEquals("Registry 关掉必须整段早退（回到点击时才装配）", 0, PreviewAssemblyWarm.RUN_COUNT.get())
     }
 
     fun test同一语句只预热一次() {
@@ -55,7 +55,7 @@ class PreviewAssemblyWarmTest : BasePlatformTestCase() {
         val tag = mapperTag()
         PreviewAssemblyWarm.warmOnce(tag)
         PreviewAssemblyWarm.warmOnce(tag)
-        assertEquals("同文件同语句只允许预热一次", 1, PreviewAssemblyWarm.runCount.get())
+        assertEquals("同文件同语句只允许预热一次", 1, PreviewAssemblyWarm.RUN_COUNT.get())
     }
 
     fun test同一文件的第二条语句不再预热() {
@@ -75,7 +75,7 @@ class PreviewAssemblyWarmTest : BasePlatformTestCase() {
         assertEquals("夹具应有两条语句", 2, tags.size)
         PreviewAssemblyWarm.warmOnce(tags[0])
         PreviewAssemblyWarm.warmOnce(tags[1])
-        assertEquals("同一文件只预热一次（不是每条语句一次）", 1, PreviewAssemblyWarm.runCount.get())
+        assertEquals("同一文件只预热一次（不是每条语句一次）", 1, PreviewAssemblyWarm.RUN_COUNT.get())
     }
 
     fun test每项目预热文件数有上限() {
@@ -93,7 +93,7 @@ class PreviewAssemblyWarmTest : BasePlatformTestCase() {
             val tag = PsiTreeUtil.findChildrenOfType(myFixture.file, XmlTag::class.java).first { it.name == "select" }
             PreviewAssemblyWarm.warmOnce(tag)
         }
-        warmed = PreviewAssemblyWarm.runCount.get()
+        warmed = PreviewAssemblyWarm.RUN_COUNT.get()
         assertEquals(
             "每项目每会话最多预热 ${PreviewAssemblyWarm.WARM_FILES_PER_PROJECT} 个文件（实际 $warmed）",
             PreviewAssemblyWarm.WARM_FILES_PER_PROJECT,
@@ -104,7 +104,7 @@ class PreviewAssemblyWarmTest : BasePlatformTestCase() {
     fun test缺少语句id时不预热() {
         PreviewAssemblyWarm.syncForTest = true
         PreviewAssemblyWarm.warmOnce(mapperTag(withId = false))
-        assertEquals("没有 id 无法定位装配对象，不得预热", 0, PreviewAssemblyWarm.runCount.get())
+        assertEquals("没有 id 无法定位装配对象，不得预热", 0, PreviewAssemblyWarm.RUN_COUNT.get())
     }
 
     fun test预热不创建预览弹窗也不留临时文件() {
@@ -113,7 +113,7 @@ class PreviewAssemblyWarmTest : BasePlatformTestCase() {
         val before = basePath?.let { dir -> File(dir).listFiles()?.map { it.name }?.toSet() } ?: emptySet()
 
         PreviewAssemblyWarm.warmOnce(mapperTag())
-        assertEquals("预热应真的跑了一次", 1, PreviewAssemblyWarm.runCount.get())
+        assertEquals("预热应真的跑了一次", 1, PreviewAssemblyWarm.RUN_COUNT.get())
 
         assertNull("预热只算不建 UI：不得创建预览弹窗", SqlPreviewService.activePreviewDialogForTest(project))
         val after = basePath?.let { dir -> File(dir).listFiles()?.map { it.name }?.toSet() } ?: emptySet()

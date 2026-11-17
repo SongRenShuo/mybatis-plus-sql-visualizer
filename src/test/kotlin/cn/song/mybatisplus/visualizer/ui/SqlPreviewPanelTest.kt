@@ -510,7 +510,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         // 列宽改为跟随视口后，宽视口要能完整显示、窄视口回到中段省略且 tooltip 仍是全名。
         val panel = SqlPreviewPanel(project)
         val name = "productInfo.getDicProtocolType().getDeviceName()"
-        panel.showResult(result(params = listOf(name)))
+        SqlPreviewPanelResultViewKt.showResult(panel, result(params = listOf(name)))
         val label = panel.paramRowLabelForTest(0)!!
         val scroll = panel.paramScrollForTest()
         scroll.viewport.setSize(java.awt.Dimension(1000, 300))
@@ -523,7 +523,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         assertTrue("窄视口列宽应收缩（$wide -> $narrow）", narrow < wide)
         assertNotEquals("窄视口应回到中段省略", "#$name", label.text)
         assertEquals("截断后 tooltip 仍为全名", "#$name", label.toolTipText)
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testWrappedLabelTooltipWrapsLongName() {
