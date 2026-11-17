@@ -413,4 +413,22 @@ public final class DialectPreMapping {
             return null;
         }
     }
+
+    // ==================================================================
+    // T-SyncK2JMaster179 生产补漏：master DialectPreMapping.kt 的备忘纯判定函数/常量。
+    // ==================================================================
+
+    /** 备忘有效期（10min）：过期后允许再写一次，避免永远跳过用户手动改的映射。 */
+    public static final long MAPPING_MEMO_TTL_MS = 10L * 60 * 1000;
+
+    /**
+     * 纯判定：探测不可用时（probeId == null）是否可凭备忘跳过写入；探测可用一律以平台为准。
+     */
+    public static boolean skipByMemo(String probeId, String targetId, String memoLangId, long memoAgeMs) {
+        if (probeId != null) return false;
+        if (memoLangId == null) return false;
+        if (memoAgeMs < 0 || memoAgeMs >= MAPPING_MEMO_TTL_MS) return false;
+        String target = targetId != null ? targetId : ExecDialectRouting.MYSQL_LANGUAGE_ID;
+        return memoLangId.equalsIgnoreCase(target);
+    }
 }

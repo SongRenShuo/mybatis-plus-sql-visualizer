@@ -396,10 +396,14 @@ public class EntityClassFinder {
     private static final class ReverseLookupCache {
         /** 扫描时的 modificationCount——PSI 修改后失效重建。 */
         final long count;
+        /** 建成时刻（TTL 兜底：结构版本看不见的正文修改靠 TTL 失效）。 */
+        final long createdAt = System.currentTimeMillis();
         /** 表名（小写）→ 匹配类（短名 + 全限定名）。 */
         final Map<String, List<MatchedClass>> names = new LinkedHashMap<>();
         /** 全量扫描次数（测试访问器断言缓存命中不再扫描）。 */
         int scans = 0;
+        /** 跨 ORM 回补（全项目推断扫描）执行次数，每缓存期至多 +1（测试访问器用）。 */
+        int inferredScanCount = 0;
 
         ReverseLookupCache(long count) {
             this.count = count;
@@ -494,7 +498,21 @@ public class EntityClassFinder {
         // PSI 任何修改递增，缓存自动失效重扫）
         long current = PsiModificationTracker.getInstance(project).getModificationCount();
         ReverseLookupCache existing = project.getUserData(REVERSE_LOOKUP_CACHE_KEY);
-        if (existing != null && existing.count == current) return existing;
+        if (existing != null && existing.count == current) {
+            // TTL 兜底：正文修改（结构版本看不见）超 TTL 视为失效，允许重建一次；测试置 0 强制重建。
+            long ttl = reverseLookupTtlMs;
+            long age = System.currentTimeMillis() - existing.createdAt;
+            if (ttl > 0 && age >= 0 && age < ttl) return existing;
+        }
+        Long delay = indexScanDelayMsForTest;
+        if (delay != null && delay > 0) {
+            try {
+                Thread.sleep(delay);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        indexBuildCount(project).incrementAndGet();
         ReverseLookupCache fresh = new ReverseLookupCache(current);
         project.putUserData(REVERSE_LOOKUP_CACHE_KEY, fresh);
         return fresh;
@@ -564,6 +582,41 @@ public class EntityClassFinder {
 
     public static long reverseLookupCacheSizeBytes(Project project) {
         return Companion.reverseLookupCacheSizeBytes(project);
+    }
+
+    // ==================================================================
+    // T-SyncK2JMaster179 生产补漏：master EntityClassFinder.kt companion 的 TTL / 测试缝 / 访问器。
+    // ==================================================================
+
+    /** 调用方等待索引建成的预算上限（毫秒）。 */
+    public static final long INDEX_WAIT_BUDGET_MS = 800L;
+
+    /** 反查索引 TTL（毫秒），默认 5 分钟；测试置 0 强制下次查询重建。 */
+    public static volatile long reverseLookupTtlMs = 300_000L;
+
+    /** 测试缝：强制建索引走同步分支（null = 看 ApplicationManager.isUnitTestMode）。 */
+    public static volatile Boolean syncIndexBuildForTest = null;
+
+    /** 测试缝：给全量扫描注入人为延迟（毫秒）。 */
+    public static volatile Long indexScanDelayMsForTest = null;
+
+    private static final Key<java.util.concurrent.atomic.AtomicInteger> REVERSE_LOOKUP_SCAN_TOTAL_KEY =
+        Key.create("mp-visualizer.reverseLookupScanTotal");
+
+    /** 跨缓存实例的累计建索引次数（守卫用：缓存重建后 scans 归零仍能看出有没有重扫）。 */
+    public static java.util.concurrent.atomic.AtomicInteger indexBuildCount(Project project) {
+        java.util.concurrent.atomic.AtomicInteger counter = project.getUserData(REVERSE_LOOKUP_SCAN_TOTAL_KEY);
+        if (counter == null) {
+            counter = new java.util.concurrent.atomic.AtomicInteger();
+            project.putUserData(REVERSE_LOOKUP_SCAN_TOTAL_KEY, counter);
+        }
+        return counter;
+    }
+
+    /** 跨 ORM 回补（全项目推断扫描）执行次数。 */
+    public static int inferredScanCountForTest(Project project) {
+        ReverseLookupCache cache = project.getUserData(REVERSE_LOOKUP_CACHE_KEY);
+        return cache != null ? cache.inferredScanCount : 0;
     }
 
     private static final String TABLE_NAME = "com.baomidou.mybatisplus.annotation.TableName";
