@@ -15,7 +15,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 /**
- * T-CaptureCoverage 券 05：**14 方言 × 三面对账守卫**。
+ * T-CaptureCoverage 券 05：**全方言 × 三面对账守卫**（T-CaptureCoverage25 起＝25 方言）。
  *
  * <p>动因：T-CaptureCoverage 的缺口（MariaDB / SQLite 只有 connect 面、OceanBase 三面全空）
  * 是靠人工 grep 全仓 `mariadb|sqlite|oceanbase` 才发现的——用户能选这个方言、日志角标也有，
@@ -52,6 +52,21 @@ public class DialectCaptureCoverageTest {
         put("GaussDB", "com.huawei.gaussdb.");
         put("HighGo", "com.highgo.");
         put("Vastbase", "cn.com.vastbase.");
+        put("GoldenDB（中兴）", "com.goldendb.");
+        // ---- T-CaptureCoverage25（2026-11-18）：route 方言 15→25 的 10 个新增方言 ----
+        // 走既有驱动的六族：引擎协议与既有方言同族，捕获面由同一批 SPECS 覆盖。
+        put("TiDB", "com.mysql.");
+        put("PolarDB-X", "com.mysql.");
+        put("PolarDB", "com.mysql.");
+        put("GBase 8c", "org.postgresql.", "org.opengauss.");
+        put("UXDB（优炫）", "org.postgresql.");
+        put("AntDB", "org.postgresql.");
+        // 自有驱动两族：本次新接线（DriverRegistry + WeaveSpecs + agent 测试 classpath 驱动夹具）。
+        put("XuGu（虚谷）", "com.xugu.");
+        put("YashanDB（崖山）", "com.yashandb.");
+        // 自有驱动但无公开 Maven 坐标两族：显式认领（见 VENDOR_NOT_COVERED），不伪造覆盖。
+        put("GBase 8a", "com.gbase.");
+        put("Oscar（神通）", "com.oscar.");
     }
 
     /** 形态样本（负例造名单用）：只含 EXEC_PARAM = 语句面；只含 PREPARE = prepare 面。 */
@@ -105,8 +120,8 @@ public class DialectCaptureCoverageTest {
         final Map<String, String> claims = StatementWeaverVendorCoverageTest.VENDOR_NOT_COVERED;
 
         // 提取有效性自检（防空绿）：方言表必须齐 14 项、SPECS 必须达到既有量级
-        assertTrue("方言表少于 14 项（疑似断言失效）：" + DIALECT_DRIVER_FAMILIES.size(),
-                DIALECT_DRIVER_FAMILIES.size() >= 14);
+        assertTrue("方言表少于 25 项（疑似断言失效）：" + DIALECT_DRIVER_FAMILIES.size(),
+                DIALECT_DRIVER_FAMILIES.size() >= 25);
         assertTrue("SPECS 提取到的类过少（疑似断言失效）：" + specs.size(), specs.size() >= 20);
 
         final List<String> failures = new ArrayList<String>();

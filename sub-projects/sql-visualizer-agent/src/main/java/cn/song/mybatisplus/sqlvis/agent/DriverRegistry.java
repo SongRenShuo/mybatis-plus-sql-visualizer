@@ -87,6 +87,13 @@ public final class DriverRegistry {
         // 语句面/prepare 面在 WeaveSpecs，勿只登记一半。
         s.add("com.goldendb.jdbc.NonRegisteringDriver");
         s.add("com.goldendb.jdbc.Driver");
+        // 虚谷 XuGu（T-CaptureCoverage25，2026-11-18）：xugu-jdbc 12.3.9，驱动类由 jar 的
+        // `META-INF/services/java.sql.Driver` 实证为 com.xugu.cloudjdbc.Driver；语句面/prepare 面
+        // 在 WeaveSpecs，勿只登记一半。
+        s.add("com.xugu.cloudjdbc.Driver");
+        // 崖山 YashanDB（同券）：yashandb-jdbc 1.10.7，services 声明 com.yashandb.jdbc.Driver；
+        // 语句面登记的是实现类（YasStatement/YasConnection 是接口）。
+        s.add("com.yashandb.jdbc.Driver");
         DRIVER_CLASSES = Collections.unmodifiableSet(s);
         // T-StatementWeave 语句面/prepare 面名单在 StatementWeaver.SPECS（单一真相，形态标注
         // 跟类走）；本表只保留驱动 connect 面。两新面谓词委托 specOf 判定。

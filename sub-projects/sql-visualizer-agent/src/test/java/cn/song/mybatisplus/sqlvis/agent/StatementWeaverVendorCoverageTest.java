@@ -147,6 +147,12 @@ public class StatementWeaverVendorCoverageTest {
             "com.huawei.opengauss.jdbc.jdbc.MPreparedStatement",
             "cn.com.vastbase.jdbc.ReadWriteSplittingPgPreparedStatement",
             "org.opengauss.jdbc.ReadWriteSplittingPgPreparedStatement",
+            // 虚谷 XuGu / 崖山 YashanDB（T-CaptureCoverage25，2026-11-18）：驱动 jar 已进 agent
+            // 测试 classpath，走字节层（真实字节织入 + 隔离 loader 定义）。
+            "com.xugu.cloudjdbc.Statement",
+            "com.xugu.cloudjdbc.PreparedStatement",
+            "com.yashandb.jdbc.StatementImpl",
+            "com.yashandb.jdbc.PreparedStatementImpl",
     };
 
     /**
@@ -201,6 +207,10 @@ public class StatementWeaverVendorCoverageTest {
             "cn.com.vastbase.readwritesplitting.ReadWriteSplittingPgConnection",
             "org.opengauss.readwritesplitting.ReadWriteSplittingPgConnection",
             "org.sqlite.jdbc4.JDBC4Connection",
+            // 虚谷 XuGu / 崖山 YashanDB（T-CaptureCoverage25，2026-11-18）：连接面单列，
+            // 两类均为 public 具体类（崖山的 YasConnection 是接口，实现类是 ConnectionImpl）。
+            "com.xugu.cloudjdbc.Connection",
+            "com.yashandb.jdbc.ConnectionImpl",
     };
 
     /** 字节层排除（agent 测试 classpath 无其 jar）。 */
@@ -301,6 +311,14 @@ public class StatementWeaverVendorCoverageTest {
         // 金仓 T-XcDialects3 券 07 删认领时踩过同一形态，此处照办。
         VENDOR_NOT_COVERED.put("org.hsqldb.", "未纳入测试矩阵（无本机 jar）");
         VENDOR_NOT_COVERED.put("com.gbasedbt.", "国产库，本机无 jar 未实证");
+        // T-CaptureCoverage25（2026-11-18）：GBase 8a / 神通 Oscar 的**官方驱动**没有公开 Maven
+        // 坐标（`com/gbase/gbase-connector-java` 与 `com/oscar/oscar-jdbc` 的 maven-metadata 均 404），
+        // 无法把真实字节放进测试 classpath 做织入取证，故显式认领而非伪造覆盖。
+        // 替代路径：GBase 8a 真机腿与常见用法都走 MariaDB Connector/J（`org.mariadb.`，已覆盖）；
+        // 若将来拿到官方驱动 jar，按「加 testImplementation → 补 WeaveSpecs 两面 → 删本条认领」
+        // 三步升级为硬覆盖（金仓/崖山走的就是这条路）。
+        VENDOR_NOT_COVERED.put("com.gbase.", "GBase 8a 官方驱动无公开 Maven 坐标，未做字节层取证");
+        VENDOR_NOT_COVERED.put("com.oscar.", "神通 Oscar 官方驱动无公开 Maven 坐标，未做字节层取证");
         // 金仓 com.kingbase8. 的旧认领（「本机无 jar 未实证」）已在 T-XcDialects3 券 07 删除：
         // kingbase8 9.0.1 进测试 classpath、语句面/prepare 面登记并过字节层校验后，认领留在
         // 这里反而会让厂商对齐守卫看不出「已覆盖」（认领优先于覆盖判定），变成反向锚。

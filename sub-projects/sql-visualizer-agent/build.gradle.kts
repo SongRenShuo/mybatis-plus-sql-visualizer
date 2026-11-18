@@ -143,6 +143,13 @@ dependencies {
     // JDBC3PS/JDBC3Connection）自动升级为硬断言，可选分支可删。
     testImplementation("org.mariadb.jdbc:mariadb-java-client:3.3.3")
     testImplementation("org.xerial:sqlite-jdbc:3.50.3.0")
+    // T-CaptureCoverage25（2026-11-18）：虚谷 / 崖山两族驱动夹具——均为完全自有实现的独立 jar，
+    // 只进测试 classpath，生产依赖图不变；供覆盖率守卫做真实字节织入 + 链接期校验。
+    // 虚谷：com.xugu.cloudjdbc.*（Statement/PreparedStatement/CallableStatement/Connection）。
+    // 崖山：jar 内 YasStatement / YasConnection 是**接口**，织入点是 StatementImpl /
+    //       PreparedStatementImpl / YasCallableStatement / ConnectionImpl。
+    testImplementation("com.xugudb:xugu-jdbc:12.3.9")
+    testImplementation("com.yashandb:yashandb-jdbc:1.10.7")
 }
 
 // 四格：Hikari 子进程 classpath 版本钉到本机 .m2 在位版本（Hikari 4.0.3 自身要 javassist 3.27.0-GA，

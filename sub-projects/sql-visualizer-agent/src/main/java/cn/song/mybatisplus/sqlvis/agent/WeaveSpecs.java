@@ -269,6 +269,35 @@ final class WeaveSpecs {
         // 且自有 6 个 prepareStatement 出口 + 3 个 prepareCall 出口（javap 实测），非 MySQL
         // ConnectionImpl 子类，故 prepare 面单列。
         putSpec(prepareFace, "com.oceanbase.jdbc.OceanBaseConnection");
+        // 虚谷 XuGu（T-CaptureCoverage25，2026-11-18）：xugu-jdbc 12.3.9（Central
+        // `com.xugudb:xugu-jdbc`）为完全自有实现，包根 com.xugu.cloudjdbc；三类语句 + 连接类
+        // javap 实测均为 public 具体类（各自 implements java.sql.*）。真实 jar 已进 agent 测试
+        // classpath，字节层织入 + 链接期校验见 StatementWeaverVendorCoverageTest。
+        putSpec(statementFace,
+                "com.xugu.cloudjdbc.Statement",
+                "com.xugu.cloudjdbc.PreparedStatement");
+        putSpec(prepareFace, "com.xugu.cloudjdbc.Connection");
+        // 崖山 YashanDB（同券）：yashandb-jdbc 1.10.7 的 `YasStatement` / `YasConnection` 是
+        // **接口**（javap 实证），实现类才是织入点——`StatementImpl`（implements YasStatement）、
+        // `PreparedStatementImpl`（extends StatementImpl）、`YasCallableStatement`
+        // （extends PreparedStatementImpl）、`ConnectionImpl`。照接口名登记会零命中。
+        //
+        // ⚠️ 只能用**不含 ADD_BATCH/CLEAR_BATCH** 的形态：真实字节层实测（2026-11-18）
+        // `StatementImpl.addBatch(String)` 在出口发 `chop_frame(@45,3)`（locals[0]=top），
+        // 旧形态出口 `ALOAD 0` 触发 `VerifyError: Bad local variable type` → 整类零钩子。
+        // 与达梦 `DmdbStatement.addBatch` 同族限制，代价是批处理 SQL 文本不累积（如实登记，
+        // 不静默假装覆盖）。
+        final StatementWeaver.Kind[] statementFaceNoBatchText = {
+                StatementWeaver.Kind.EXEC_PARAM,
+                StatementWeaver.Kind.EXEC_CTX,
+                StatementWeaver.Kind.BATCH,
+                StatementWeaver.Kind.PARAM};
+        putSpec(statementFaceNoBatchText,
+                "com.yashandb.jdbc.StatementImpl",
+                "com.yashandb.jdbc.PreparedStatementImpl");
+        // `YasCallableStatement` 不单列：javap 实测它没有自有 execute 族（继承
+        // PreparedStatementImpl 的入口，父类织入已覆盖）——单列只会 zero-hit。
+        putSpec(prepareFace, "com.yashandb.jdbc.ConnectionImpl");
     }
 
     /**
