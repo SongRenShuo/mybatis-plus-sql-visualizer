@@ -320,6 +320,9 @@ class AgentManager(private val project: Project) : Disposable {
     private val monitorLock = Any()
 
     init {
+        // T-HdAbsorb D215：调试器挂起账本安装（幂等；Community/无 debugger 环境反射缺类静默降级）——
+        // 断点挂起时段入账，agent 耗时在适配期按测量窗交集扣减（补偿自身带 registry 闸）。
+        DebuggerSuspendTracker.install()
         // T-PS5-04：monitor 定时任务不再在此排定（见 ensureMonitorStarted）。
         // T-M56-08：设置变更驱动——开启 → 惰性挂载由进程出现回调承接；
         // 关闭 → CONFIG 停采集 + 会话关闭 + 桥回落；脱敏开关 → CONFIG 下发

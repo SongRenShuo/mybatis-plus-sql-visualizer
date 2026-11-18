@@ -580,6 +580,21 @@ internal fun DataSourceSelector.continuePrepareAfterTempFile(
             LOG.info("[M36] last-used memory ambiguous (id=${memory.dataSourceId}, name=${memory.displayName}) - drop memory, show popup")
             // 只清该模块那一层：其它模块的记忆与项目级兜底不该被一处的歧义连坐。
             forgetLastRunner(project, dialectGateRequest?.moduleKey)
+        } else if (runners.isNotEmpty()) {
+            // T-HdAbsorb D218：UUID/名字两级全落空（数据源改名 / UUID 重排）时按**连接事实指纹**
+            // （url+user+dbms 归一哈希，DataSourceFingerprint）兜底——指纹唯一命中且该名在 runner
+            // 集合里才静默复用；歧义/零命中/枚举失败一律照旧弹窗，不新增绕过方言闸的路径。
+            val fpName = runCatching {
+                DataSourceFingerprint.resolveRunnerName(project, dialectGateRequest?.moduleKey)
+            }.getOrNull()
+            val fpMatched = fpName?.let { n -> runners.firstOrNull { getRunnerName(it) == n } }
+            if (fpMatched != null) {
+                LOG.info("[M36] silent reuse last runner by fingerprint: $fpName (moduleKey=${dialectGateRequest?.moduleKey})")
+                chosenRunnerName = fpName
+                runRunner(project, fpMatched, silent = true, onError = runnerError, moduleKey = dialectGateRequest?.moduleKey)
+                callback?.invoke(true)
+                return
+            }
         }
     }
 
