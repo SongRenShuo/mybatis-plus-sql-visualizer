@@ -452,6 +452,19 @@ class SqlPreviewPanel(
     internal val previewEmptyHint: String =
         emptyHint ?: MpSqlVisualizerBundle.message("panel.preview.emptyHint")
 
+    /**
+     * T-DialogPasteReparse：当前编辑区文本（原生控制台文档优先，自建编辑器兜底；空返回 null）。
+     *
+     * 「先开弹窗、后贴内容」场景需要它——弹窗里的编辑器只是普通 SQL 编辑器，贴进去的
+     * iBatis/MyBatis 片段不会被任何链识别；重新识别必须能把**用户当前的草稿**读出来。
+     */
+    internal fun currentDraftText(): String? =
+        nativeEditorDoc?.text?.takeIf { it.isNotBlank() } ?: editor?.document?.text?.takeIf { it.isNotBlank() }
+
+    /** T-DialogPasteReparse：当前草稿所在文档（挂「贴入即识别」监听用；两者皆无时 null）。 */
+    internal fun draftDocument(): com.intellij.openapi.editor.Document? =
+        nativeEditorDoc ?: editor?.document
+
     /** M36：已内嵌的原生控制台 UI 组件（清空/释放时级联 dispose）。 */
     internal var embeddedConsole: JComponent? = null
 

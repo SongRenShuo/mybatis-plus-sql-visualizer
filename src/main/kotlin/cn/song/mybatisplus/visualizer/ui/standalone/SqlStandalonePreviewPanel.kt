@@ -218,7 +218,7 @@ class SqlStandalonePreviewPanel(
         if (text.isBlank()) {
             if (openDialog) {
                 setStatus(MpSqlVisualizerBundle.message("standalone.status.emptyOpenedDialog"))
-                openDialogWith(StandaloneSqlSourceResolver.emptyPreviewResult())
+                openDialogWith(StandaloneSqlSourceResolver.emptyPreviewResult(), autoReparse = true)
             } else {
                 setStatus(MpSqlVisualizerBundle.message("standalone.status.empty"))
             }
@@ -248,7 +248,7 @@ class SqlStandalonePreviewPanel(
     ) {
         if (resolved == null) {
             setStatus(MpSqlVisualizerBundle.message("standalone.status.unrecognized"))
-            if (openDialog) openDialogWith(rawTextResult(rawText))
+            if (openDialog) openDialogWith(rawTextResult(rawText), autoReparse = true)
             return
         }
         // 两条解析链都没还原：warning 换成结构化四段（标题｜来源｜语句｜原因｜建议），
@@ -265,10 +265,15 @@ class SqlStandalonePreviewPanel(
         if (openDialog) openDialogWith(result)
     }
 
-    /** 走既有 modeless 弹窗（`SqlPreviewService` 单例关旧开新）。 */
-    private fun openDialogWith(result: PreviewResult) {
+    /**
+     * 走既有 modeless 弹窗（`SqlPreviewService` 单例关旧开新）。
+     *
+     * @param autoReparse 「先开弹窗、后贴内容」场景置 true：弹窗挂防抖监听，用户往空编辑器里
+     *   贴入 SQL / mapper 片段后自动重新识别一次（命中即交还手动，不干扰后续编辑）。
+     */
+    private fun openDialogWith(result: PreviewResult, autoReparse: Boolean = false) {
         if (project.isDisposed) return
-        SqlPreviewService.showResult(project, result)
+        SqlPreviewService.showResult(project, result, autoParseOnPaste = autoReparse)
     }
 
     /**
@@ -282,37 +287,13 @@ class SqlStandalonePreviewPanel(
         paramTable = null,
         wrapperType = null,
         tableName = null,
-        warning = MpSqlVisualizerBundle.message("standalone.status.unrecognizedInDialog"),
+        warning = StandaloneWarningText.rawTextNotice(),
         informationalWarning = true,
     )
 
-    /**
-     * 结构化失败文案（单行、`｜` 分段）。
-     *
-     * 为什么不用换行：面板 meta 行是 `JBLabel`（不渲染 `\n`），横幅同理——多行文本会挤成一行
-     * 且丢掉分隔，反而更难读。单行分段在 meta/横幅/剪贴板三处形态一致。
-     */
-    private fun buildFailureWarning(failure: StandaloneSqlSourceResolver.Failure): String {
-        val parts = mutableListOf(MpSqlVisualizerBundle.message("standalone.error.title"))
-        parts += MpSqlVisualizerBundle.message("standalone.error.source")
-        val statement = buildString {
-            append(failure.statementId ?: "?")
-            failure.statementTagName?.let { append(" (<").append(it).append(">)") }
-        }
-        parts += MpSqlVisualizerBundle.message("standalone.error.statement", statement)
-        failure.reason?.let { parts += MpSqlVisualizerBundle.message("standalone.error.reason", it) }
-        parts += MpSqlVisualizerBundle.message(
-            if (failure.flavor == XmlFlavorDetector.Flavor.IBATIS) {
-                "standalone.error.advice.ibatis"
-            } else {
-                "standalone.error.advice.mybatis"
-            },
-        )
-        if (failure.otherChainFailed) {
-            parts += MpSqlVisualizerBundle.message("standalone.error.otherChain")
-        }
-        return parts.joinToString("｜")
-    }
+    /** 结构化失败文案（单行、`｜` 分段）——与弹窗同源，见 [StandaloneWarningText]。 */
+    private fun buildFailureWarning(failure: StandaloneSqlSourceResolver.Failure): String =
+        StandaloneWarningText.failure(failure)
 
     /** 识别结果如实呈现（状态条教会用户「插件认成了什么」，含 MyBatis / iBatis 哪条链）。 */
     private fun statusTextOf(resolved: StandaloneSqlSourceResolver.Resolved): String = when (resolved.kind) {

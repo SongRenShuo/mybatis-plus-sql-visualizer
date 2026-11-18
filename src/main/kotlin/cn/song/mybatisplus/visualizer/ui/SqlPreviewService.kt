@@ -2048,6 +2048,11 @@ class SqlPreviewService(internal val project: Project) {
             result: PreviewResult?,
             sourceLocation: String? = null,
             sourceContext: cn.song.mybatisplus.visualizer.context.PreviewSourceContext? = null,
+            /**
+             * T-DialogPasteReparse：「先开弹窗、后贴内容」——弹窗挂防抖监听，用户往编辑器里
+             * 贴入内容后自动重新识别一次（仅独立工作台的空/原文态开窗时置 true；其余入口保持 false）。
+             */
+            autoParseOnPaste: Boolean = false,
         ) {
             // T-PreviewFast P7：请求→弹窗耗时（第二段锚点；后续控制台可见由面板记）
             runCatching {
@@ -2088,7 +2093,7 @@ class SqlPreviewService(internal val project: Project) {
             // 注：不再量「池线程→EDT 排队」——该值依赖全局单槽时间戳，并发预览会串读数（实测 651ms
             // 的请求被后一次请求覆盖成 1ms），不可信。
             val constructStarted = System.currentTimeMillis()
-            val dialog = SqlPreviewDialog(project, result, sourceLocation, sourceContext)
+            val dialog = SqlPreviewDialog(project, result, sourceLocation, sourceContext, autoParseOnPaste)
             val constructMs = System.currentTimeMillis() - constructStarted
             activePreviewDialogs[project] = java.lang.ref.WeakReference(dialog)
             val showStarted = System.currentTimeMillis()

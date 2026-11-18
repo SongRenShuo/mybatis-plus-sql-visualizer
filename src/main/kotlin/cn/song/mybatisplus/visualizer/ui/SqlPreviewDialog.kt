@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.model.PreviewResult
+import cn.song.mybatisplus.visualizer.ui.standalone.StandaloneSqlSourceResolver
+import cn.song.mybatisplus.visualizer.ui.standalone.StandaloneWarningText
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
@@ -24,6 +26,11 @@ class SqlPreviewDialog(
     private val result: PreviewResult,
     private val sourceLocation: String? = null,
     sourceContext: cn.song.mybatisplus.visualizer.context.PreviewSourceContext? = null,
+    /**
+     * T-DialogPasteReparse：「先开弹窗、后贴内容」——挂防抖监听，用户往编辑器里贴入内容后
+     * 自动重新识别一次（独立工作台的**空/原文态**开窗时置 true）。
+     */
+    private val autoParseOnPaste: Boolean = false,
 ) : DialogWrapper(project, false, DialogWrapper.IdeModalityType.MODELESS) {
 
     private val panel = SqlPreviewPanel(project)
@@ -68,11 +75,120 @@ class SqlPreviewDialog(
         // 关闭按钮文案走插件 bundle（平台 cancelAction 随 IDE 语言包，插件语言设置独立于 IDE，避免中文环境显示英文 Cancel）
         setCancelButtonText(MpSqlVisualizerBundle.message("dialog.preview.cancel"))
         // 弹窗默认尺寸（按屏幕比例自适应；环境异常兜底）
-        val size = initialSize()
-        setSize(size.width, size.height)
+        // 字体/尺寸兜底后进入「贴入即识别」待命（必须在 showResult 之后：面板编辑器此时才就位）
+        if (autoParseOnPaste) armPasteReparse()
     }
 
     override fun createCenterPanel(): JComponent = panel
+
+    // ------------------------------------------------------------------
+    // T-DialogPasteReparse：「先开弹窗、后贴内容」
+    // ------------------------------------------------------------------
+
+    /** 是否仍待命（命中一次即 false——之后交还手动，避免与用户后续编辑互相打架）。 */
+    private var pasteReparseArmed = false
+
+    /** 轮询 Timer（仅在待命期存在；命中 / dispose 即停）。 */
+    private var pasteReparseTimer: javax.swing.Timer? = null
+
+    /** 上一次轮询看到的草稿文本（判「还在变 / 已停手」）。 */
+    private var lastDraftText: String? = null
+
+    /** 文本连续未变化的轮询次数（达到 [PASTE_REPARSE_STABLE_TICKS] 即视为停手）。 */
+    private var stableTicks = 0
+
+    /** 面板自身写文档期间抑制（[SqlPreviewPanel.showResult] 会重写编辑器全文）。 */
+    private var suppressPasteReparse = false
+
+    /**
+     * 草稿文本来源（测试缝：headless 下弹窗编辑器可能还没建出来，
+     * 用例注入固定文本即可驱动同一重识别链）。
+     */
+    internal var draftTextProvider: () -> String? = { panel.currentDraftText() }
+
+    /**
+     * 进入待命：轮询草稿文本，停手后自动重新识别一次。
+     *
+     * ## 为什么是轮询而不是挂 DocumentListener
+     *
+     * 面板的编辑器是**懒建**的（空结果构造期 `draftDocument()` 为 null，真机要等首次布局/挂载
+     * 才有编辑器）——挂监听会有「此刻没文档就永远挂不上」的窗口。轮询只读
+     * [SqlPreviewPanel.currentDraftText]，文档何时出现都能接上；代价是待命期每
+     * [PASTE_REPARSE_POLL_MS] 一次取文本（命中即停，常态为零开销）。
+     *
+     * ## 为什么只在「空/原文态」开窗时进入待命
+     *
+     * 正常语句预览的编辑器内容已是渲染后的 SQL，用户在那儿编辑是**改产物**（回填参数/手调 SQL），
+     * 自动解析会把他的编辑冲掉。
+     */
+    private fun armPasteReparse() {
+        pasteReparseArmed = true
+        // 注意：本方法在构造期 init 里被调用，而下方字段声明在 init 之后——**不得在这里读取
+        // draftTextProvider 等字段**（此刻仍是 JVM 默认 null，本仓在册坑）。首次轮询再取。
+        lastDraftText = null
+        stableTicks = 0
+        pasteReparseTimer?.stop()
+        pasteReparseTimer = javax.swing.Timer(PASTE_REPARSE_POLL_MS) { pollDraftForReparse() }.apply {
+            isRepeats = true
+            start()
+        }
+    }
+
+    private fun pollDraftForReparse() {
+        if (!pasteReparseArmed) {
+            stopPasteReparse()
+            return
+        }
+        val text = draftTextProvider()?.takeIf { it.isNotBlank() } ?: return
+        if (text != lastDraftText) {
+            lastDraftText = text
+            stableTicks = 0
+            return
+        }
+        stableTicks++
+        if (stableTicks >= PASTE_REPARSE_STABLE_TICKS) {
+            reparseDraftFromEditor()
+        }
+    }
+
+    private fun stopPasteReparse() {
+        pasteReparseArmed = false
+        pasteReparseTimer?.stop()
+        pasteReparseTimer = null
+    }
+
+    /**
+     * 对当前草稿做一次独立预览识别（贴入停手后触发）。
+     *
+     * 识别走与工作台页签**同一条链**（[StandaloneSqlSourceResolver]：风味判定 + 双链择优），
+     * 失败文案同源（[StandaloneWarningText]）。命中后立即交还手动，不再自动解析。
+     */
+    internal fun reparseDraftFromEditor() {
+        if (!pasteReparseArmed) return
+        val text = draftTextProvider()?.takeIf { it.isNotBlank() } ?: return
+        val resolved = runCatching { StandaloneSqlSourceResolver.resolve(text) }.getOrNull() ?: return
+        val fresh = resolved.failure?.let { failure ->
+            resolved.result.copy(
+                warning = StandaloneWarningText.failure(failure),
+                informationalWarning = false,
+            )
+        } ?: resolved.result
+        stopPasteReparse()
+        suppressPasteReparse = true
+        try {
+            panel.showResult(fresh)
+        } finally {
+            suppressPasteReparse = false
+        }
+    }
+
+    /** 测试访问器：是否仍待命。 */
+    internal fun pasteReparseArmedForTest(): Boolean = pasteReparseArmed
+
+    override fun dispose() {
+        stopPasteReparse()
+        super.dispose()
+    }
 
     /**
      * T-RefreshDbSteal F2：程序化关闭（供 [SqlPreviewService] 弹窗单例化关旧开新）。
@@ -123,6 +239,16 @@ class SqlPreviewDialog(
     companion object {
         /** 尺寸记忆 key。 */
         const val DIMENSION_KEY = "cn.song.mybatisplus.visualizer.SqlPreviewDialog"
+
+        /**
+         * T-DialogPasteReparse：草稿轮询间隔（ms）——文档出现后才接得上（编辑器懒建）。
+         */
+        internal const val PASTE_REPARSE_POLL_MS = 400
+
+        /**
+         * T-DialogPasteReparse：文本连续未变化的轮询次数阈值（400ms × 2 ≈ 800ms 静默即认为停手）。
+         */
+        internal const val PASTE_REPARSE_STABLE_TICKS = 2
 
         /** 最小弹窗尺寸。 */
         const val MIN_WIDTH = 640

@@ -7,6 +7,7 @@
 > 提示：装上本版后**首次启动**可能看到索引条目数增加——本次新增的 iBatis 别名表索引会做一次性的全项目后台重建（从更早版本升级时，mapper namespace / iBatis sqlMap 两个索引同样只建一次），扫描完成后即恢复常态，后续启动不再有。
 
 ### Added
+- **先开弹窗再贴内容也会自动识别（T-DialogPasteReparse）**：工作台「在弹框中打开」拿到空弹窗后，直接往里贴 SQL / mapper / iBatis 片段，静默约 0.8 秒即自动识别出参数与条件行（与页签同一条识别链）；识别成功一次即交还手动编辑，不再自动改写你的改动。正常语句预览打开的弹窗不受影响（那里的编辑是在调产物，不能被冲掉）
 - **SQL 预览可以独立打开了（T-SqlPreviewStandalone）**：主侧边栏新增「SQL 预览」页签——粘贴一段 SQL 或 mapper XML 片段就能快速格式化、填值、复制可执行 SQL（Tools 菜单与 `Alt+Shift+P` 可直达，剪贴板里疑似 SQL 时自动预填）。XML 片段识别复用插件自研 XML 引擎：动态条件勾选、foreach 重放、bind 回填都可用；网页复制的 `&lt;/&gt;` 转义形态与 markdown 代码围栏也能识别。可用 Registry 键 `sqlvis.preview.standaloneTab`（默认开）关闭页签
 - **独立预览支持 iBatis 2 语句（T-StandaloneIbatisRecognize）**：`<dynamic>` / `<isNotNull>` 等 iBatis 2 条件标签、`#id#` / `$name$` 占位语法现在会被识别并交给 iBatis 解析链——条件行可勾选、参数可填值，不再报 `Unknown element <dynamic>`。判定按片段证据（专有标签/属性/占位语法/DTD）加权，判不准时两条解析链都会试一遍再取可用的那条
 - **SQL 日志条目的耗时按测量来源分档：agent 精确计时恒原样，控制台日志解析的近似耗时带 `~` 前缀（T-HdAbsorb D215，`43a1d0a34`）**；同一时间窗内被调试器断点挂起时，agent 耗时按挂起区间与测量窗的交集扣减——断点不再把墙钟虚增成「超慢查询」。挂起补偿可在 Registry `sqlvis.log.durationSuspendCompensation` 关闭（回退通道）
