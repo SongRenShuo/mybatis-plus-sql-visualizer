@@ -339,6 +339,33 @@ docker run -d --name xc3-<产品> \
 判定成功的标准不是那句 `boot success!`，而是日志链 `Connect to observer ok` → `obshell program health
 check ok` **加上** obclient 实连 `SELECT 1` 通。
 
+**整机重启后 OceanBase 连不上（2026-11-18 实录，三错连发）**——按下面的顺序查，别一路 restart：
+
+1. **observer 是否自启**：容器 Up ≠ 库在。`docker exec <c> ss -tln | grep 2881` 没监听就说明只在
+   restart 了容器。此前 `--restart unless-stopped` 能救回，但下面两条会让它救不回来。
+2. **容器 IP 是否漂移**：`docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' <c>`
+   对比 `/root/.obd/cluster/obcluster/config.yaml` 与 `inner_config.yaml` 里钉的地址。宿主机重启后 Docker
+   重新分配 IP（实测 `172.17.0.12` → `.14`），而 obd 配置仍是安装期那个 IP ⇒ `OBD-1013 connect failed`、
+   随后集群永远 `ERROR 8001 Server is initializing`。**能 sed 对齐就先 sed**（两个 yaml 都改），
+   `sync; echo 3 > /proc/sys/vm/drop_caches` 让 MemFree 过 6G 前检后再 `docker restart`。
+3. **别用 `kill -9` 解 obd 锁**：`[ERROR] Another app is currently holding the obd lock` 通常是上一条
+   被挂住的 `obd cluster display/start` 还在跑。先 `ps -ef | grep "[o]bd"` 看是谁，`kill` 那个命令进程
+   即可；`kill -9` 会连同集群状态一起打断，之后即使 IP 对齐也停在 initializing。
+4. **对不齐就重建**（数据只有测试库时最省事）：`docker stop/rm` → 清 `/www/xc3/oceanbase/{ob,obd-cluster}`
+   → `drop_caches` → 按原参数重跑（`--memory=5.5g --ulimit nofile=65535:65535 --ulimit stack=-1`、
+   `MODE=mini`、`OB_MEMORY_LIMIT=6G`、bind mount 保持 `/root/ob` 与 `/root/.obd/cluster`）。bootstrap
+   约 5~10 分钟（`obclient … SELECT 1` 从 `Can't connect` → `Server is initializing` → 可查即完成）。
+5. **补建业务用户**：`MODE=mini` 只建租户 `test`、库 `xc3_test` 和 `root@test`，**不建**业务用户。
+   `docker exec <c> obclient -h127.0.0.1 -P2881 -uroot@test -p'<OB_TENANT_PASSWORD>' -e
+   "CREATE USER 'xc3'@'%' IDENTIFIED BY '<pw>'; GRANT ALL PRIVILEGES ON xc3_test.* TO 'xc3'@'%';"`
+6. **登录名必须是 `user@tenant`**：容器内 `-u xc3` 能通、外部 JDBC 一律 `Access denied for user 'xc3'@'<外部IP>'`
+   就是这个坑——`xc3` 不带 tenant 会落到别的租户。矩阵/DBX 里统一写 `xc3@test`。
+
+**增强捕获面的真机验证**（不是方言渲染）：用 `dev-support/agent-capture-repro/`——`DialectCaptureProbe`
+（只依赖 java.sql 的 4 条 DML 载荷）+ `fake_receiver.py <port> <log> <秒>`（按协议统计 EVENT 帧）。
+两个读数口径：①判定只看 `CLOSED frames={'EVENT': n…}` 这行，别用 `grep -c EVENT`（会命中摘要行）；
+②载荷末尾要留 6s 再退出，否则异步 flush 没走完，会把「跑太快」误判成「零捕获」。
+
 **GaussDB（apecloud）**——镜像没有 entrypoint，`CMD=["bin/bash"]`，得手工起，且三步都有硬要求：
 
 ```bash
@@ -769,6 +796,9 @@ object file——那是环境问题，不是库装坏了，别按「库坏了」
 | 现象 | 真因 | 处置 |
 |---|---|---|
 | OceanBase 打 `boot success!` 但连不上 | 镜像日志不可信，obd 前检失败（ulimit/MemFree） | 翻全量日志找 `OBD-1007`/`OBD-2000`；加 `--ulimit`、drop_caches 后重建 |
+| OceanBase 容器 Up、端口在听，但永远 `ERROR 8001 Server is initializing` | 宿主机重启后容器 IP 漂移，obd 的 `config.yaml`/`inner_config.yaml` 仍钉安装期 IP | 先对齐 IP（两个 yaml 都 sed）+ drop_caches 后 restart；对不齐就重建（见 §2 OceanBase 六步） |
+| 容器内 `-u xc3` 能连，外部 JDBC 一律 `Access denied` | 登录名缺 tenant；或 `MODE=mini` 根本没建业务用户 | 补建用户并把矩阵/DBX 登录名写成 `user@tenant`（如 `xc3@test`） |
+| `[ERROR] Another app is currently holding the obd lock` | 上一条挂住的 `obd cluster display/start` 还占着锁 | `ps -ef \| grep "[o]bd"` 找到那个命令进程 `kill`（**别 `kill -9`**，会把集群状态打断） |
 | 容器起不来，`systemctl status mariadb` 失败 | 用 apt 装系统级 mariadb 与自定义端口配置冲突 | 走容器；apt 那条路装完记得 `systemctl disable --now` 并删掉自定义 cnf |
 | 建表 `permission denied for schema public` | openGauss/Vastbase 收回 PUBLIC 的 CREATE | 超级用户 `GRANT CREATE, USAGE` + `ALTER SCHEMA public OWNER` |
 | 连上但报 SCRAM 相关错 | 拿 pgjdbc 连 openGauss/GaussDB | 换 `opengauss-jdbc` 的 `-og` 变体 |
