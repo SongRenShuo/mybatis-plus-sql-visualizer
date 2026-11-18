@@ -78,7 +78,7 @@ class SqlPreviewDialogTest : BasePlatformTestCase() {
         try {
             val captured = dialog.actionsAtConstructionForTest
             assertNotNull("构造期应已捕获动作数组", captured)
-            assertEquals("底部动作应为 执行/复制/复制并关闭/取消 四个", 4, captured!!.size)
+            assertEquals("底部动作应为 执行/从文件加载/复制/复制并关闭/取消 五个", 5, captured!!.size)
             assertTrue(
                 "构造期动作数组不得有空元素（字段声明序晚于 init 的典型症状）：" +
                     captured.joinToString { it.getValue(javax.swing.Action.NAME)?.toString() ?: "<null>" },
