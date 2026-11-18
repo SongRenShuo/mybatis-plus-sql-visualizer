@@ -13,7 +13,10 @@ import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.CustomShortcutSet
 import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.openapi.actionSystem.KeyboardShortcut
+import com.intellij.openapi.actionSystem.Shortcut
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.editor.event.DocumentEvent
@@ -21,11 +24,13 @@ import com.intellij.openapi.editor.event.DocumentListener
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Splitter
 import com.intellij.openapi.util.Disposer
+import com.intellij.openapi.util.SystemInfo
 import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
 import javax.swing.JPanel
+import javax.swing.KeyStroke
 
 /**
  * 独立 SQL 预览工作台（T-SqlPreviewStandalone D-2）：不依赖语句入口，用户粘贴一段
@@ -79,6 +84,9 @@ class SqlStandalonePreviewPanel(
 
     private var disposed = false
 
+    /** 解析预览动作实例（字段化：构造期就要注册组件级快捷键，不能每次建工具栏都新建一个）。 */
+    private val resolveAction = ResolveAction()
+
     init {
         Disposer.register(this, inputEditor)
 
@@ -95,6 +103,16 @@ class SqlStandalonePreviewPanel(
         add(splitter, BorderLayout.CENTER)
         add(statusLabel, BorderLayout.SOUTH)
 
+        // T-StandaloneHintAndWarning：Alt+Shift+Q 在工作台里接「解析预览」。
+        // 为什么必须接管：该键全局绑 ConvertToSqlAction，而它只在 Java/XML/kt 文件上 enabled
+        //（`actions/ConvertToSqlAction.kt` 的 update）——工作台输入是 `input.sql`，动作恒 disabled，
+        // 按键被丢弃、界面零反馈，而预览区空态提示恰恰承诺了「按 Alt+Shift+Q」。组件级 custom
+        // shortcut 命中即消费按键（同 SqlPreviewPanel 格式化键 T-M26.6 的既有手法）。
+        resolveAction.registerCustomShortcutSet(
+            CustomShortcutSet(*reparseShortcuts()),
+            this,
+        )
+
         // 空态提示显隐跟随文档内容
         inputEditor.editor.document.addDocumentListener(object : DocumentListener {
             override fun documentChanged(e: DocumentEvent) {
@@ -109,7 +127,7 @@ class SqlStandalonePreviewPanel(
 
     private fun buildInputToolbar(): JPanel {
         val group = DefaultActionGroup(
-            ResolveAction(),
+            resolveAction,
             FormatAction(),
             ClearAction(),
             OpenInDialogAction(),
@@ -323,7 +341,12 @@ class SqlStandalonePreviewPanel(
             previewHolder.repaint()
             return it
         }
-        val panel = SqlPreviewPanel(project)
+        val panel = SqlPreviewPanel(
+            project,
+            // T-StandaloneHintAndWarning：工作台专用空态提示——原文案的「选中代码」与 Alt+Shift+Q
+            // 是编辑器流的语义，搬过来是假承诺（本类已接管该键，但「选中代码」在工作台不成立）。
+            emptyHint = MpSqlVisualizerBundle.message("standalone.preview.emptyHint"),
+        )
         if (!previewPanelRegistered) {
             Disposer.register(this, panel)
             previewPanelRegistered = true
@@ -372,6 +395,9 @@ class SqlStandalonePreviewPanel(
         inputEditor.setSql(text)
     }
 
+    /** 测试缝：内嵌预览面板当前生效的空态提示（证工作台专用文案真的接上了）。 */
+    internal fun embeddedPreviewHintForTest(): String = ensurePreviewPanel().previewEmptyHintForTest()
+
     override fun dispose() {
         if (disposed) return
         disposed = true
@@ -385,5 +411,15 @@ class SqlStandalonePreviewPanel(
 
     companion object {
         private const val TOOLBAR_ID = "SqlStandalonePreviewPanelToolbar"
+
+        /**
+         * 重新解析快捷键：与 plugin.xml 里 ConvertToSql 的双 keymap 登记同源（Win/Linux `alt shift Q`，
+         * macOS `meta shift Q`）——用户是在编辑器里学会这个键的，工作台沿用同一手感。
+         */
+        internal fun reparseShortcuts(): Array<Shortcut> = if (SystemInfo.isMac) {
+            arrayOf(KeyboardShortcut(KeyStroke.getKeyStroke("meta shift Q"), null))
+        } else {
+            arrayOf(KeyboardShortcut(KeyStroke.getKeyStroke("alt shift Q"), null))
+        }
     }
 }

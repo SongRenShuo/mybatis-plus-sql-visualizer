@@ -78,6 +78,15 @@ class SqlStandalonePreviewPanelDialogTest : BasePlatformTestCase() {
         )
     }
 
+    /** 工作台内嵌预览面板用**工作台专用**空态提示（不再承诺「选中代码」那套编辑器语义）。 */
+    fun test工作台内嵌面板用工作台专用空态提示() {
+        val p = newPanel()
+        assertEquals(
+            cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("standalone.preview.emptyHint"),
+            p.embeddedPreviewHintForTest(),
+        )
+    }
+
     /** 有合法 SQL 时点「在弹框中打开」→ 平台侧真的建出弹窗（2026-11-18 缺陷回归）。 */
     fun test在弹框中打开_有SQL时真的弹窗() {
         val p = newPanel()

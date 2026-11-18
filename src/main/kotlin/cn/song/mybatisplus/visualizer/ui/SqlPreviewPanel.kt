@@ -143,7 +143,18 @@ import javax.swing.event.DocumentListener
  */
 // T-M53-II：构造期属性放宽为 internal——同包扩展函数（拆出的协作文件）需要读取它；
 // 可见性只在模块内变化，调用点语义不变。
-class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPreviewPanel>(BorderLayout()), Disposable {
+class SqlPreviewPanel(
+    internal val project: Project? = null,
+    /**
+     * T-StandaloneHintAndWarning：空态提示文案覆盖（null = 沿用 `panel.preview.emptyHint`）。
+     *
+     * 原文案写的是「选中代码按 Alt+Shift+Q 可再次预览」——那是**编辑器里点预览**那条流的语义；
+     * 独立工作台的输入是整段粘贴文本、且 `ConvertToSqlAction` 在 `input.sql` 上恒 disabled
+     * （`actions/ConvertToSqlAction.kt` update 只认 Java/XML/kt），搬过去就是假承诺。
+     * 工作台传入自己的文案（键 `standalone.preview.emptyHint`）。
+     */
+    emptyHint: String? = null,
+) : JBPanel<SqlPreviewPanel>(BorderLayout()), Disposable {
 
     internal val metaLabel = JBLabel()
 
@@ -438,7 +449,8 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
      * T-UxOnboard T-UX-02：预览编辑器空态引导（原生 placeholder，显隐由编辑器随空文档管理）。
      * 常态下预览内容即编辑器全文、placeholder 不可见；用户清空文档后原生提示接管。
      */
-    internal val previewEmptyHint: String = MpSqlVisualizerBundle.message("panel.preview.emptyHint")
+    internal val previewEmptyHint: String =
+        emptyHint ?: MpSqlVisualizerBundle.message("panel.preview.emptyHint")
 
     /** M36：已内嵌的原生控制台 UI 组件（清空/释放时级联 dispose）。 */
     internal var embeddedConsole: JComponent? = null
