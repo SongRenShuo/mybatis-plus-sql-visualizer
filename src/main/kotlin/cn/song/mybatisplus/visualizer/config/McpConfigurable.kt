@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.config
 
+import cn.song.mybatisplus.visualizer.mcp.GateRegistrationState
+import cn.song.mybatisplus.visualizer.mcp.McpGateFilterEpRegistrar
 import cn.song.mybatisplus.visualizer.mcp.McpSettingsOpenResult
 import cn.song.mybatisplus.visualizer.mcp.McpToolGate
 import cn.song.mybatisplus.visualizer.mcp.findMcpToolsetClass
@@ -64,6 +66,9 @@ class McpConfigurable internal constructor(
     /** 页内开关选择状态，应用后生效。 */
     private var bannerGateLine: JBLabel? = null
 
+    /** T-McpGlobalBreakHardening：外部会话门控的实际注册状态（只读，不等于工具可调用）。 */
+    private var bannerGateStatusLine: JBLabel? = null
+
     override fun getDisplayName(): String = MpSqlVisualizerBundle.message("settings.mcp.title")
 
     override fun createComponent(): JComponent {
@@ -117,11 +122,22 @@ class McpConfigurable internal constructor(
         bannerGateLine = JBLabel().apply {
             foreground = JBUI.CurrentTheme.ContextHelp.FOREGROUND
         }
+        // T-McpGlobalBreakHardening：门控「实际注册状态」是第三个独立事实——与页内勾选、
+        // 平台能力都不同源。用户/支持看这一行就能判断「关掉总开关后是否真的不再碰平台链」。
+        bannerGateStatusLine = JBLabel(
+            MpSqlVisualizerBundle.message(
+                "settings.mcp.banner.gateStatus",
+                gateStatusText(),
+            ),
+        ).apply {
+            foreground = JBUI.CurrentTheme.ContextHelp.FOREGROUND
+        }
         val banner = JPanel(GridLayout(0, 1)).apply {
             border = JBUI.Borders.emptyBottom(10)
             add(bannerHeadline)
             add(bannerPlatformLine)
             add(bannerGateLine)
+            add(bannerGateStatusLine)
         }
 
         val masterCheckBox = JBCheckBox(
@@ -200,8 +216,25 @@ class McpConfigurable internal constructor(
         }
     }
 
-    /** 工具级禁用判定（仅禁用清单，不含总开关——总开关是独立维度）。 */
-    private fun isToolListedInState(state: PluginSettings.State?, toolName: String): Boolean {
+    /**
+     * T-McpGlobalBreakHardening：门控实际注册状态文案。
+     *
+     * 与 [refreshBannerGateLine] 的「页内选择」分开：这一行描述的是**运行期事实**——注册器
+     * 在最近一次同步里对平台契约做了什么。UNRECOGNIZED/TRIPPED 都意味着门控不生效，但
+     * 平台 MCP 服务不受影响；这两个词要让用户/支持一眼看到，而不是去翻 idea.log。
+     */
+    private fun gateStatusText(): String = MpSqlVisualizerBundle.message(
+        when (McpGateFilterEpRegistrar.state) {
+            GateRegistrationState.REGISTERED -> "settings.mcp.banner.gateActive"
+            GateRegistrationState.UNRECOGNIZED -> "settings.mcp.banner.gateUnrecognized"
+            GateRegistrationState.DISABLED -> "settings.mcp.banner.gateDisabled"
+            GateRegistrationState.UNSUPPORTED -> "settings.mcp.banner.gateUnsupported"
+            GateRegistrationState.TRIPPED -> "settings.mcp.banner.gateTripped"
+            GateRegistrationState.PENDING -> "settings.mcp.banner.gatePending"
+        },
+    )
+
+    /** 工具级禁用判定（仅禁用清单，不含总开关——总开关是独立维度）。 */    private fun isToolListedInState(state: PluginSettings.State?, toolName: String): Boolean {
         if (state == null) return true
         return state.mcpDisabledTools.none { it.equals(toolName, ignoreCase = true) }
     }

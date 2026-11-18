@@ -553,6 +553,12 @@
              代码读取：log/agent/DebuggerSuspendTracker.REGISTRY_KEY。 -->
         <registryKey key="sqlvis.log.durationSuspendCompensation" defaultValue="true"
                      description="Subtract debugger-suspend wall-clock overlaps from agent-measured SQL durations (breakpoint pauses inflate the wall clock). Disable to keep raw wall-clock durations."/>
+        <!-- T-McpGlobalBreakHardening：MCP 外部会话门控的过滤 EP 逃生开关。默认开＝按平台契约注册
+             过滤 provider；关掉即完全不注册（门控不生效，平台内置 MCP Server 不受影响）。
+             用途：万一平台再改过滤器契约，用户可只关这一项而不用卸载插件。
+             代码读取：mcp/McpGateFilterRegistrar.kt（McpGateFilterEpRegistrar.ESCAPE_REGISTRY_KEY）。 -->
+        <registryKey key="sqlvis.mcp.gateFilterEp" defaultValue="true"
+                     description="Register the MCP tool-filter extension that hides disabled SQL Visualizer tools from external MCP sessions. Disable to skip registration entirely (the gate stops working; the IDE's built-in MCP server is unaffected)."/>
     </extensions>
 
     <!-- T-M53：Kotlin plugin mode 声明——本插件只用 Kotlin PSI（gutter 标记），不涉及 Analysis API，

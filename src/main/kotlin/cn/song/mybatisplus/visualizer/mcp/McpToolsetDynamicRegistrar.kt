@@ -59,6 +59,9 @@ object McpToolsetDynamicRegistrar {
     /** F29（D1=A）：已注册到 mcpToolset EP 的壳 FQN——重试防重复注册。 */
     internal val epRegistered = mutableSetOf<String>()
 
+    /** T-McpGlobalBreakHardening：壳 FQN → 已注册实例（总开关关闭时按实例摘除）。 */
+    internal val registeredInstances = mutableMapOf<String, Any>()
+
     /** 十一工具类清单（R14 T-HistorySearch 增至十一；McpToolGate.TOOL_NAMES 一一对应，守卫测试对账单一事实）。 */
     internal val TOOL_CLASSES = listOf(
         SqlVisualizerRenderSqlTool::class.java,
@@ -93,6 +96,28 @@ object McpToolsetDynamicRegistrar {
         }
     }
 
+    /**
+     * T-McpGlobalBreakHardening：把已注册的 toolset 全部从 EP 摘除（总开关关闭时调用）。
+     *
+     * 幂等；EP 不可用/摘除失败只记 WARN——最坏结果是工具仍可见（门控失效），平台服务不受影响。
+     * `registered` 复位，重新开启总开关时 [registerOnce] 可再跑一遍（壳类复用 [definedShells]）。
+     */
+    @Synchronized
+    fun unregisterAll() {
+        if (registeredInstances.isEmpty() && !registered.get()) return
+        val ep = runCatching { ExtensionPointName.create<Any>(TOOLSET_EP_NAME).getPoint(null) }.getOrNull()
+        if (ep != null) {
+            registeredInstances.forEach { (fqn, instance) ->
+                runCatching { ep.unregisterExtension(instance) }
+                    .onFailure { LOG.warn("T-McpDynamicToolset: 摘除 $fqn 失败（该工具仍可见）", it) }
+            }
+        }
+        registeredInstances.clear()
+        epRegistered.clear()
+        registered.set(false)
+        LOG.info("T-McpDynamicToolset: toolsets unregistered (master switch off)")
+    }
+
     private fun registerToolset(toolClass: Class<*>, toolsetIface: Class<*>) {
         // simpleName 与业务类一致（T-McpToolNaming 分组名=simpleName），gen 子包隔离 FQN
         registerToolset(toolClass, toolsetIface, "cn.song.mybatisplus.visualizer.mcp.gen." + toolClass.simpleName)
@@ -113,6 +138,7 @@ object McpToolsetDynamicRegistrar {
         val instance = shellClass.getDeclaredConstructor().newInstance()
         ExtensionPointName.create<Any>(TOOLSET_EP_NAME).getPoint(null).registerExtension(instance)
         epRegistered.add(shellName)
+        registeredInstances[shellName] = instance
         LOG.info("T-McpDynamicToolset: registered ${shellClass.simpleName} (gen shell of ${toolClass.name})")
     }
 
