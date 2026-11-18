@@ -79,9 +79,6 @@ class SqlStandalonePreviewPanel(
 
     private var disposed = false
 
-    /** 「在弹框中打开」挂起标志：解析成功后除内嵌展示外再走 [SqlPreviewService.showResult]。 */
-    private var openDialogPending = false
-
     init {
         Disposer.register(this, inputEditor)
 
@@ -163,8 +160,13 @@ class SqlStandalonePreviewPanel(
         }
     }
 
-    /** 在弹框中打开：同一解析链产出 → 既有 modeless 弹窗（与三条语句入口同构）。 */
-    private inner class OpenInDialogAction : AnAction() {
+    /**
+     * 在弹框中打开：同一解析链产出 → 既有 modeless 弹窗（与三条语句入口同构）。
+     *
+     * **`internal` 而非 `private`**：回归用例必须走这条真实动作路径——2026-11-18 缺陷就出在
+     * 「动作先置标志位、再调无参方法被默认值抹掉」，只测面板方法会漏掉。
+     */
+    internal inner class OpenInDialogAction : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.icon = MpvsIcons.DockedPreview
             e.presentation.text = MpSqlVisualizerBundle.message("standalone.action.openDialog")
@@ -173,8 +175,7 @@ class SqlStandalonePreviewPanel(
         override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
 
         override fun actionPerformed(e: AnActionEvent) {
-            openDialogPending = true
-            resolveFromInput()
+            resolveFromInput(openDialog = true)
         }
     }
 
@@ -184,12 +185,25 @@ class SqlStandalonePreviewPanel(
 
     /**
      * 解析当前输入并展示（内部入口）。流程：EDT 取文本快照 → 后台纯文本解析 →
-     * 代次守卫回 EDT 装配。openDialog=true 时解析成功后额外走弹窗单例（D-3）。
+     * 代次守卫回 EDT 装配。
+     *
+     * **`openDialog` 只存在于本条调用链**（捕获进后台闭包、随代次守卫回传），不再用字段传递——
+     * 2026-11-18 缺陷：原实现用 `openDialogPending` 字段，动作先置真再调无参 `resolveFromInput()`，
+     * 被形参默认值 `false` 就地抹掉，导致「在弹框中打开」永不弹窗。字段形态跨调用、语义靠调用
+     * 顺序维持，禁止回归。
+     *
+     * 空输入与未识别文本同样可以开弹窗（用户诉求：这个按钮永远能开）——空输入给空编辑器，
+     * 未识别给原文 + 信息级说明，用户可直接在弹窗内粘贴/编辑。
      */
     fun resolveFromInput(openDialog: Boolean = false) {
         val text = inputEditor.text
         if (text.isBlank()) {
-            setStatus(MpSqlVisualizerBundle.message("standalone.status.empty"))
+            if (openDialog) {
+                setStatus(MpSqlVisualizerBundle.message("standalone.status.emptyOpenedDialog"))
+                openDialogWith(StandaloneSqlSourceResolver.emptyPreviewResult())
+            } else {
+                setStatus(MpSqlVisualizerBundle.message("standalone.status.empty"))
+            }
             return
         }
         if (text.length > StandaloneSqlSourceResolver.MAX_TEXT_LENGTH) {
@@ -197,45 +211,104 @@ class SqlStandalonePreviewPanel(
             return
         }
         val generation = ++resolveGeneration
-        openDialogPending = openDialog
         ApplicationManager.getApplication().executeOnPooledThread {
             val resolved = runCatching { StandaloneSqlSourceResolver.resolve(text) }.getOrNull()
             ApplicationManager.getApplication().invokeLater(
                 {
                     if (disposed || generation != resolveGeneration || project.isDisposed) return@invokeLater
-                    applyResolved(resolved)
+                    applyResolved(resolved, openDialog, text)
                 },
                 ModalityState.nonModal(),
             )
         }
     }
 
-    private fun applyResolved(resolved: StandaloneSqlSourceResolver.Resolved?) {
+    private fun applyResolved(
+        resolved: StandaloneSqlSourceResolver.Resolved?,
+        openDialog: Boolean,
+        rawText: String,
+    ) {
         if (resolved == null) {
             setStatus(MpSqlVisualizerBundle.message("standalone.status.unrecognized"))
+            if (openDialog) openDialogWith(rawTextResult(rawText))
             return
         }
-        val dialogRequested = openDialogPending
-        openDialogPending = false
-        val panel = ensurePreviewPanel()
-        panel.showResult(resolved.result)
+        // 两条解析链都没还原：warning 换成结构化四段（标题｜来源｜语句｜原因｜建议），
+        // 面板横幅与「复制错误信息」都读这一份——用户粘贴出去的才是可定位的完整信息。
+        val result = resolved.failure?.let { failure ->
+            resolved.result.copy(
+                warning = buildFailureWarning(failure),
+                informationalWarning = false,
+            )
+        } ?: resolved.result
+        ensurePreviewPanel().showResult(result)
         previewHintLabel.isVisible = false
         setStatus(statusTextOf(resolved))
-        if (dialogRequested) {
-            SqlPreviewService.showResult(project, resolved.result)
-        }
+        if (openDialog) openDialogWith(result)
     }
 
-    /** 识别结果如实呈现（状态条教会用户「插件认成了什么」）。 */
+    /** 走既有 modeless 弹窗（`SqlPreviewService` 单例关旧开新）。 */
+    private fun openDialogWith(result: PreviewResult) {
+        if (project.isDisposed) return
+        SqlPreviewService.showResult(project, result)
+    }
+
+    /**
+     * 未识别文本的弹窗载荷：原文照搬 + 信息级说明（UI-001 的 `informationalWarning`，
+     * 面板用 ℹ 前缀，不冒充渲染失败）。
+     */
+    private fun rawTextResult(text: String): PreviewResult = PreviewResult(
+        sql = text,
+        compactSql = text,
+        unresolvedParams = emptyList(),
+        paramTable = null,
+        wrapperType = null,
+        tableName = null,
+        warning = MpSqlVisualizerBundle.message("standalone.status.unrecognizedInDialog"),
+        informationalWarning = true,
+    )
+
+    /**
+     * 结构化失败文案（单行、`｜` 分段）。
+     *
+     * 为什么不用换行：面板 meta 行是 `JBLabel`（不渲染 `\n`），横幅同理——多行文本会挤成一行
+     * 且丢掉分隔，反而更难读。单行分段在 meta/横幅/剪贴板三处形态一致。
+     */
+    private fun buildFailureWarning(failure: StandaloneSqlSourceResolver.Failure): String {
+        val parts = mutableListOf(MpSqlVisualizerBundle.message("standalone.error.title"))
+        parts += MpSqlVisualizerBundle.message("standalone.error.source")
+        val statement = buildString {
+            append(failure.statementId ?: "?")
+            failure.statementTagName?.let { append(" (<").append(it).append(">)") }
+        }
+        parts += MpSqlVisualizerBundle.message("standalone.error.statement", statement)
+        failure.reason?.let { parts += MpSqlVisualizerBundle.message("standalone.error.reason", it) }
+        parts += MpSqlVisualizerBundle.message(
+            if (failure.flavor == XmlFlavorDetector.Flavor.IBATIS) {
+                "standalone.error.advice.ibatis"
+            } else {
+                "standalone.error.advice.mybatis"
+            },
+        )
+        if (failure.otherChainFailed) {
+            parts += MpSqlVisualizerBundle.message("standalone.error.otherChain")
+        }
+        return parts.joinToString("｜")
+    }
+
+    /** 识别结果如实呈现（状态条教会用户「插件认成了什么」，含 MyBatis / iBatis 哪条链）。 */
     private fun statusTextOf(resolved: StandaloneSqlSourceResolver.Resolved): String = when (resolved.kind) {
         StandaloneSqlSourceResolver.Kind.XML_STATEMENT -> {
             val id = resolved.statementId ?: "?"
-            if (resolved.statementCount > 1) {
-                MpSqlVisualizerBundle.message(
-                    "standalone.status.xml.multi", id, resolved.statementCount,
+            val iBatis = resolved.flavor == XmlFlavorDetector.Flavor.IBATIS
+            when {
+                resolved.statementCount > 1 -> MpSqlVisualizerBundle.message(
+                    if (iBatis) "standalone.status.ibatis.multi" else "standalone.status.xml.multi",
+                    id,
+                    resolved.statementCount,
                 )
-            } else {
-                MpSqlVisualizerBundle.message("standalone.status.xml", id)
+                iBatis -> MpSqlVisualizerBundle.message("standalone.status.ibatis", id)
+                else -> MpSqlVisualizerBundle.message("standalone.status.xml", id)
             }
         }
         StandaloneSqlSourceResolver.Kind.PLAIN_SQL ->
@@ -265,7 +338,6 @@ class SqlStandalonePreviewPanel(
 
     private fun clear() {
         resolveGeneration++
-        openDialogPending = false
         inputEditor.setSql("")
         previewPanel?.let {
             previewHolder.removeAll()
@@ -293,6 +365,11 @@ class SqlStandalonePreviewPanel(
         prefillText?.let { inputEditor.setSql(it) }
         inputEditor.editor.contentComponent.requestFocusInWindow()
         if (!prefillText.isNullOrBlank()) resolveFromInput()
+    }
+
+    /** 测试缝：程序性写入输入区（Light 用例驱动识别/弹窗链，不依赖真实键入）。 */
+    internal fun setInputTextForTest(text: String) {
+        inputEditor.setSql(text)
     }
 
     override fun dispose() {

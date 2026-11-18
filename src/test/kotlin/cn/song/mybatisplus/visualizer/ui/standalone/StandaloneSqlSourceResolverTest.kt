@@ -249,4 +249,91 @@ class StandaloneSqlSourceResolverTest {
         assertFalse(StandaloneSqlSourceResolver.isClipboardCandidate("   "))
         assertFalse(StandaloneSqlSourceResolver.isClipboardCandidate(null))
     }
+
+    // ---------- iBatis 2 识别与双链择优（T-StandaloneIbatisRecognize） ----------
+
+    /** 用户 2026-11-18 报障原样片段（iBatis 2 SQL Map）。 */
+    private val ibatisFragment = """
+        <select id="selectByCondition" parameterClass="User" resultMap="userResult">
+          SELECT <include refid="userColumns"/>
+          FROM T_USER
+          <dynamic prepend="WHERE">
+            <isNotNull   prepend="AND " property="id">ID = #id#</isNotNull>
+            <isNotEmpty  prepend="AND " property="username">USER_NAME LIKE '%${'$'}username${'$'}%'</isNotEmpty>
+            <isEqual     prepend="AND " property="status" compareValue="1">STATUS = #status#</isEqual>
+            <isGreaterThan prepend="AND " property="age" compareValue="18">AGE &gt; #age#</isGreaterThan>
+          </dynamic>
+          ORDER BY ID
+        </select>
+    """.trimIndent()
+
+    @Test
+    fun `用户报障的 iBatis 片段走 iBatis 链而非报 Unknown element`() {
+        val resolved = StandaloneSqlSourceResolver.resolve(ibatisFragment)
+        assertNotNull(resolved)
+        assertEquals(StandaloneSqlSourceResolver.Kind.XML_STATEMENT, resolved!!.kind)
+        assertEquals(XmlFlavorDetector.Flavor.IBATIS, resolved.flavor)
+        assertNull("iBatis 链应还原成功，不得带失败事实：${resolved.failure}", resolved.failure)
+        assertNotNull("iBatis 链应产出条件/参数模型", resolved.result.ibatisParamModel)
+        assertEquals("selectByCondition", resolved.statementId)
+        val warning = resolved.result.warning.orEmpty()
+        assertFalse("不得再出现 MyBatis 的 Unknown element 假错误：$warning", warning.contains("Unknown element"))
+    }
+
+    @Test
+    fun `iBatis 四个条件行全部建行`() {
+        val resolved = StandaloneSqlSourceResolver.resolve(ibatisFragment)
+        val model = resolved!!.result.ibatisParamModel!!
+        assertEquals("isNotNull/isNotEmpty/isEqual/isGreaterThan 各一行", 4, model.conditionRows.size)
+    }
+
+    @Test
+    fun `裸 statement 标签靠双链回退被 iBatis 接管`() {
+        // `<statement>` 是 iBatis 专有语句标签：MyBatis 链不收集（无 select/insert/update/delete），
+        // 判定器也拿不到风味信号（同分判 MyBatis）→ 首选链失败 → 回退 iBatis 成功。
+        val text = """<statement id="q9">SELECT * FROM T_USER WHERE ID = #id#</statement>"""
+        val resolved = StandaloneSqlSourceResolver.resolve(text)
+        assertNotNull("statement 标签必须被检测门纳入", resolved)
+        assertEquals(StandaloneSqlSourceResolver.Kind.XML_STATEMENT, resolved!!.kind)
+        assertNull("回退成功不得留失败事实", resolved.failure)
+        assertEquals(XmlFlavorDetector.Flavor.IBATIS, resolved.flavor)
+    }
+
+    @Test
+    fun `MyBatis 片段仍判 MyBatis（回归）`() {
+        val text = """
+            <mapper namespace="n">
+              <select id="q10">SELECT * FROM t WHERE a = #{aa}</select>
+            </mapper>
+        """.trimIndent()
+        val resolved = StandaloneSqlSourceResolver.resolve(text)
+        assertEquals(XmlFlavorDetector.Flavor.MYBATIS, resolved!!.flavor)
+        assertNull(resolved.failure)
+        assertNotNull(resolved.result.xmlModel)
+    }
+
+    @Test
+    fun `无动态标签的 iBatis 片段靠占位语法判对且参数名正确`() {
+        // 这条是风味判定的**不可替代性**证据：MyBatis 链能「解析成功但解析错」——
+        // `#id#` 在 MyBatis 眼里是普通文本（xmlModel 非空、无参数），双链回退因此救不了它，
+        // 只有占位语法判定能把片段交给 iBatis 链（产出参数名 id）。
+        val text = """<select id="q12">SELECT * FROM T_USER WHERE ID = #id#</select>"""
+        val resolved = StandaloneSqlSourceResolver.resolve(text)
+        assertNotNull(resolved)
+        assertEquals(XmlFlavorDetector.Flavor.IBATIS, resolved!!.flavor)
+        assertEquals(listOf("id"), resolved.result.unresolvedParams)
+    }
+
+    @Test
+    fun `两条链都还原不了时给出失败事实`() {
+        // 缺闭合标签：两代链都解析不出语句 → 失败事实带语句 id 与原因
+        val text = """<select id="q11">SELECT 1 FROM t"""
+        val resolved = StandaloneSqlSourceResolver.resolve(text)
+        assertNotNull(resolved)
+        val failure = resolved!!.failure
+        assertNotNull("必须给出失败事实（面板据此组装可复制文案）", failure)
+        assertEquals("q11", failure!!.statementId)
+        assertEquals("select", failure.statementTagName)
+        assertNotNull("原因不得为空", failure.reason)
+    }
 }

@@ -8,12 +8,15 @@
 
 ### Added
 - **SQL 预览可以独立打开了（T-SqlPreviewStandalone）**：主侧边栏新增「SQL 预览」页签——粘贴一段 SQL 或 mapper XML 片段就能快速格式化、填值、复制可执行 SQL（Tools 菜单与 `Alt+Shift+P` 可直达，剪贴板里疑似 SQL 时自动预填）。XML 片段识别复用插件自研 XML 引擎：动态条件勾选、foreach 重放、bind 回填都可用；网页复制的 `&lt;/&gt;` 转义形态与 markdown 代码围栏也能识别。可用 Registry 键 `sqlvis.preview.standaloneTab`（默认开）关闭页签
+- **独立预览支持 iBatis 2 语句（T-StandaloneIbatisRecognize）**：`<dynamic>` / `<isNotNull>` 等 iBatis 2 条件标签、`#id#` / `$name$` 占位语法现在会被识别并交给 iBatis 解析链——条件行可勾选、参数可填值，不再报 `Unknown element <dynamic>`。判定按片段证据（专有标签/属性/占位语法/DTD）加权，判不准时两条解析链都会试一遍再取可用的那条
 - **SQL 日志条目的耗时按测量来源分档：agent 精确计时恒原样，控制台日志解析的近似耗时带 `~` 前缀（T-HdAbsorb D215，`43a1d0a34`）**；同一时间窗内被调试器断点挂起时，agent 耗时按挂起区间与测量窗的交集扣减——断点不再把墙钟虚增成「超慢查询」。挂起补偿可在 Registry `sqlvis.log.durationSuspendCompensation` 关闭（回退通道）
 - **SQL 日志列表新增「疑似 N+1」红色徽标（T-HdAbsorb D216，`f0aa9b712` + 窗口判定收口 `6bd0cd9e3`）**：同一参数化模板累计 ≥5 条即标红，与既有「同结构 N 条」琥珀计数徽章分层（计数提示 vs 行动建议）；判定按**同线程 60 秒滑动窗**分桶——循环内逐条查询（同一线程短窗重复）命中，而同一模板分散在多个线程（如并发请求各自查一条）不再误报；无线程名的控制台回落条目按会话级窗口回落。Registry `sqlvis.log.nplusOneSuspect` 关闭即回到旧行为、`sqlvis.log.nplusOneSuspect.minCount` 可调阈值
 - **预览执行链的数据源记忆新增连接事实指纹兜底（T-HdAbsorb D218，`33d41d694`）**：数据源改名或 IDE 重建导致 UUID/名字两级 last-used 记忆全部落空时，按「URL+用户+库名」指纹唯一命中恢复静默复用，不再每次弹选择器；多条同指纹歧义一律交弹窗
 - **MCP 工具输出分档（T-HdAbsorb D219，`c8d797b5d`）**：`sqlv_render_logs` / `sqlv_history_search` 新增可选 `detail` 参数——默认不变（历史契约）；传 `detail=false` 得到摘要/紧凑清单（计数+短预览，AI 上下文预算紧张时用）
 
 ### Fixed
+- **「在弹框中打开」点了没反应（T-StandaloneDialogOpen）**：动作先置「待弹窗」标志位、再调不带参数的方法，被形参默认值就地抹掉，导致弹窗永不出现（表现为只在页签内刷新）。改为把意图沿调用链传递，并支持**空输入/未识别文本也照样弹窗**（空白编辑器或原文照搬，用户可直接在弹窗内粘贴编辑）
+- **错误信息复制出来不可用（T-StandaloneIbatisRecognize）**：识别失败时「复制错误信息」此前只给一句引擎级英文报错。现在给「标题｜来源｜语句｜原因｜建议」五段，可整段贴出定位
 - **预览参数已手工加引号的值不再被二次转义成重复引号（T-PreQuotedLiteral，`fdd2b727a`）**：XML 预览里给 int 等参数输入 `'abc'` 这类已带引号的值时，产物变成 `'''abc'''` / `''''`（引号翻倍），根因是渲染链对输入一律再做 `''` 转义再包引号；现在完整引号字面量原样渲染，面板回填、复制/执行 SQL、`:name` 与运行期占位、批量模拟值六条链同批收口，`O'Brien` 类真实撇号转义行为不变
 - **iBatis 工程首次预览不再整模块慢扫（T-PerfSweep31 券01，`2ec54381f`）**：`parameterClass` 用别名时，插件原本在第一次点击预览时把语句所在模块的全部 XML 逐个解析来找 sqlMapConfig 别名表（大模块会明显卡一下、且改动要重启才生效）；现在别名在 IDE 索引期摊平成键，一次查询毫秒级出答案，配置保存后立即生效
 - **索引构建期点击预览/跳转不再「点了没反应」（T-PerfSweep31 券02/03，`aa13cf33c` / `0c3474bca` / `76ca4b5db`）**：IDE 还在重建索引时点预览，原来异常被静默吞掉；现在等索引就绪后自动重试一次，仍不行会弹可见提示说明原因。`resultType`/`parameterType` 类名解析与实体反查在索引期也不再裸跑不可信的查询
