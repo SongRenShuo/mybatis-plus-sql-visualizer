@@ -457,4 +457,32 @@ POST /stream → HTTP 200；tools/list → 65 个工具，11 个 sqlv_*
 |---|---|
 | `db2eaaaef` | 券01/05：契约白名单 + 未知方法熔断 + class 文件解析器扩 262/263 + 反向验证 |
 | `d00b49801` | 券03/05：总开关联动 + toolset 运行期注销 + Registry 逃生开关 + 设置页状态行 + 守卫收窄 |
-| 本笔（docs） | 计划实施记录 §十二 + 开发计划索引状态 + CHANGELOG `[Unreleased]` |
+| `2657c8bd5` | 计划实施记录 §十二（261/262 批）+ 索引状态 + CHANGELOG `[Unreleased]` |
+
+### 12.8 263 真机补测（2026-11-19，用户令「263 真机也做一下」）——**发现并修复一个真缺陷**
+
+**字节码对照**（解析 `idea-2026.3-win/plugins/mcpserver-plugin/lib/intellij.mcpserver.jar`，IU-263.7307.200，class major 69）：
+
+- **过滤器 EP 与 262 逐字同形**：`applyFilters(...)V`（非 suspend）+ `getUpdates(...)Flow` + `updateState(Boolean, Boolean, Function1)`——券01 的白名单判据原样适用，`unknownContractMethods(263 过滤接口) = ∅`；
+- **toolset EP 长了三个钩子**：`McpToolset` 在 262 的 `isEnabled/isExperimental/alwaysIncluded` 之外新增 `isUserConfigurable()` / `displayName()` / `displayDescription()` + `(String)` 重载（三个都有接口默认体）——**这是计划 §12.5 偏差 4 没盖住的另一半**：白名单只护了过滤 EP，toolset EP 是「类可达即注册」，没有契约收窄。
+
+**首跑现象**：`/stream` 200、注册日志正常，但 `tools/list` 92 个工具里**只有 `sqlv_render_sql`**（注册清单第一个）——10 个 toolset 被平台静默丢弃，idea.log 无任何异常。
+
+**修复**：`McpToolsetSupport` 补齐三钩子——`isUserConfigurable()=true`、`displayName()=运行时类 simpleName`（与 262 的 category shortName / T-McpToolNaming 同源）、`displayDescription()=""` / `(String)` 透传 fallback；243/262 无这三个方法，多出来的普通方法无副作用。守卫用例钉「钩子在基类 + 语义」，反向（`isUserConfigurable=false`）**7 例恰 1 红**。
+
+**修复后三态（IU-263.7307.200 真机）**：
+
+| 态 | 注册日志 | tools/list | /stream |
+|---|---|---|---|
+| 主路径 | form=A + 11 toolset | **102 个，11 个 sqlv_* 全在** | 200 |
+| 总开关关 | 无注册日志 | 91 个，sqlv 0 个 | 200 |
+| Registry 逃生开关关 | 11 toolset + 「Registry …=false，跳过过滤注册」 | 102 个，11 个 sqlv_* | 200 |
+
+**环境陷阱（差点出假读数）**：首跑 `idea.plugins.path` 落在用户**真实** 2026.3 的 plugins 目录（`idea.plugins.path` 属性不被采纳 + `idea.bat` 硬编码的 `-Didea.paths.selector=IntelliJIdea2026.3` 会压过 vmoptions 里的覆盖），加载的是用户日常安装的**同版本号**插件（2026.11.17）——「/stream 200」不证明本轮代码在 263 上工作。隔离法＝复制 `idea.bat` 为 `idea263e2e.bat` 并把 selector 换成 `IntelliJIdea2026.3E2E`，插件装 `%APPDATA%\JetBrains\IntelliJIdea2026.3E2E\plugins`；**判据＝`Loaded custom plugins` 只有 SQL Visualizer 一条**（首跑该行混着 Air/JRebel 等 50+ 个用户插件，即污染）。
+
+**影响面**：本缺陷随过滤器无关、自 2026.3 起所有版本命中——当前发行的 2026.11.17 在 2026.3 用户侧就只剩 1 个 sqlv 工具，随下一版修复。
+
+### 12.9 263 批定向读数与提交
+
+- `McpToolsetShellFactoryTest` 7 例（新增 263 三钩子守卫 1 例，反向 `isUserConfigurable=false` 恰 1 红）；mcp 全包复跑 **BUILD SUCCESSFUL 0 红**；
+- 提交：`c75203c7b`（263 三钩子补齐 + 守卫）；本笔（docs）＝§12.8/12.9 + 索引 + CHANGELOG。
