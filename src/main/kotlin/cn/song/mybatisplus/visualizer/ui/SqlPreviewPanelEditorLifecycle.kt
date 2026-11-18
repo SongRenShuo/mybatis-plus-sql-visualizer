@@ -219,6 +219,8 @@ internal fun SqlPreviewPanel.publishPrewarmProduct(
         return
     }
     prewarmedTempFile = product
+    // T-FirstOpenDegradedLabel 二轮：新产物到位 → 允许下一轮「已消费」再自动补预热
+    prewarmAutoRetried = false
     // T-PrewarmLateRecover F1：`complete` 返回 false = 消费侧已放弃（超时以 null 完成 / 失败），
     // 此时产物走迟到通道换装——这正是「首开预热 3016ms、预算 500ms」那类场景的恢复出口。
     if (!await.complete(product)) {
@@ -789,10 +791,18 @@ internal fun SqlPreviewPanel.assemblePreviewEditor(
                 )
             }
         } else {
+            // T-FirstOpenDegradedLabel 二轮：产物不可用且**已消费/从未预热**（典型：编辑器因标签切换
+            // 走 removeNotify 释放后重建）→ 自动重新预热一轮，语义回到「在途」，而不是把「需要重来一次」
+            // 报成「完整编辑器尚未就绪」的硬失败横幅。只自动补一次（防失败循环），仍失败交用户「重试」。
+            val await = prewarmAwait
+            if ((await == null || await.isDone()) && !prewarmAutoRetried) {
+                prewarmAutoRetried = true
+                retryPrewarm()
+            }
             fallbackPreviewDocument(
                 sql,
-                reason ?: prewarmAwait?.degradationReasonOrNull() ?: PreviewDegradationReason.PRODUCT_CONSUMED,
-                "prewarmed product unavailable (timeout/failed/consumed)",
+                fallbackDegradationReason(reason, prewarmAwait),
+                "prewarmed product unavailable (pending/timeout/failed/consumed)",
             )
         }
     } else {

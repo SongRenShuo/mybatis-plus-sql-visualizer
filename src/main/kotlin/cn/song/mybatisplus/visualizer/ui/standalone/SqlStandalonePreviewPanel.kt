@@ -73,6 +73,27 @@ class SqlStandalonePreviewPanel(
         add(previewHintLabel, BorderLayout.NORTH)
     }
 
+    /**
+     * T-IncludePlaceholder A 券：用户补齐的 `<sql id>` 片段（id → 片段内容）。
+     *
+     * 与输入区分开存：用户输入永远保持原样（贴什么显示什么），补齐内容只在解析前拼到前面——
+     * 这样「补齐」不污染用户手里那段文本，也不会因为再次编辑输入而丢失。
+     */
+    private val fragmentOverrides = linkedMapOf<String, String>()
+
+    /** 缺失片段提示行（有缺失才可见；点击进入补齐输入）。 */
+    private val missingFragmentLabel = JBLabel(" ").apply {
+        foreground = JBUI.CurrentTheme.Link.Foreground.ENABLED
+        cursor = java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
+        border = JBUI.Borders.empty(2, 6, 2, 6)
+        isVisible = false
+        addMouseListener(object : java.awt.event.MouseAdapter() {
+            override fun mouseClicked(e: java.awt.event.MouseEvent) {
+                promptMissingFragment()
+            }
+        })
+    }
+
     /** 内嵌预览面板（懒创建；Disposer 挂本面板，防双 Editor 常驻）。 */
     private var previewPanel: SqlPreviewPanel? = null
 
@@ -101,7 +122,14 @@ class SqlStandalonePreviewPanel(
             isShowDividerControls = false
         }
         add(splitter, BorderLayout.CENTER)
-        add(statusLabel, BorderLayout.SOUTH)
+        // T-IncludePlaceholder：底部两行——缺失片段提示（有缺失才显示）+ 识别状态行
+        add(
+            JPanel(BorderLayout()).apply {
+                add(missingFragmentLabel, BorderLayout.NORTH)
+                add(statusLabel, BorderLayout.SOUTH)
+            },
+            BorderLayout.SOUTH,
+        )
 
         // T-StandaloneHintAndWarning：Alt+Shift+Q 在工作台里接「解析预览」。
         // 为什么必须接管：该键全局绑 ConvertToSqlAction，而它只在 Java/XML/kt 文件上 enabled
@@ -214,8 +242,8 @@ class SqlStandalonePreviewPanel(
      * 未识别给原文 + 信息级说明，用户可直接在弹窗内粘贴/编辑。
      */
     fun resolveFromInput(openDialog: Boolean = false) {
-        val text = inputEditor.text
-        if (text.isBlank()) {
+        val rawInput = inputEditor.text
+        if (rawInput.isBlank()) {
             if (openDialog) {
                 setStatus(MpSqlVisualizerBundle.message("standalone.status.emptyOpenedDialog"))
                 openDialogWith(StandaloneSqlSourceResolver.emptyPreviewResult(), autoReparse = true)
@@ -224,17 +252,20 @@ class SqlStandalonePreviewPanel(
             }
             return
         }
-        if (text.length > StandaloneSqlSourceResolver.MAX_TEXT_LENGTH) {
+        if (rawInput.length > StandaloneSqlSourceResolver.MAX_TEXT_LENGTH) {
             setStatus(MpSqlVisualizerBundle.message("standalone.status.tooLong"))
             return
         }
+        // T-IncludePlaceholder A 券：补齐的片段只在解析前拼入，用户输入保持原样
+        val text = MissingSqlFragmentSupport.withFragments(rawInput, fragmentOverrides)
+        val missing = MissingSqlFragmentSupport.missingRefids(rawInput)
         val generation = ++resolveGeneration
         ApplicationManager.getApplication().executeOnPooledThread {
             val resolved = runCatching { StandaloneSqlSourceResolver.resolve(text) }.getOrNull()
             ApplicationManager.getApplication().invokeLater(
                 {
                     if (disposed || generation != resolveGeneration || project.isDisposed) return@invokeLater
-                    applyResolved(resolved, openDialog, text)
+                    applyResolved(resolved, openDialog, rawInput, missing)
                 },
                 ModalityState.nonModal(),
             )
@@ -245,7 +276,9 @@ class SqlStandalonePreviewPanel(
         resolved: StandaloneSqlSourceResolver.Resolved?,
         openDialog: Boolean,
         rawText: String,
+        missingRefids: List<String> = emptyList(),
     ) {
+        updateMissingFragmentHint(missingRefids)
         if (resolved == null) {
             setStatus(MpSqlVisualizerBundle.message("standalone.status.unrecognized"))
             if (openDialog) openDialogWith(rawTextResult(rawText), autoReparse = true)
@@ -263,6 +296,34 @@ class SqlStandalonePreviewPanel(
         previewHintLabel.isVisible = false
         setStatus(statusTextOf(resolved))
         if (openDialog) openDialogWith(result)
+    }
+
+    /** T-IncludePlaceholder A 券：更新「缺失片段」提示行（无缺失即隐藏）。 */
+    private fun updateMissingFragmentHint(missing: List<String>) {
+        if (missing.isEmpty()) {
+            missingFragmentLabel.isVisible = false
+            return
+        }
+        missingFragmentLabel.text = MpSqlVisualizerBundle.message(
+            "standalone.missingFragment.label",
+            missing.joinToString("、"),
+        )
+        missingFragmentLabel.isVisible = true
+    }
+
+    /**
+     * T-IncludePlaceholder A 券：点提示行 → 让用户补齐首个缺失片段，补齐后立即重解析。
+     *
+     * 为什么逐个补：一个片段可能引用另一个缺失片段，一次只问一个才不会让用户面对一个
+     * 不知道从哪粘起的空框；补完重解析会重新算缺失集合，链路自然收敛。
+     */
+    private fun promptMissingFragment() {
+        val missing = MissingSqlFragmentSupport.missingRefids(inputEditor.text).firstOrNull() ?: return
+        val dialog = MissingFragmentDialog(project, missing)
+        if (!dialog.showAndGet()) return
+        val content = dialog.content().takeIf { it.isNotBlank() } ?: return
+        fragmentOverrides[missing] = content
+        resolveFromInput()
     }
 
     /**
@@ -342,6 +403,8 @@ class SqlStandalonePreviewPanel(
 
     private fun clear() {
         resolveGeneration++
+        fragmentOverrides.clear()
+        missingFragmentLabel.isVisible = false
         inputEditor.setSql("")
         previewPanel?.let {
             previewHolder.removeAll()

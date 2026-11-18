@@ -313,6 +313,21 @@ class StandaloneSqlSourceResolverTest {
     }
 
     @Test
+    fun `缺失 include 片段渲染成 TODO 占位注释而不是残句`() {
+        // T-IncludePlaceholder C 券（iBatis 侧）：旧行为整段丢弃 → `SELECT` 后直接接 `FROM`（残句）；
+        // 现在留注释占位，结构完整且能看出缺哪一段。`parameterClass` 保证走 iBatis 链——
+        // MyBatis 侧同形态被既有用例锁定了「缺失即抹掉」的 SQL 文本契约，本轮不动（见 CHANGELOG 遗留）。
+        val text = """<select id="q13" parameterClass="User">SELECT <include refid="userColumns"/> FROM T_USER</select>"""
+        val resolved = StandaloneSqlSourceResolver.resolve(text)
+        assertNotNull(resolved)
+        assertEquals(XmlFlavorDetector.Flavor.IBATIS, resolved!!.flavor)
+        assertTrue(
+            "缺失处应留 TODO 注释：${resolved.result.sql}",
+            resolved.result.sql.contains("TODO: missing <sql id=\"userColumns\">"),
+        )
+    }
+
+    @Test
     fun `无动态标签的 iBatis 片段靠占位语法判对且参数名正确`() {
         // 这条是风味判定的**不可替代性**证据：MyBatis 链能「解析成功但解析错」——
         // `#id#` 在 MyBatis 眼里是普通文本（xmlModel 非空、无参数），双链回退因此救不了它，

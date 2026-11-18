@@ -320,6 +320,15 @@ class SqlPreviewPanel(
      */
     @Volatile
     internal var prewarmAwait: PrewarmAwait<Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>>? = null
+
+    /**
+     * T-FirstOpenDegradedLabel 二轮：本面板是否已自动补过一轮预热。
+     *
+     * 编辑器因 removeNotify（标签切换/隐藏）释放后重建时，上一轮产物早已被消费——旧行为直接报
+     * 「完整编辑器尚未就绪」（硬失败档横幅）。现在自动重预热一次把语义拉回「在途」，但只补一次
+     * 防止预热持续失败时的自动循环；新产物发布成功会复位（见 publishPrewarmProduct）。
+     */
+    internal var prewarmAutoRetried: Boolean = false
     /** T-GifRerecord：预热失败标志——await 快速降级用，避免 EDT 空等 2s 后再走降级路径。 */
     @Volatile
     internal var prewarmFailed = false
