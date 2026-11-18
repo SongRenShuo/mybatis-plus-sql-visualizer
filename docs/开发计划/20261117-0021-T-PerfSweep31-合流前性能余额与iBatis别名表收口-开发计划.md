@@ -99,4 +99,67 @@
 
 ## 六、实施记录
 
-（实施者按车道回填本节：每完成一件可提交的就立即提交，提交信息走文件 `-F` 写法；本节只记实施态与读数，不写流水账。）
+实施态：**全部券在本分支完成**（分支 `t-perfsweep31`，工作树 `.worktrees/t-perfsweep31`，基线 master `b79b75aea`）。执行口径说明：本分支按「发行先行预案」实施券02/03——合流尚未获得用户授权（AGENTS.md 规则 9），故把 dev 侧已验证的修复**等价移植**到 master 而不是等待合流；移植方式为 cherry-pick + 手工适配，dev 后续合流时相同 patch 会以同 patch-id 去重、冲突面最小。
+
+### 6.1 提交账本
+
+| 提交 | 券 | 内容 |
+|---|---|---|
+| `aa13cf33c` | 券02 | MybatisXmlTargets dumb 闸前移 + resolveInterfaceMethod 闸（dev `9845b9b0c` 原样移植，干净落地） |
+| `0c3474bca` | 券02 | EntityClassResolver/EntityClassFinder dumb 入口闸（dev `578abb0df` 原样移植，干净落地） |
+| `76ca4b5db` | 券03 | 预览首开链券01a/01b/01c/02d（dev `ead67d725` 移植；两处冲突手工解决，见 6.2） |
+| `5b98f53b0` | 券03余项 | 04a 导出后台化 / 04b 逐键去分配 / 05a 缓存上限化 / 05b 单参 DocumentListener（dev `4b5257877` 移植；04c 与 widget 测试 master 不适用而丢弃，提交信息已订正范围） |
+| `2ec54381f` | 券01 | SqlMapConfigAliasIndex 新索引 + IbatisTypeAliasResolver v2 重写 + 内核/集成/守卫三层测试 |
+| `d205beb7c` | 券04 | 四处静态缓存键加 project.locationHash 前缀 + 三处登记 KDoc |
+| 本提交 | 券05 | HqlGutter 类型直判收口、`#config` 头窗化语料核销（不改码，见 6.3）、CHANGELOG [Unreleased] 五条、计划与索引文档 |
+
+### 6.2 移植适配点（与 dev 原形态的差异，均为 master 侧结构差异所致）
+
+- **券01a cache-only 核心手工移植**：dev 的 `prewarmExecTempFileInner` 本体在 dev 独有文件 ExecTempFileFactory.kt（master 从未有过、该链在 master 的 DataSourceSelectorResults.kt）——cache-only 判等块、两段收敛跳过按 master 函数位置重写；**落点判据按 master 的 T-ExecPsiGate R6 口径适配**（主落点可能被项目根备用落点接管，dev 原版固定 `.idea` 路径在 master 会判错文件）。
+- **预热派发冲突解**：master 的 T-PreviewExecWriteDefer 惰性闸（`PreviewConsoleEager.enabled()`）保留，包住 dev 的 dispatchPrewarm（cache-only=true）。
+- **bundle 文案冲突解**：master 现行文案保留，只新增 04a 必需的 `share.dialog.exportTitle` 双语键（dev 的「提工单用」措辞改动不随移植）。
+
+### 6.3 待验证前提核销
+
+1. **预览点击线程语境**——IbatisStatementPreview KDoc 明示「调用方必须持读锁（gutter 点击在 previewAsync 的 ReadAction.compute 内）」，券01 实施照此口径全量索引化（读动作内仅剩一次索引查询 + 候选数个文件的 PSI 精确匹配），v1 的持读锁长走查已不存在，线程语境核实不再影响方案选择。未再单独采线程栈。
+2. **头窗化判据（语料实测，demo 根工程 2492 个 XML）**：`<typeAlias>` 最大偏移 818 字节、`<mappers>` 1072 字节——均在 16KB 窗内；**`<properties>` 最大偏移 67085 字节超窗**。结论：`MapperNamespaceIndex` 的 `#config` 判定**保持全文扫描不改**（头窗化会把超窗 config 的键丢掉＝补全清单少收，收益却只是省一次 BGT 正则扫描）；本券标记「证据充分、不实施」。新索引 SqlMapConfigAliasIndex 的 typeAlias 全文扫描同理保留。
+3. **新开索引 vs 并入**——新开独立索引落地（对位两前置索引各自独立 bump 的既有取舍）；`fileBasedIndex` EP dynamic=true 已由前两索引实证（KDoc 记录），无新增卸载屏障。
+4. **dev 券04 ShareDialog**——已随 `5b98f53b0` 直接移植落地（Task.Backgroundable 形态 + ShareExportOffEdtGuardTest 守卫），本前提由「移植即取证」闭环，不再依赖合流验证。
+5. **locationHash 键语义**——按「仅会话内去重」语义使用（四个容器的生命周期本就是会话级；项目关闭残留少量带旧前缀的键，量级=语句数字符串，第八期报告已登记）。未发现漂移反例。
+6. **runWhenSmart 重试口径**——直接移植 dev 已验证实现与 PreviewDumbModeRetryTest 四例（未重新设计）；测试接缝（`indexNotReadyNoticeForTest`）随 cherry-pick 在位。
+
+### 6.4 not run 条款（按用户指令测试交 CI）
+
+- **本分支全部测试在 CI 执行，本地零 gradle 运行**（用户 2026-11-17 指令：跑测试交给 CI 减少本地资源占用；本地仅做单次编译验证，读数见 6.5）。
+- **not run：全量门禁**——按三档分层归 CI；**not run：定向测试**——计划内应跑的定向类（SqlMapConfigAliasIndexTest / IbatisTypeAliasResolverHotPathTest / IbatisParamClassQuoteHeavyTest / ExecFileWriteCountTest / PreviewDumbModeRetryTest / ConsoleVisibleLogGateTest / ShareExportOffEdtGuardTest / SqlDockedPreviewTest / MapperSqlInspectionTest / PluginXmlStructureGuardTest 族）**全部交 CI，本地无读数**，push 后按 CI run 回填。
+- **not run：T0 真机读数五项**——需真机沙盒，随批移交（不阻塞）。
+- 券01 反向验证（撤守卫必红）由 `IbatisTypeAliasResolverHotPathTest` 的合成样本正反自证在 CI 兑现；券02 反向验证（撤闸必红）依赖 dev 侧已验证的 dumb 夹具（同 patch 移植），CI 兑现。
+
+### 6.5 编译验证
+
+- 第一轮 `compileKotlin compileTestKotlin`（in-process Kotlin 策略，3m46s）：主源**通过**；测试源 1 处编译错——SqlMapConfigAliasIndexTest 内核用例字符串跨行误用普通字面量（Kotlin 普通串不可跨行），改 raw string + trimIndent。
+- 第二轮 `compileTestKotlin`：**通过（exit 0）**。主源 + 测试源全量编译绿；测试执行按 6.4 交 CI。
+
+### 6.6 CI 门禁读数（run 43913507291，mode=gate，对准 `35d1aaf23`）
+
+**结论：failure——主门禁体全绿，测试分片 3 红引出 4 处缺陷，已全部修复（提交 `fix(ci)` 一笔，见 6.7）。**
+
+| Job | 结论 |
+|---|---|
+| build / verifyplugin / verify ×3（243/253/263）/ marketplace ×3 | **全 success**（三目标兼容性与构建门禁一次通过） |
+| test (2) / test (4) / test (5) | success |
+| test (1) | failure：SqlMapConfigAliasIndexTest 4 例 + IbatisParamClassQuoteHeavyTest 1 例 |
+| test (3) | failure：IbatisNavigationLineMarkerProvidersTest 7 例 |
+| test (fast) | failure：BrowserUtilConvergenceGuardTest 1 例 + GuardSelfTestCoverageMetaGuardTest 1 例（fast 全量 4994 例中仅 2 红） |
+
+**逐根因（4 类，全部修复）：**
+
+1. **plugin.xml 漏注册新索引 EP**（券01 实施缺陷，5 例红的根因）——`Index is not created for 'cn.song.mybatisplus.sqlMapConfigAlias'`：索引类写了、EP 没声明，平台不建索引；消费方 runCatching 捕 IllegalStateException 回落 null。修：plugin.xml 补 `<fileBasedIndex implementation="…SqlMapConfigAliasIndex"/>`（照两前置索引位次与注释形态）。**教训：新增 fileBasedIndex 类与 EP 声明必须同笔提交；两前置索引都是类+声明同笔，本刀拆散了。**
+2. **券04 键改造后测试断言未同步**（7 例）——测试裸拼 `contains("user.selectById")` 查已带 `locationHash|` 前缀的键。修：`cacheKey` 改 internal，测试加同源 helper（`cacheKey(project, statementId, ownerNamespace)`），7 处断言全部改缝构造。
+3. **BrowserUtil 调用面计数漂移**（1 例）——dev 移植的 04a 把 ShareDialog 两处 `BrowserUtil.open` 收敛进共享 onSuccess（2→1），守卫期望计数 5→4 未同步。修：`expectedTotalCallSites` 5→4，注释登记收敛来源。
+4. **守卫类未登记自证覆盖率扫描面**（1 例）——移植的 ShareExportOffEdtGuardTest（文件名含 Guard）未登记进 GuardSelfTestCoverageMetaGuardTest 的 GUARD_CLASSES。修：照 dev 同款 GuardEntry 登记（decisionFns=offendersOf/VIOLATIONS，自证=testGuardCatchesEdtDirectWrite）。
+
+**修复验证**：第三轮 `compileKotlin compileTestKotlin` exit 0；重跑测试分片交 CI 复验（见 6.7）。
+
+
+
