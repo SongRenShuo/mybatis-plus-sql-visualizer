@@ -7,6 +7,7 @@
 > 提示：装上本版后**首次启动**可能看到索引条目数增加——本次新增的 iBatis 别名表索引会做一次性的全项目后台重建（从更早版本升级时，mapper namespace / iBatis sqlMap 两个索引同样只建一次），扫描完成后即恢复常态，后续启动不再有。
 
 ### Added
+- **MCP 门控多了两个自救入口（T-McpGlobalBreakHardening，`d00b49801`）**：设置页 MCP 区多一行只读状态——「外部会话门控：已生效 / 平台契约未识别 / 已关闭 / 无此能力 / 已熔断 / 尚未探测」，不用翻 idea.log 猜门控到底有没有挂上；Registry 键 `sqlvis.mcp.gateFilterEp`（默认开）是逃生开关，平台再改过滤器契约时可以只关这条注册，不必卸载插件
 - **先开弹窗再贴内容也会自动识别（T-DialogPasteReparse）**：工作台「在弹框中打开」拿到空弹窗后，直接往里贴 SQL / mapper / iBatis 片段，静默约 0.8 秒即自动识别出参数与条件行（与页签同一条识别链）；识别成功一次即交还手动编辑，不再自动改写你的改动。正常语句预览打开的弹窗不受影响（那里的编辑是在调产物，不能被冲掉）
 - **SQL 预览可以独立打开了（T-SqlPreviewStandalone）**：主侧边栏新增「SQL 预览」页签——粘贴一段 SQL 或 mapper XML 片段就能快速格式化、填值、复制可执行 SQL（Tools 菜单与 `Alt+Shift+P` 可直达，剪贴板里疑似 SQL 时自动预填）。XML 片段识别复用插件自研 XML 引擎：动态条件勾选、foreach 重放、bind 回填都可用；网页复制的 `&lt;/&gt;` 转义形态与 markdown 代码围栏也能识别。可用 Registry 键 `sqlvis.preview.standaloneTab`（默认开）关闭页签
 - **独立预览支持 iBatis 2 语句（T-StandaloneIbatisRecognize）**：`<dynamic>` / `<isNotNull>` 等 iBatis 2 条件标签、`#id#` / `$name$` 占位语法现在会被识别并交给 iBatis 解析链——条件行可勾选、参数可填值，不再报 `Unknown element <dynamic>`。判定按片段证据（专有标签/属性/占位语法/DTD）加权，判不准时两条解析链都会试一遍再取可用的那条
@@ -16,6 +17,8 @@
 - **MCP 工具输出分档（T-HdAbsorb D219，`c8d797b5d`）**：`sqlv_render_logs` / `sqlv_history_search` 新增可选 `detail` 参数——默认不变（历史契约）；传 `detail=false` 得到摘要/紧凑清单（计数+短预览，AI 上下文预算紧张时用）
 
 ### Fixed
+- **关掉插件 MCP 总开关后，插件不再碰平台 MCP 的过滤链（T-McpGlobalBreakHardening，`d00b49801`）**：此前总开关只影响工具是否可见，挂到平台扩展点上的过滤 provider 照样注册——这正是「MCP 全挂时关总开关无效、只能卸载插件」的根。现在总开关关闭时 toolset 与过滤 provider 两个注册面都不挂，重新打开后即时补注册（无需重启）
+- **平台过滤器契约再变也不会拖垮内置 MCP Server（T-McpGlobalBreakHardening，`db2eaaaef`）**：探测从「找到已知形态就注册」改成「白名单之外出现任何方法一律不注册」，suspend 化的接口也按不可识别处理；万一运行期还是调到未知方法，代理先按返回类型给出安全值、并立刻把自己从平台扩展点摘掉（最坏结果是门控不生效，MCP 服务继续可用）。IU-261.25134.95（报障版本）与 IU-262.9437.185 真机实测：`POST /stream` 均 200、11 个 `sqlv_*` 工具在列、日志无 `addAll` NPE
 - **首开不再误报「简化模式/完整编辑器尚未就绪」（T-FirstOpenDegradedLabel）**：预热产物还在路上时被当成「已消费」，于是每次首开都先弹一条失败横幅（随后产物到了又静默换装）；编辑器因标签切换重建时更会稳定复现。现在在途按「准备中」处理（宽限期静默、超时才提示），产物已消费时自动补一轮预热
 - **预览弹窗可直接选 mapper XML（T-DialogPickFile）**：弹窗新增「从文件加载…」，选工程里的 XML 直接载入识别，不用先复制粘贴
 - **缺失 `<include>` 片段处不再渲染成残句（T-IncludePlaceholder，iBatis 与 MyBatis 两侧同形）**：缺失片段处留 `/* TODO: missing <sql id="…"> */` 注释占位，SQL 结构完整可读；工作台底部同时给「缺少片段：xxx —— 点此补上内容」入口，补齐后立即重渲染；补齐框可直接「从文件选择…」——选中工程里的 mapper XML 后自动抽出该 `<sql id>` 的内容
