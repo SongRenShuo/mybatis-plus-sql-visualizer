@@ -7,6 +7,8 @@ import cn.song.mybatisplus.visualizer.mcp.McpToolGate
 import cn.song.mybatisplus.visualizer.mcp.findMcpToolsetClass
 import cn.song.mybatisplus.visualizer.mcp.openMcpServerSettingsPage
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.ui.Messages
@@ -44,6 +46,8 @@ class McpConfigurable internal constructor(
     constructor() : this({ findMcpToolsetClass() != null })
 
     private var panel: JPanel? = null
+
+    private val LOGGER = Logger.getInstance(McpConfigurable::class.java)
 
     /** 总开关复选框（apply 时写 state.mcpToolsEnabled）。 */
     private var masterCheckBox: JBCheckBox? = null
@@ -287,6 +291,16 @@ class McpConfigurable internal constructor(
         state.mcpDisabledTools = McpToolGate.TOOL_NAMES
             .filter { toolCheckBoxes[it]?.isSelected == false }
             .toMutableList()
+        // T-McpGlobalBreakHardening（20261119）：总开关/工具级清单变更必须广播设置变更——
+        // 过滤 EP 的热同步（McpGateRegistrationController 订阅本 topic）靠这条触发。261 真机
+        // GUI 走查实测：缺这条广播时 Apply 后两注册面都不摘（工具消失只是平台 isEnabled
+        // 过滤的副作用，过滤 provider 仍挂在平台上），必须重启才生效——热切换即失效。
+        runCatching {
+            ApplicationManager.getApplication()?.messageBus
+                ?.syncPublisher(PluginSettings.SETTINGS_CHANGE_TOPIC)?.settingsChanged()
+        }.onFailure {
+            LOGGER.warn("MCP 设置变更广播失败（热同步退化为重启生效）", it)
+        }
     }
 
     override fun reset() {
