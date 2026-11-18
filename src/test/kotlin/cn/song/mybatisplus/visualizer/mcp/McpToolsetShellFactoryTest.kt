@@ -232,4 +232,31 @@ class McpToolsetShellFactoryTest {
         val cls2 = McpToolsetDynamicRegistrar.definedShells[fqn]
         assertSame("二次调用必须复用缓存实例（重 define = LinkageError = F29 形态）", cls1, cls2)
     }
+
+    // ---- T-McpGlobalBreakHardening（20261119）：263 新增三钩子必须由基类补齐 --------------
+
+    /**
+     * 263（IU-263.7307.200）给 `McpToolset` 加了 `isUserConfigurable` / `displayName` /
+     * `displayDescription`（三个都有接口默认体，动态壳继承即可满足）。动态壳 implements 平台接口、
+     * 钩子全部继承 [McpToolsetSupport]——基类不补齐时，263 真机 tools/list 里 11 个 sqlv 工具只剩
+     * 注册清单第一个（20261119 实测：92 个工具仅 sqlv_render_sql 在列）。本用例钉住「钩子在基类、
+     * 语义正确」，防下次接口增长再静默丢工具。
+     */
+    @Test
+    fun `263新增三钩子在基类补齐且displayName按类名分组`() {
+        val base = McpToolsetSupport::class.java
+        listOf("isUserConfigurable", "displayName", "displayDescription").forEach { hook ->
+            assertTrue("263 新钩子必须在 McpToolsetSupport 补齐（缺失 = 263 上工具静默消失）: $hook",
+                base.methods.any { it.name == hook })
+        }
+        val sample = object : McpToolsetSupport("sqlv_render_sql") {}
+        assertTrue("isUserConfigurable 必须 true（false 的 toolset 不进外部会话清单）", sample.isUserConfigurable())
+        assertEquals(
+            "displayName 按运行时类 simpleName 分组（T-McpToolNaming 与 262 category shortName 同源）",
+            sample.javaClass.simpleName,
+            sample.displayName(),
+        )
+        assertEquals("工具集描述无独立文案，给空串", "", sample.displayDescription())
+        assertEquals("带兜底的重载必须透传平台 fallback", "fb", sample.displayDescription("fb"))
+    }
 }
