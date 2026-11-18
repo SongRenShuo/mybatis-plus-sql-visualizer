@@ -56,6 +56,29 @@ class MissingSqlFragmentSupportTest {
     }
 
     @Test
+    fun `从文件文本里抽出指定片段内容`() {
+        val file = """
+            <sqlMap namespace="User">
+              <sql id="userColumns">id, user_name, email</sql>
+              <select id="q">SELECT <include refid="userColumns"/> FROM T_USER</select>
+            </sqlMap>
+        """.trimIndent()
+        assertEquals("id, user_name, email", MissingSqlFragmentSupport.extractFragment(file, "userColumns"))
+    }
+
+    @Test
+    fun `片段属性顺序与大小写不影响抽取`() {
+        val file = """<SQL resultClass="map" ID="cols">a, b</SQL>"""
+        assertEquals("a, b", MissingSqlFragmentSupport.extractFragment(file, "cols"))
+    }
+
+    @Test
+    fun `文件里没有该片段时返回 null`() {
+        val file = """<sql id="other">x</sql>"""
+        assertTrue(MissingSqlFragmentSupport.extractFragment(file, "userColumns") == null)
+    }
+
+    @Test
     fun `补齐纯内容时自动包 sql 标签`() {
         val merged = MissingSqlFragmentSupport.withFragments(
             "<select id=\"q\">SELECT <include refid=\"cols\"/> FROM T</select>",

@@ -23,7 +23,7 @@ import javax.swing.JPanel
  * [MissingSqlFragmentSupport.withFragments] 决定是否补壳。
  */
 class MissingFragmentDialog(
-    project: Project?,
+    private val project: Project?,
     private val refid: String,
 ) : DialogWrapper(project, true) {
 
@@ -45,14 +45,42 @@ class MissingFragmentDialog(
         val hint = JBLabel(
             MpSqlVisualizerBundle.message("standalone.missingFragment.prompt", refid),
         ).apply { border = JBUI.Borders.emptyBottom(6) }
+        // T-IncludePlaceholder A 券二轮：从工程里选一个 mapper XML，自动抽出本 refid 对应的
+        // `<sql id="…">` 内部内容（找不到就把整段文本带进来，由用户自己挑）
+        val pickButton = javax.swing.JButton(
+            MpSqlVisualizerBundle.message("standalone.missingFragment.fromFile"),
+        ).apply {
+            addActionListener { pickFromFile() }
+        }
+        val header = JPanel(BorderLayout()).apply {
+            add(hint, BorderLayout.CENTER)
+            add(pickButton, BorderLayout.EAST)
+            border = JBUI.Borders.emptyBottom(6)
+        }
         val scroll = JBScrollPane(area).apply {
             preferredSize = Dimension(560, 180)
         }
         return JPanel(BorderLayout()).apply {
             border = JBUI.Borders.empty(8)
-            add(hint, BorderLayout.NORTH)
+            add(header, BorderLayout.NORTH)
             add(scroll, BorderLayout.CENTER)
         }
+    }
+
+    /** 选文件 → 抽出本 refid 的 `<sql>` 内容（找不到则整段带入）。 */
+    private fun pickFromFile() {
+        val descriptor = com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
+            .createSingleFileDescriptor("xml")
+            .withTitle(MpSqlVisualizerBundle.message("standalone.missingFragment.fromFile.title"))
+        val file = com.intellij.openapi.fileChooser.FileChooser.chooseFile(descriptor, project, null) ?: return
+        val text = runCatching {
+            @Suppress("DEPRECATION") // 243 编译目标：ReadAction.compute(ThrowableComputable) 仅此重载
+            com.intellij.openapi.application.ReadAction.compute<String, Throwable> {
+                com.intellij.openapi.vfs.VfsUtilCore.loadText(file)
+            }
+        }.getOrNull()
+        if (text.isNullOrBlank()) return
+        area.text = MissingSqlFragmentSupport.extractFragment(text, refid) ?: text
     }
 
     /** 用户输入的内容（确定时读取；取消路径不读）。 */

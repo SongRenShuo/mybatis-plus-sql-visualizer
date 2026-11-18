@@ -43,6 +43,22 @@ internal object MissingSqlFragmentSupport {
     }
 
     /**
+     * 从一段 XML 文本里抽出指定 `<sql id="refid">` 的**内部内容**（找不到返回 null）。
+     *
+     * 用途：用户在「补齐片段」框里选一个 mapper 文件时，通常只想拿那一段，而不是把整个文件
+     * 倒进输入框（整段倒进去会和用户已贴的语句重复、还可能触发重复声明告警）。
+     */
+    fun extractFragment(text: String, refid: String): String? {
+        if (text.isBlank()) return null
+        val id = Regex.escape(refid)
+        val regex = Regex(
+            "<sql\\s+[^>]*id\\s*=\\s*[\"']$id[\"'][^>]*>([\\s\\S]*?)</sql>",
+            RegexOption.IGNORE_CASE,
+        )
+        return regex.find(text)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    /**
      * 把用户补齐的片段拼到待解析文本之前。
      *
      * 拼在**前面**的理由：两代解析器都按「根元素下的 `<sql>` 片段表」收集，片段先于语句声明
