@@ -52,4 +52,16 @@
 
 ## 五、实施记录
 
-（待回填）
+2026-11-18 10:38~11:05，全部在 `t-branch-merge-route` 工作树完成。
+
+| 步骤 | 提交 / 读数 |
+|---|---|
+| 立项 | `336ce769c` |
+| cherry-pick `8a67887ae` | `486a79cb6`，三方合并零冲突（该提交对测试文件是纯新增，对两个源文件是替换） |
+| 测试口径对齐 | `cf54f304f`，取 security 侧测试文件；`git diff t-security-audit-fixes -- <测试文件>` 为空 |
+| 定向测试 | 6 类 **113 例 0 红 0 跳过**：StackDigest 19 + StackDigestFrames 22 + MetaHintTooltip 8 + TopRowLayout 9 + SqlResultPanelUi 16 + RollbackSqlDialog 39 |
+| 反向验证 | 仅摘掉 `applyMetaTruncation` / `fullDisplayText` 两处边界转义 → 同一类 **19 例 1 红**，红项正是新增 `testHTML包装态_恶意栈帧不进活markup且箭头转义后语义不变`；`git checkout` 还原后复跑转绿 |
+| 编译 | `compileKotlin + compileTestKotlin` 成功（随测试任务执行） |
+
+补充事实：平台类测试不在 `testFast` 快桶内（首轮 `testFast` 只匹配到 `StackDigestFramesTest` 22 例），改用 `test --tests` 才覆盖其余五类，后续同口径用例请直接用 `test`。
+
