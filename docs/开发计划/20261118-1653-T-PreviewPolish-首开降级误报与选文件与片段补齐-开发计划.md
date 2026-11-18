@@ -27,7 +27,7 @@
 
 - **C 占位**：iBatis 侧 `SqlMapScriptBuilder.buildInclude` 找不到片段时不再 `emptyList()`（残句），改为插入 `/* TODO: missing <sql id="…"> */` 文本节点——结构完整、可读、不引入占位符（`?` 位点不受影响）。
 - **A 补齐**：工作台底部新增「缺少片段：xxx —— 点此补上内容」，点击弹 `MissingFragmentDialog`（多行输入），补齐内容存 `fragmentOverrides`（**不污染用户输入**），解析前拼到文本前；补齐后立即重渲染，缺失集合自然收敛。
-- **边界**：MyBatis 侧同形态**未改**——`XmlCrossNsFragmentResolverTest` 锁定了「缺失 include 时 SQL 文本」契约（`assertEquals("SELECT * FROM t", …)`），改动会连带改那个 lane 的语义，登记为遗留。
+- **MyBatis 侧已对齐（用户 2026-11-18 二次拍板「可以加」）**：`XmlIncludeExpander` 的两条缺失分支（同文件、跨命名空间/歧义）统一走 `replaceWithMissingPlaceholder`；`XmlCrossNsFragmentResolverTest` 4 处 SQL 文本断言改为「含 TODO 占位」，警告文案断言原样保留。
 
 ## 四、问题四：对话框按钮未本地化
 
@@ -49,6 +49,6 @@
 
 ## 七、遗留
 
-- MyBatis 侧缺失 include 仍是「抹掉 + 报错」（见 §三边界）。
+- ~~MyBatis 侧缺失 include 仍是「抹掉 + 报错」~~ → 已对齐（见 §三）。
 - 选文件入口只加在弹窗；工作台页签仍以粘贴为主（如需可同款加一个）。
 - 自动补预热只补一次：若预热本身持续失败，仍需用户点「重试」（这是有意的，避免自动循环）。

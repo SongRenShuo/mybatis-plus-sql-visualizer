@@ -18,7 +18,7 @@
 ### Fixed
 - **首开不再误报「简化模式/完整编辑器尚未就绪」（T-FirstOpenDegradedLabel）**：预热产物还在路上时被当成「已消费」，于是每次首开都先弹一条失败横幅（随后产物到了又静默换装）；编辑器因标签切换重建时更会稳定复现。现在在途按「准备中」处理（宽限期静默、超时才提示），产物已消费时自动补一轮预热
 - **预览弹窗可直接选 mapper XML（T-DialogPickFile）**：弹窗新增「从文件加载…」，选工程里的 XML 直接载入识别，不用先复制粘贴
-- **iBatis 缺失 `<include>` 片段处不再渲染成残句（T-IncludePlaceholder）**：缺失片段处留 `/* TODO: missing <sql id="…"> */` 注释占位，SQL 结构完整可读；工作台底部同时给「缺少片段：xxx —— 点此补上内容」入口，补齐后立即重渲染；补齐框可直接「从文件选择…」——选中工程里的 mapper XML 后自动抽出该 `<sql id>` 的内容
+- **缺失 `<include>` 片段处不再渲染成残句（T-IncludePlaceholder，iBatis 与 MyBatis 两侧同形）**：缺失片段处留 `/* TODO: missing <sql id="…"> */` 注释占位，SQL 结构完整可读；工作台底部同时给「缺少片段：xxx —— 点此补上内容」入口，补齐后立即重渲染；补齐框可直接「从文件选择…」——选中工程里的 mapper XML 后自动抽出该 `<sql id>` 的内容
 - **补齐片段对话框按钮跟随插件语言（T-IncludePlaceholder）**：此前显示平台默认的 OK/Cancel，现为「补齐/取消」
 - **工作台的 Alt+Shift+Q 真的能重新解析了（T-StandaloneHintAndWarning）**：预览区空态提示写着「按 Alt+Shift+Q 可再次预览」，但该键绑的是 ConvertToSql，只在 Java/XML/kt 文件上启用——工作台输入是 `input.sql`，按键恒被丢弃。现在工作台接管该键为「解析预览」，空态文案也换成工作台自己的（不再提「选中代码」）
 - **长警告不再「看不全」（T-StandaloneHintAndWarning）**：警告横幅是单行文本、超宽必被裁，且此前连 tooltip 都没接。现在横幅悬停显示完整文案，**点横幅正文弹出「完整提示信息」对话框**（可选中、可滚动、可一键复制）

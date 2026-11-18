@@ -328,6 +328,18 @@ class StandaloneSqlSourceResolverTest {
     }
 
     @Test
+    fun `MyBatis 侧缺失 include 同样留 TODO 占位（两条链同形）`() {
+        // T-IncludePlaceholder 二轮：MyBatis 链也改成注释占位（此前整段抹掉 → 残句）
+        val text = """<select id="q14">SELECT <include refid="userColumns"/> FROM T_USER</select>"""
+        val resolved = StandaloneSqlSourceResolver.resolve(text)
+        assertEquals(XmlFlavorDetector.Flavor.MYBATIS, resolved!!.flavor)
+        assertTrue(
+            "MyBatis 侧缺失处也应留 TODO：${resolved.result.sql}",
+            resolved.result.sql.contains("TODO: missing <sql id=\"userColumns\">"),
+        )
+    }
+
+    @Test
     fun `无动态标签的 iBatis 片段靠占位语法判对且参数名正确`() {
         // 这条是风味判定的**不可替代性**证据：MyBatis 链能「解析成功但解析错」——
         // `#id#` 在 MyBatis 眼里是普通文本（xmlModel 非空、无参数），双链回退因此救不了它，
