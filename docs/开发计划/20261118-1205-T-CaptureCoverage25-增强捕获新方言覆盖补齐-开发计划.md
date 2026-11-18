@@ -53,3 +53,20 @@
 未做（如实登记）：新方言的**真机端到端捕获**（agent attach + 真实 JDBC 应用 → 事件到达）尚未跑；
 现有 E2E 装置 `dev-support/e2e-fake-ide` 绑定 Spring demo + MySQL，新引擎需另起可换驱动的装置。
 
+### 4.1 真机端到端捕获（2026-11-18 补做，全部有读数）
+
+装置：`dev-support/agent-capture-repro`（最小复现装置）+ 新增 `DialectCaptureProbe.java`（只依赖 java.sql，
+4 条 DML：INSERT(带参)/SELECT(带参)/UPDATE/SELECT COUNT）+ `fake_receiver.py`（协议端，统计 EVENT 帧）。
+
+| 引擎 | 驱动 | EVENT 帧 | 结论 |
+|---|---|---|---|
+| TiDB v6.5.6（103:24000） | mysql-connector-j 8.0.33 | **7** | 捕获通 |
+| GBase 8a 8.6.2.43（114:20116） | mariadb-java-client 3.3.3 | **7** | 捕获通 |
+| XuGu 12.10.13（114:20111） | xugu-jdbc 12.3.9（**本次新接线**） | **8** | 捕获通 |
+| GBase 8c 代理（openGauss 5.0.0 @103:26000） | opengauss-jdbc 6.0.0-og | **11** | 捕获通 |
+
+两条踩坑（记录在案，防下次误判）：
+1. **首轮 TiDB 读到 EVENT=0 是假阴性**：载荷跑完立即退出，agent 发送循环还没 flush。给载荷加 6s 收尾等待后同一条链读到 7 条。判「捕获不工作」之前先排除进程退出竞态。
+2. TiDB 口令要用台账（`Xc3_TiDB_2026`）而非矩阵文件里的那份——两者不一致，JDBC 直连报 `Access denied`。
+
+
