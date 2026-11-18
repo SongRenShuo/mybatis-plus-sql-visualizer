@@ -1432,6 +1432,18 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "本元守卫自身：判定内核为纯函数（fnDecls/selfTestFns/decisionShapedDecls/uncoveredNames），" +
                     "灵敏度由 `元守卫灵敏度自证_未自证的判定函数必红_自证与KDoc边界各归其位` 用例钉住",
             ),
+            // ---- T-SqlPreviewStandalone 装配守卫（2026-11-14） ----
+            GuardEntry(
+                "ui/standalone/StandaloneTabRegistryGuardTest.kt",
+                emptyList(),
+                "T-SqlPreviewStandalone 装配守卫：判定内核内联于五个用例——registry 键常量与 " +
+                    "plugin.xml `<registryKey>` 同名（改名只改一处即静默失效）、消费点必须用带默认值 " +
+                    "的 Registry.`is`(key,true) 重载（缺键显式兜底）、action 注册面（ToolsMenu+键位）、" +
+                    "bundle 双语 standalone 族键位 parity、解析器/面板/通道三处接线在场。" +
+                    "无「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
+                    "灵敏度=删掉 plugin.xml 的 registryKey 或改键名、把消费点改成无参重载、" +
+                    "删 en 或 zh 任一侧 standalone 键，对应用例必红。",
+            ),
         )
     }
 }

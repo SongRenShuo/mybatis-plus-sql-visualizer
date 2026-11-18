@@ -6,6 +6,9 @@
 
 > 提示：装上本版后**首次启动**可能看到索引条目数增加——本次新增的 iBatis 别名表索引会做一次性的全项目后台重建（从更早版本升级时，mapper namespace / iBatis sqlMap 两个索引同样只建一次），扫描完成后即恢复常态，后续启动不再有。
 
+### Added
+- **SQL 预览可以独立打开了（T-SqlPreviewStandalone）**：主侧边栏新增「SQL 预览」页签——粘贴一段 SQL 或 mapper XML 片段就能快速格式化、填值、复制可执行 SQL（Tools 菜单与 `Alt+Shift+P` 可直达，剪贴板里疑似 SQL 时自动预填）。XML 片段识别复用插件自研 XML 引擎：动态条件勾选、foreach 重放、bind 回填都可用；网页复制的 `&lt;/&gt;` 转义形态与 markdown 代码围栏也能识别。可用 Registry 键 `sqlvis.preview.standaloneTab`（默认开）关闭页签
+
 ### Fixed
 - **预览参数已手工加引号的值不再被二次转义成重复引号（T-PreQuotedLiteral，`fdd2b727a`）**：XML 预览里给 int 等参数输入 `'abc'` 这类已带引号的值时，产物变成 `'''abc'''` / `''''`（引号翻倍），根因是渲染链对输入一律再做 `''` 转义再包引号；现在完整引号字面量原样渲染，面板回填、复制/执行 SQL、`:name` 与运行期占位、批量模拟值六条链同批收口，`O'Brien` 类真实撇号转义行为不变
 - **iBatis 工程首次预览不再整模块慢扫（T-PerfSweep31 券01，`2ec54381f`）**：`parameterClass` 用别名时，插件原本在第一次点击预览时把语句所在模块的全部 XML 逐个解析来找 sqlMapConfig 别名表（大模块会明显卡一下、且改动要重启才生效）；现在别名在 IDE 索引期摊平成键，一次查询毫秒级出答案，配置保存后立即生效
