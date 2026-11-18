@@ -486,3 +486,37 @@ POST /stream → HTTP 200；tools/list → 65 个工具，11 个 sqlv_*
 
 - `McpToolsetShellFactoryTest` 7 例（新增 263 三钩子守卫 1 例，反向 `isUserConfigurable=false` 恰 1 红）；mcp 全包复跑 **BUILD SUCCESSFUL 0 红**；
 - 提交：`c75203c7b`（263 三钩子补齐 + 守卫）；本笔（docs）＝§12.8/12.9 + 索引 + CHANGELOG。
+
+### 12.10 not-run 收口（2026-11-19）
+
+**（1）`verifyMarketplace` 在线门禁——通过。** `./gradlew verifyMarketplace` 三目标并行（17m33s，在线下载 1.48GB）：
+
+```
+verdict [IU-243.28141.41] Compatible. 0 已知问题块全部被基线覆盖
+verdict [IU-253.33514.17] Compatible. 0 已知问题块全部被基线覆盖
+verdict [IU-263.7307.200] Compatible. 0 已知问题块全部被基线覆盖
+```
+
+**（2）261 运行期热切总开关 GUI 走查——发现并修复第二个真缺陷。**
+
+走查装置：`ideaIU-2026.1.3.zip` 重解压到 F 盘（C 盘被首轮解压挤爆，剩 11MB——**长解压别放 C**）+ JBR 21 + 许可 agent 写进发行版自带 `bin/win/idea64.exe.vmoptions`（`IDEA_VM_OPTIONS` 环境变量通道失效，bat 的 FINDSTR 把带正斜杠的路径吃成 `C:vmoptions261.txt`）。
+
+走查过程（computer-use 桌面自动化，event 策略点击才落得进 Swing）：
+
+1. **暴露缺陷**：MCP 子页勾掉总开关→确定后，tools/list 立即 50/0、`/stream` 200——但日志里**一条注销都没有**。工具消失只是平台 `isEnabled()` 过滤的副作用，**过滤 provider 仍挂在平台上**：热同步根本没被触发。
+2. **根因**：主设置面板 apply 会广播 `SETTINGS_CHANGE_TOPIC`，**MCP 子页（McpConfigurable）漏了**——`McpGateRegistrationController` 订阅的就是这个 topic，从未收到。
+3. **修复**：apply 写完状态后广播（runCatching 兜测试环境）；守卫 `McpConfigurableGateTest` 钉「apply 必须广播」，反向拆除广播恰 1 红（提交 `e08f7430e`）。
+4. **修复后 GUI 双向复验（无重启）**：
+   - 勾上→确定：02:45:11 两条热注册（`11 toolsets registered` + `注册完成 form=B`），tools/list **65/11**；
+   - 取消→确定：02:45:48 两条热注销（`toolsets unregistered (master switch off)` + `gate filter unregistered`），tools/list **50/0**；
+   - 设置页状态行同步显示「外部会话门控：已生效 / 已关闭」（券03 第 3 项真机目测完成）。
+
+### 12.11 not-run 清账后的状态
+
+| 项 | 状态 |
+|---|---|
+| 261/262/263 真机端到端 | ✅ 全部完成（263 顺带修出 toolset 三钩子缺陷） |
+| `verifyMarketplace` | ✅ 三目标 Compatible |
+| 261 运行期热切 | ✅ 完成（顺带修出子页广播缺陷） |
+| 发版 | 见发行批（2026.11.19-beta.1 起走 release-workflow） |
+| 设置页状态行真机目测 | ✅ 已生效/已关闭两态目测通过 |
