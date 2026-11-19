@@ -8,6 +8,7 @@ import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons;
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService;
 // T-UiCoord F2：下拉按钮文本截尾省略复用 meta 行的同款纯函数（避免第二份省略实现）
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelKt;
+import cn.song.mybatisplus.visualizer.ui.standalone.SqlStandalonePreviewPanel;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors;
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard;
@@ -38,6 +39,7 @@ import com.intellij.ui.JBColor;
 import com.intellij.ui.ListSpeedSearch;
 import com.intellij.ui.SearchTextField;
 import com.intellij.ui.awt.RelativePoint;
+import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBScrollPane;
 import com.intellij.ui.tabs.JBTabs;
 import com.intellij.ui.tabs.JBTabsFactory;
@@ -436,6 +438,23 @@ public class SqlLogPanel extends JPanel implements Disposable {
     private final java.util.function.BiConsumer<LogSqlEntry, LogEntryTab> openEntryInTabCallback =
             (entry, tab) -> openEntryInTab(entry, tab);
 
+    // T-SqlPreviewStandalone：「打开 SQL 预览工作台」通道回调的稳定引用（init 注册 / dispose
+    // 同一性注销用，同 onOpenEntryInTabCallback 的构造期序坑）。参数 = 剪贴板预填候选（D-4）。
+    private final java.util.function.Consumer<String> openStandalonePreviewCallback =
+            prefill -> openStandalonePreview(prefill);
+
+    // T-SqlPreviewStandalone：以下三件必须声明在 init 块**之前**——init 期 addStandaloneTab()
+    // 经 standalonePanel 懒委托读，声明在后则此刻字段仍是 JVM 默认 null（DialogWrapper-
+    // InitOrder 守卫实测点名，2026-11-14）；懒初始化无初值安全面靠声明位次保证，无逃逸面。
+    /** 独立预览工作台面板懒持（首次 tab 挂载/页签切换才实例化，关 tab 的会话零 Editor 代价）。 */
+    private SqlStandalonePreviewPanel standalonePanel;
+
+    /** 工作台页签句柄（registry 关闭时为 null）。 */
+    private TabInfo standaloneTab = null;
+
+    /** Disposer 防重注册守卫（对齐 historyPanelRegistered 先例）。 */
+    private boolean standalonePanelRegistered = false;
+
     // ---------- T-Perf-15（自 dev 移植）：manager 监听器命名引用（init 注册 / dispose 注销） ----------
 
     /** 缓冲变更 → 列表刷新（manager.uiNotifyListener 回调链；EDT 执行）。 */
@@ -527,6 +546,75 @@ public class SqlLogPanel extends JPanel implements Disposable {
 
     /** 聚焦隐藏计数提示（聚焦视图下不匹配任何页签的条目数；无页签时隐藏）。 */
     private final JLabel focusHiddenLabel = new JLabel();
+
+    // ---------- T-Nplus1Aggregate D235：N+1 聚合过滤态摘要行（独立一行，不进页签栏） ----------
+    // 字段声明在 init 块之前（文本序初始化纪律，rebuildFocusTabBar 会读）
+    //
+    // **为什么独立一行**：既有守卫（SqlLogPanelFocusTabTest/RequestFocusTest）按页签栏组件数断言
+    // 「前缀标签 + N chips + 计数标签」——把摘要塞进 focusTabBar 会让计数恒 +2，CI 分片 1/2 两红
+    // （2026-11-19 run 44447731812 实测）。摘要本就不是页签 chip，语义上也该另起一行。
+
+    /**
+     * D235：摘要行<b>标签</b>（「N+1 聚合」，强调色）。
+     *
+     * <p>样式重排（2026-11-19 用户反馈「整行全红不协调」）：原实现把 badge 与详情塞进同一个红色 label，
+     * 整行压屏且与上一行聚焦 chip 抢视觉。现拆三段——红色只给这一个短标签，详情走次要灰，
+     * 右侧退出口链接化（平台默认 JButton 与工具栏/页签风格不协调）。</p>
+     */
+    private final JLabel nplusOneSummaryBadge = new JLabel();
+
+    {
+        nplusOneSummaryBadge.setForeground(MpvsUiColors.NPLUS_ONE_SUSPECT);
+        nplusOneSummaryBadge.setVisible(false);
+    }
+
+    /** D235：摘要行<b>详情</b>（命中条数 · 时间 · 线程，次要灰，单行 {@code ·} 分段）。 */
+    private final JLabel nplusOneSummaryLabel = new JLabel();
+
+    {
+        nplusOneSummaryLabel.setForeground(MpvsUiColors.META_GRAY);
+        nplusOneSummaryLabel.setVisible(false);
+    }
+
+    /**
+     * D235：「返回全部」退出口——链接样式（对齐工作台「缺少片段…点此补上」既有链接先例），
+     * 不再用平台默认 JButton（视觉与页签 chip / 工具栏不同族）。
+     */
+    private final JBLabel nplusOneBackLink = new JBLabel(MpSqlVisualizerBundle.message("log.nplusOneAggregate.back"));
+
+    {
+        nplusOneBackLink.setForeground(JBUI.CurrentTheme.Link.Foreground.ENABLED);
+        nplusOneBackLink.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
+        nplusOneBackLink.setVisible(false);
+        nplusOneBackLink.setToolTipText(MpSqlVisualizerBundle.message("log.nplusOneAggregate.back.tip"));
+        nplusOneBackLink.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseClicked(java.awt.event.MouseEvent e) {
+                exitNplusOneAggregate();
+            }
+        });
+    }
+
+    /** D235：摘要行宿主（独立一行，挂页签栏之下；无过滤态整行不占高度）。 */
+    private final JPanel nplusOneSummaryBar = new JPanel(new WrapLayout());
+
+    {
+        nplusOneSummaryBar.setOpaque(false);
+        nplusOneSummaryBar.setVisible(false);
+        nplusOneSummaryBar.add(nplusOneSummaryBadge);
+        nplusOneSummaryBar.add(nplusOneSummaryLabel);
+        nplusOneSummaryBar.add(nplusOneBackLink);
+    }
+
+    /**
+     * D235：当前活跃的聚合键（点击徽标进入时记录，退出/页签被关时清空）。
+     *
+     * <p><b>为什么需要它</b>（2026-11-19 修正）：摘要行原先按「页签键 ∈ 当前嫌疑集」显示，而嫌疑集
+     * 按 60 秒滑动窗算——用户进入聚合态几十秒后窗口过期，摘要行会自己消失（真机截图复现：只剩
+     * 「聚焦：同结构 5 条」而 N+1 摘要不见了）。聚合是用户主动进入的状态，是否显示摘要只取决于
+     * 「从哪进来」，与判定窗无关。</p>
+     */
+    private String nplusOneActiveKey = null;
 
     // ---------- T-UiCoord F2：工具栏单行宿主字段（同样须在 init 之前——init 里 buildToolbar 会赋值；
     // 声明晚于 init 会让赋值被随后的 `= null` 初始化器覆盖回 null） ----------
@@ -862,6 +950,13 @@ public class SqlLogPanel extends JPanel implements Disposable {
         // 关掉设置页开关还会把已挂载的 tab 摘掉；文件列表空态已带「开启自动保存」引导文案，
         // tab 常驻即引导闭环，F-44 的移除分支随之废除、设置变更不再参与显隐。
         addHistoryTab();
+        // T-SqlPreviewStandalone：独立 SQL 预览工作台 tab（D-2）。registry sqlvis.preview.standaloneTab
+        // 兜底显隐——关掉后 tab 不再挂载（重启后生效），通道回调仍注册（触发时按「未就绪」轻通知降级，
+        // 不静默）；面板懒创建（lazy），关 tab 的会话零 Editor 代价。
+        if (com.intellij.openapi.util.registry.Registry.is(STANDALONE_TAB_REGISTRY_KEY, true)) {
+            addStandaloneTab();
+        }
+        manager.onOpenStandalonePreview = openStandalonePreviewCallback;
         add(tabs.getComponent(), BorderLayout.CENTER);
         tabs.addListener(new TabsListener() {
             // UI-004：平台参数顺序为（旧页签, 新页签）——此前首参误命名为 current，
@@ -948,6 +1043,43 @@ public class SqlLogPanel extends JPanel implements Disposable {
         removeFocusTab(tab);
     }
 
+    // ---------- T-Nplus1Aggregate D235 测试缝 ----------
+
+    /** D235 测试驱动：同步跑一拍刷新（面板常规刷新走 invokeLater 异步监听，测试需确定性拍）。 */
+    void refreshListForTest() {
+        refreshList();
+    }
+
+    /** D235 测试断言：聚合摘要标签（红）与详情（灰）的显隐与文案。 */
+    JLabel nplusOneSummaryBadgeForTest() {
+        return nplusOneSummaryBadge;
+    }
+
+    /** D235 测试断言：聚合详情标签。 */
+    JLabel nplusOneSummaryLabelForTest() {
+        return nplusOneSummaryLabel;
+    }
+
+    /** D235 测试驱动：等价点击「返回全部」链接（JBLabel 无 doClick，直连同一退出动作）。 */
+    void clickNplusOneBackForTest() {
+        exitNplusOneAggregate();
+    }
+
+    /** D235 测试断言：「返回全部」链接显隐。 */
+    JBLabel nplusOneBackLinkForTest() {
+        return nplusOneBackLink;
+    }
+
+    /**
+     * D235 测试缝：取条目渲染产物。<b>不能经 {@code list.cellRenderer}</b>——平台用
+     * {@code ExpandedItemListCellRendererWrapper} 包裹真实 renderer，cast 到 RailCellRendererBase
+     * 会抛 ClassCastException（实测 2026-11-19）。生产路径的命中判定传的是 entryCellRenderer，
+     * 不受这层包裹影响。
+     */
+    RailCellRendererBase renderEntryForTest(LogSqlEntry entry, int index, boolean selected) {
+        return (RailCellRendererBase) entryCellRenderer.getListCellRendererComponent(list, entry, index, selected, false);
+    }
+
     private void addFocusTab(FocusTab tab) {
         List<FocusTab> next;
         if (tab instanceof FocusTab.Request request) {
@@ -993,15 +1125,28 @@ public class SqlLogPanel extends JPanel implements Disposable {
 
     /** 单个聚焦页签 chip：名称 + ✕ 关闭（关闭即摘除过滤器并刷新）。 */
     private JComponent buildFocusChip(FocusTab tab) {
-        JPanel chip = new JPanel(new FlowLayout(FlowLayout.LEFT, 2, 0));
+        // 对齐纪律（2026-11-19 用户反馈「× 与页签文字错位、偏低」）：原实现是两个组件塞进
+        // FlowLayout——JButton 自带边框与内边距，preferredSize 高度大于文字，行内顶部对齐后
+        // 视觉中心明显下沉。改用 BoxLayout(X_AXIS) + 两件 alignmentY 统一 CENTER，关闭键改
+        // JBLabel（图标 + 手型），无按钮边框干扰。
+        JPanel chip = new JPanel();
+        chip.setLayout(new BoxLayout(chip, BoxLayout.X_AXIS));
         chip.setOpaque(false);
-        JLabel nameLabel = new JLabel(tab.label());
+        JBLabel nameLabel = new JBLabel(tab.label());
         nameLabel.setToolTipText(tab.label());
+        nameLabel.setAlignmentY(java.awt.Component.CENTER_ALIGNMENT);
         chip.add(nameLabel);
-        JButton closeButton = new JButton(AllIcons.Actions.Close);
-        closeButton.setFocusable(false);
+        JBLabel closeButton = new JBLabel(AllIcons.Actions.Close);
         closeButton.setToolTipText(MpSqlVisualizerBundle.message("log.focus.close"));
-        closeButton.addActionListener(e -> removeFocusTab(tab));
+        closeButton.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
+        closeButton.setAlignmentY(java.awt.Component.CENTER_ALIGNMENT);
+        closeButton.setBorder(JBUI.Borders.empty(0, 4, 0, 2));
+        closeButton.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseClicked(java.awt.event.MouseEvent e) {
+                removeFocusTab(tab);
+            }
+        });
         chip.add(closeButton);
         return chip;
     }
@@ -1019,11 +1164,16 @@ public class SqlLogPanel extends JPanel implements Disposable {
 
     // ---------- 顶部区域（工具栏行 + 聚焦页签栏 + 搜索条） ----------
 
-    /** 顶部竖向容器：工具栏行（NORTH）+ 聚焦页签栏（CENTER，无页签隐藏不占高度）+ 搜索条（SOUTH）。 */
+    /** 顶部竖向容器：工具栏行（NORTH）+ 聚焦页签栏与聚合摘要行（CENTER）+ 搜索条（SOUTH）。 */
     private JPanel buildTopPanel() {
         JPanel top = new JPanel(new BorderLayout());
         top.add(buildToolbar(), BorderLayout.NORTH);
-        top.add(focusTabBar, BorderLayout.CENTER);
+        // D235：页签栏与摘要行各占一层——摘要不进 focusTabBar（组件数守卫按 chips 断言，见字段注释）
+        JPanel tabsAndSummary = new JPanel(new BorderLayout());
+        tabsAndSummary.setOpaque(false);
+        tabsAndSummary.add(focusTabBar, BorderLayout.NORTH);
+        tabsAndSummary.add(nplusOneSummaryBar, BorderLayout.CENTER);
+        top.add(tabsAndSummary, BorderLayout.CENTER);
         // T-HistorySearchToggles：挂搜索条宿主（搜索框 + MatchCase 开关），显隐契约不变
         top.add(searchBar, BorderLayout.SOUTH);
         return top;
@@ -1192,6 +1342,43 @@ public class SqlLogPanel extends JPanel implements Disposable {
             historyPanelRegistered = true;
         }
         historyTab = tabs.addTab(new TabInfo(getHistoryPanel()).setText(MpSqlVisualizerBundle.message("log.tab.history")));
+    }
+
+    /** 添加独立预览工作台 tab（构造期唯一调用点；registry 开启时）。 */
+    private void addStandaloneTab() {
+        if (!standalonePanelRegistered) {
+            Disposer.register(this, standalonePanel());
+            standalonePanelRegistered = true;
+        }
+        standaloneTab = tabs.addTab(
+                new TabInfo(standalonePanel()).setText(MpSqlVisualizerBundle.message("log.tab.standalone")));
+    }
+
+    /**
+     * T-SqlPreviewStandalone：面板外请求（D-3 action）打开工作台页签——预填候选文本（可空）、
+     * 聚焦输入区并触发解析。registry 关闭时无 tab：轻通知指路开关，不静默。
+     */
+    void openStandalonePreview(String prefillText) {
+        TabInfo tab = standaloneTab;
+        if (tab == null) {
+            new Notification(
+                    "cn.song.mybatisplus.visualizer.preview",
+                    MpSqlVisualizerBundle.message("standalone.status.disabled.title"),
+                    MpSqlVisualizerBundle.message("standalone.status.disabled.message"),
+                    NotificationType.INFORMATION,
+            ).notify(project);
+            return;
+        }
+        standalonePanel().focusAndMaybeResolve(prefillText);
+        tabs.select(tab, true);
+    }
+
+    /** 独立预览工作台面板懒创建（首次 tab 挂载/打开请求才实例化）。 */
+    private SqlStandalonePreviewPanel standalonePanel() {
+        if (standalonePanel == null) {
+            standalonePanel = new SqlStandalonePreviewPanel(project);
+        }
+        return standalonePanel;
     }
 
     /** 测试访问器：主 tab 容器（历史 tab 常驻断言用；T-HistoryTabAlways 起 tab 恒在，无显隐路径）。 */
@@ -1742,6 +1929,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
         list.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
+                // T-Nplus1Aggregate D235：N+1 嫌疑徽章点击进入聚合过滤态（命中才拦截——
+                // 徽章外的点击仍走既有单击预览/双击弹窗通道）
+                if (tryEnterNplusOneAggregate(e)) return;
                 // T-ClickPreview：先转发（仅左键；单击命中行才排程预览/双击停表并关旧预览），双击再开完整弹窗
                 // T-ClickPreviewCopyRestore：修饰键一并转发——Ctrl/Shift 单击（多选第一击）不排程预览
                 if (javax.swing.SwingUtilities.isLeftMouseButton(e)) {
@@ -1812,6 +2002,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
             @Override
             public void keyPressed(java.awt.event.KeyEvent e) {
                 if (navigationKeys.contains(e.getKeyCode())) tailFollow.onUserScroll();
+                // T-Nplus1Aggregate D235：Esc 退出 N+1 聚合过滤态（无过滤态 no-op——
+                // 不吃速度搜索等既有 Esc 通道的按键语义）
+                else if (e.getKeyCode() == java.awt.event.KeyEvent.VK_ESCAPE) exitNplusOneAggregate();
             }
         };
         list.addKeyListener(navigationListener);
@@ -1893,6 +2086,90 @@ public class SqlLogPanel extends JPanel implements Disposable {
         entryCellRenderer.dedupeCounts = dedupeCounts;
         templateCounts = countAccumulator.getCurrentTemplateCounts();
         entryCellRenderer.templateCounts = templateCounts;
+        // T-HdAbsorb D216 第二刀：窗口嫌疑键集每拍产出（buffer 侧修剪+分桶 O(窗内戳数)，有界）；
+        // 总开关/阈值语义仍在徽章层（NplusOneSuspect），buffer 只产数据。
+        java.util.Set<String> nplusOneSuspects = manager.getEntries().windowSuspectKeys(
+                System.currentTimeMillis(),
+                NplusOneSuspect.DEFAULT_WINDOW_MS,
+                NplusOneSuspect.thresholdProvider.invoke());
+        entryCellRenderer.nplusOneSuspects = nplusOneSuspects;
+        // T-Nplus1Aggregate D235：聚合摘要行随拍更新（条数源=完整快照该键条目数——口径生命线）
+        updateNplusOneAggregateSummary(snapshot);
+    }
+
+    /**
+     * T-Nplus1Aggregate D235：聚合摘要行随刷新拍更新。
+     *
+     * <p>过滤态判定＝nplusOneActiveKey 命中的同结构页签（<b>进入时记录的键</b>，不是「当前嫌疑集」）。
+     * 2026-11-19 修正：原判据是「页签键 ∈ 当前嫌疑集」，而嫌疑集按 60 秒滑动窗算——用户点徽标
+     * 进入聚合后几十秒，窗口一过键就移出嫌疑集，<b>摘要行当场自己消失</b>（真机截图复现：只剩
+     * 「聚焦：同结构 5 条」而 N+1 摘要不见了）。聚合态是用户主动进入的状态，不该被判定窗中途撤掉。</p>
+     *
+     * <p>摘要条数取<b>完整快照</b>该键条目数（不随过滤/搜索波动——「组内条目数==完整列表该键条目数」）。
+     * 回退开关关 / 无活跃聚合键 / 页签已被关掉 → 隐藏。</p>
+     */
+    private void updateNplusOneAggregateSummary(List<LogSqlEntry> snapshot) {
+        String activeKey = nplusOneActiveKey;
+        FocusTab.Template tab = null;
+        if (NplusOneAggregate.enabled() && activeKey != null) {
+            for (FocusTab t : focusTabs) {
+                if (t instanceof FocusTab.Template template && template.structureKey().equals(activeKey)) {
+                    tab = template;
+                    break;
+                }
+            }
+        }
+        // 页签已被关掉（用户点 chip 的 ×）：同步清掉活跃键，避免残留态让下一轮摘要误显
+        if (tab == null && activeKey != null) nplusOneActiveKey = null;
+        NplusOneAggregateSummary summary =
+                tab != null ? NplusOneAggregateKt.buildNplusOneAggregateSummary(snapshot, tab.structureKey()) : null;
+        boolean shouldShow = summary != null;
+        boolean visibilityChanged = nplusOneSummaryBar.isVisible() != shouldShow;
+        // 三段分色（2026-11-19 样式重排）：红只给短标签，详情走次要灰，退出口链接化
+        nplusOneSummaryBadge.setText(shouldShow ? NplusOneAggregateKt.formatNplusOneAggregateSummaryLabel() : "");
+        nplusOneSummaryLabel.setText(summary != null ? NplusOneAggregateKt.formatNplusOneAggregateSummary(summary) : "");
+        nplusOneSummaryBadge.setVisible(shouldShow);
+        nplusOneSummaryLabel.setVisible(shouldShow);
+        nplusOneBackLink.setVisible(shouldShow);
+        nplusOneSummaryBar.setVisible(shouldShow);
+        // 显隐翻转才 revalidate（每拍重排会放大流式灌入期的布局成本；文本更新不需要重排）
+        if (visibilityChanged && nplusOneSummaryBar.getParent() != null) nplusOneSummaryBar.getParent().revalidate();
+    }
+
+    /**
+     * T-Nplus1Aggregate D235：点击红色 N+1 嫌疑徽章 → 进入聚合过滤态。过滤形态复用既有
+     * FocusTab.Template（O-90「只看同结构」——与右键入口同一过滤器，AND 叠加 / 页签 ✕
+     * 关闭恢复全部 / 与类型搜索过滤并存全部免费获得，计划册 §二.3「跟既有形态走」）。
+     * 回退开关关＝点击无效（徽章纯行级）。命中并进入返回 true（调用方让过单击预览）；
+     * 未命中返回 false。
+     *
+     * <p>反向验证锚点：摘掉 {@link #tryEnterNplusOneAggregate} 内的 addFocusTab 接线（或
+     * mouseClicked 的调用行），SqlLogPanelNplusOneAggregateTest 点击用例必红。</p>
+     */
+    boolean tryEnterNplusOneAggregate(java.awt.event.MouseEvent e) {
+        if (!NplusOneAggregate.enabled()) return false;
+        java.util.Set<String> suspects = entryCellRenderer.nplusOneSuspects;
+        if (suspects == null || suspects.isEmpty()) return false;
+        LogSqlEntry entry = NplusOneBadgeClickKt.nplusOneBadgeEntryAt(list, entryCellRenderer, e.getPoint(), suspects);
+        if (entry == null) return false;
+        Integer n = templateCounts.get(entry.structureKey());
+        if (n == null) return false;
+        nplusOneActiveKey = entry.structureKey();
+        addFocusTab(new FocusTab.Template(entry.structureKey(), n));
+        return true;
+    }
+
+    /**
+     * T-Nplus1Aggregate D235：退出聚合过滤态（「返回全部」按钮 / Esc 同效）——关闭全部同结构
+     * 聚焦页签，列表恢复原状（方法/请求页签不受影响）。无过滤态时 no-op（Esc 不吃既有通道）。
+     */
+    void exitNplusOneAggregate() {
+        nplusOneActiveKey = null;
+        boolean hadTemplateTabs = focusTabs.removeIf(tab -> tab instanceof FocusTab.Template);
+        if (hadTemplateTabs) {
+            rebuildFocusTabBar();
+            refreshList();
+        }
     }
 
     /**
@@ -2739,6 +3016,11 @@ public class SqlLogPanel extends JPanel implements Disposable {
         if (manager.onOpenEntryInTab == openEntryInTabCallback) {
             manager.onOpenEntryInTab = null;
         }
+        // T-SqlPreviewStandalone：注销工作台通道（同一性判定同上）+ 释放工作台面板
+        if (manager.onOpenStandalonePreview == openStandalonePreviewCallback) {
+            manager.onOpenStandalonePreview = null;
+        }
+        if (standalonePanelRegistered && standalonePanel != null) standalonePanel.dispose();
         if (previewHost != null) previewHost.hideHint();
         dockedPreview.dispose();
         logToSqlPanel.dispose();
@@ -2914,6 +3196,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
     /** T-SqlSuppress（O-69/D5）：屏蔽规则 balloon 通知组（plugin.xml 独立注册）。 */
     public static final String SUPPRESS_NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.logsuppress";
     public static final String DEFAULT_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss";
+    /** T-SqlPreviewStandalone：独立预览工作台 tab 的 registry 键名（plugin.xml {@code <registryKey>} 同名登记）。 */
+    public static final String STANDALONE_TAB_REGISTRY_KEY = "sqlvis.preview.standaloneTab";
     /** T-M39：帮助文档 URL（降级系统浏览器打开）。
      *  2026-08-31 改为自建站点 jvtools.cn（可自主接入国内 CDN；
      *  当前实测：直连不通，需走系统/IDE 代理才可达，与 plugins.jetbrains.com 同）。
