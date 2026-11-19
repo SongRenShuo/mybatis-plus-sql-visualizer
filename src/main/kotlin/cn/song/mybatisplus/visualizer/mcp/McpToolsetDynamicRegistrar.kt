@@ -104,11 +104,10 @@ object McpToolsetDynamicRegistrar {
                         "names=${ext.map { it.javaClass.simpleName }}",
                 )
             }.onFailure { LOG.warn("T-McpDynamicToolset: EP self-check failed (diagnostic only)", it) }
-            // D238：**重放补丁已撤回**（2026-11-19 真机实证：加重放后连冷启动都只列 1 个，
-            // 而不带重放的上一版冷启动正常 11 个）。原因：平台 McpToolsListProvider 收到 EP
-            // 变更即启动重算（无 debounce），「先摘 11 个再重挂 11 个」必然制造一个 EP 半空的
-            // 瞬间，平台在那一刻快照并缓存残集。重放不是解，反而扩大污染窗口。
-            // 剩余问题（关一次开关后只列前 1~3 个）另寻修法，见 D238 册 §四。
+            // D238：注册完成后**主动请平台重算工具列表**（见 requestPlatformToolsRecompute KDoc）。
+            // 这是唯一能同时满足「关闭能变 0」与「重开能回 11」的路径：平台只在 EP 变更时重算，
+            // 而它自己那次重算可能快照到「只注册了前 1~3 个」的半成品 EP（真机 2026-11-19 实证）。
+            requestPlatformToolsRecompute("toolsets-registered")
         }.onFailure {
             // registered 不置位：下个项目启动重试（动态 EP 未就绪等瞬态失败可自愈）——
             // 已 define/已注册的 FQN 由两本台账跳过，重试只补未完成项
@@ -124,24 +123,58 @@ object McpToolsetDynamicRegistrar {
      */
     @Synchronized
     fun unregisterAll() {
-        // D238（2026-11-19 真机实证后改写）：**不再从 EP 摘除 toolset**。
-        //
-        // 原实现关闭时 ep.unregisterExtension × 11、重开时再 × 11——而平台 `McpToolsListProvider`
-        // 收到 EP 变更立即重算（无 debounce）、结果 `putAll` 进 toolsByProvider 缓存。这条「摘 11 →
-        // 挂 11」的路径会制造 EP 半空瞬间，平台在那一刻快照并长期缓存残集：真机表现为关一次总开关
-        // 后 tools/list 只列注册顺序前 1~3 个（重启不恢复，重装插件才回 11）。
-        //
-        // 现语义：toolset 常驻 EP；关闭总开关时 [McpToolGate.isEnabled] 返回 false，
-        // 平台 `getEnabledToolsets()`（= EP.getExtensionList().filter { it.isEnabled() }）
-        // 自动滤掉全部工具——**零 EP 变更**，缓存不会污染。重开时同样零变更即恢复。
-        //
-        // 结构性免疫不受影响：会拖垮平台 MCP Server 的是 `mcpToolFilterProvider` 那条，
-        // 它的摘除仍由 [McpGateFilterEpRegistrar.sync] 负责（总开关关闭时不挂过滤链）。
-        if (!registered.get() && registeredInstances.isEmpty()) return
-        LOG.info(
-            "T-McpDynamicToolset: master switch off — toolsets keep EP registration " +
-                "(${registeredInstances.size}); visibility gated by isEnabled() (no unregister)",
-        )
+        if (registeredInstances.isEmpty() && !registered.get()) return
+        val ep = runCatching { ExtensionPointName.create<Any>(TOOLSET_EP_NAME).getPoint(null) }.getOrNull()
+        if (ep != null) {
+            registeredInstances.forEach { (fqn, instance) ->
+                runCatching { ep.unregisterExtension(instance) }
+                    .onFailure { LOG.warn("T-McpDynamicToolset: 摘除 $fqn 失败（该工具仍可见）", it) }
+            }
+        }
+        registeredInstances.clear()
+        epRegistered.clear()
+        registered.set(false)
+        LOG.info("T-McpDynamicToolset: toolsets unregistered (master switch off)")
+        requestPlatformToolsRecompute("toolsets-unregistered")
+    }
+
+    /**
+     * D238：主动请平台重算 MCP 工具列表（反射 `McpServerService` → `McpToolsListProvider.requestUpdate`）。
+     *
+     * **为什么必须自己请求**（2026-11-19 真机三轮实证的结论）：
+     *  - 平台只在 **EP 变更**时重算工具列表（`McpToolsListProvider` 订阅 `McpToolset.EP` 的 listener）；
+     *  - 而它自己那次重算**不保证读到完整 EP**：我们连续 `registerExtension` × 11 会触发 11 个重算协程，
+     *    靠前的协程在「只注册了前 1~3 个」时就把结果 `putAll` 进缓存；真机表现为 `tools/list` 只列
+     *    注册顺序前 1~3 个、重启不恢复（15:56 那次连冷启动都退化）；
+     *  - 反过来「关闭时不动 EP、只靠 `isEnabled()` 隐藏」也不行——平台不感知 isEnabled 变化、不重算，
+     *    关闭后工具照旧可见（16:28 真机实证）。
+     *
+     * 故：关闭照常摘 EP（平台会算成 0），注册完成后由本函数**在 EP 已完整时就位**主动请求一次重算。
+     * 反射面：`McpServerService.getToolsStateProvider$intellij_mcpserver()` → provider 的 private
+     * `requestUpdate(String)`；服务未创建（平台没用 MCP）时零操作，失败只记 WARN。
+     */
+    private fun requestPlatformToolsRecompute(reason: String) {
+        runCatching {
+            val app = com.intellij.openapi.application.ApplicationManager.getApplication()
+            val svcClass = Class.forName(
+                "com.intellij.mcpserver.impl.McpServerService",
+                false,
+                McpToolsetDynamicRegistrar::class.java.classLoader,
+            )
+            val svc = runCatching { app.getServiceIfCreated(svcClass) }.getOrNull() ?: return@runCatching
+            val getter = svcClass.methods.firstOrNull {
+                it.name.startsWith("getToolsStateProvider") && it.parameterCount == 0
+            } ?: return@runCatching
+            val provider = runCatching { getter.invoke(svc) }.getOrNull() ?: return@runCatching
+            val update = provider.javaClass.getDeclaredMethod("requestUpdate", String::class.java).apply {
+                isAccessible = true
+            }
+            update.invoke(provider, reason)
+            LOG.info("T-McpDynamicToolset: platform tool-list recompute requested ($reason)")
+        }.onFailure {
+            // 退化路径：平台自己那次重算仍可能给出「前 1~3 个」的残集；工具调用不受影响（只是清单不全）
+            LOG.warn("T-McpDynamicToolset: platform recompute request failed（工具清单可能只列出部分）", it)
+        }
     }
 
     private fun registerToolset(toolClass: Class<*>, toolsetIface: Class<*>) {
