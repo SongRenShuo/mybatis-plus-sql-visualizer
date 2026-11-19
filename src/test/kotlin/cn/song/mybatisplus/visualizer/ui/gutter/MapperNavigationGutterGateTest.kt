@@ -143,9 +143,10 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
         myFixture.configureByText("UserMapper.java", javaFixture)
         val markers = collectMarkers(MapperJavaToXmlLineMarkerProvider(), methodNameLeaves())
         assertEquals("UserMapper.selectById 声明行应恰 1 标记", 1, markers.size)
-        // k2j 注：master 侧此处还有「正缓存入账」断言（MapperXmlToJavaLineMarkerProvider
-        // .resolvedStatementKeys）；k2j 生产尚未移植 F1 MyBatis 侧正缓存缝，先收行为断言，
-        // 生产落位后按 master 原样恢复。
+        // 正缓存入账断言（车道B 生产波次已落 F1 MyBatis 侧正缓存缝；键带 project.locationHash 前缀）
+        assertTrue("接口方法应触达 locate（正缓存入账）",
+            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys
+                .contains(MapperXmlToJavaLineMarkerProvider.cacheKey(project, "com.demo.mapper.UserMapper", "selectById")))
     }
 
     fun test关mapperXml组_零标记零定位触达() {
@@ -154,14 +155,17 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
         val settings = PluginSettings.getInstance()
         val before = settings.state
         try {
-            // k2j 注：master 侧先调 MapperXmlToJavaLineMarkerProvider.resetResolvedCacheForTest()
-            // 复位伴生正缓存；k2j 生产尚未移植该缝，暂缺（生产落位后按 master 原样恢复）。
             // k2j 等价：master 具名参 State(showGutterIcon=true, gutterGroupMapperXml=false)
+            // 车道B 注：master 原样先调 resetResolvedCacheForTest() 复位伴生正缓存——生产缝已落位（车道B 生产波次），按原样恢复。
+            MapperXmlToJavaLineMarkerProvider.resetResolvedCacheForTest()
             val gateOff = PluginSettings.State()
             gateOff.gutterGroupMapperXml = false
             settings.loadState(gateOff)
             val markers = collectMarkers(MapperJavaToXmlLineMarkerProvider(), methodNameLeaves())
             assertEquals("组关时 Java 侧零标记", 0, markers.size)
+            assertEquals("组关时零触达 locate（正缓存不得入账）", false,
+                MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys
+                    .contains(MapperXmlToJavaLineMarkerProvider.cacheKey(project, "com.demo.mapper.UserMapper", "selectById")))
         } finally {
             settings.loadState(before)
         }
