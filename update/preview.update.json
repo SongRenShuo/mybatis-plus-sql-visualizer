@@ -1,6 +1,6 @@
 {
-  "version": "2026.11.19",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.19/mybatis-plus-sql-visualizer-2026.11.19.zip",
+  "version": "2026.11.19-beta.2",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.19-beta.2/mybatis-plus-sql-visualizer-2026.11.19-beta.2.zip",
   "changeNotes": "新增 SQL 预览独立工作台: 粘贴 SQL 或 mapper XML 片段即可格式化/填值/复制, 支持 iBatis 2 语法\n独立工作台新增执行 SQL: 复用完整执行链, 粘贴即可解析/填值/执行/看结果, 无需复制出去\n工作台粘贴即体检: 解析后自动跑静态性能检查, SELECT * / 缺 WHERE 直接出现在性能建议行\nSQL 日志新增疑似 N+1 红色徽章, 点开按模板过滤成一组并给出条数/首末时间/涉及线程\nSQL 日志耗时按测量来源分档并补偿调试器挂起时段, 断点不再虚增成超慢查询\nMCP 工具输出新增可选摘要档, 数据源记忆新增连接事实指纹兜底, 调用栈代理帧反解为业务类型\n设置页 MCP 区新增门控状态行与 Registry 逃生开关 sqlvis.mcp.gateFilterEp\n修复 IDEA 2026.3 上 MCP 工具清单只剩 1 个的问题(工具集接口新增三钩子未实现), 2025.3/2026.2 同链一并修\n修复 MCP 设置子页改动要重启才生效的问题, 确定后立即注册/注销\n修复 IDE 被第三方长读锁卡住时插件跟着卡死: 后台等界面线程改有界派发, 超时记日志继续走\n修复关掉 SQL 去重后 N+1 检测与聚合一起失效的问题, 两者彻底解耦\nMCP 加固: 平台过滤器契约再变也不会拖垮内置 MCP Server, 未知契约自动不注册并熔断摘除\nMCP 加固: 关掉插件 MCP 总开关后插件完全不碰平台过滤链, 重新打开无需重启生效\n优化: 聚合摘要行排版重做与 iBatis 别名表索引化等一批预览提速与稳定性修复, 详见发行说明",
   "publishDate": "2026-11-19",
   "sinceBuild": "243"
