@@ -115,6 +115,10 @@ class SqlPreviewPanelPrewarmLateRecoverTest : BasePlatformTestCase() {
      */
     private fun degradePanel(panel: SqlPreviewPanel) {
         awaitPrewarmProduct(panel)
+        // T-FirstOpenDegradedLabel 二轮：生产路径在「产物已消费」时会自动补一轮预热（语义回到
+        // 「在途」→ 宽限期静默）。本类要的是**稳定**降级态来验迟到换装，故夹具显式置位
+        // prewarmAutoRetried，让这一轮走「已消费」的硬失败档——测试意图，不是绕过实现。
+        panel.prewarmAutoRetried = true
         SqlPreviewPanelResultViewKt.showResult(panel, result())
         UIUtil.dispatchAllInvocationEvents()
         panel.releaseEditorForTest()
