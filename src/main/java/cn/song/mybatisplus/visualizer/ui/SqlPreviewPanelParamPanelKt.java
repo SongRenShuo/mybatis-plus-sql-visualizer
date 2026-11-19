@@ -13,6 +13,7 @@ import cn.song.mybatisplus.visualizer.model.PreviewResult;
 import cn.song.mybatisplus.visualizer.sql.ParamHint;
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer;
 import cn.song.mybatisplus.visualizer.sql.PlaceholderCardinality;
+import cn.song.mybatisplus.visualizer.sql.PreQuotedLiteral;
 import cn.song.mybatisplus.visualizer.sql.PlaceholderPositionsKt;
 import cn.song.mybatisplus.visualizer.sql.RuntimeSlot;
 import cn.song.mybatisplus.visualizer.sql.RuntimeSlotValues;
@@ -2202,18 +2203,22 @@ public final class SqlPreviewPanelParamPanelKt {
             for (String part : parts) rendered.add(renderSingleValue(p, part, hint));
             return String.join(", ", rendered);
         }
-        String escaped = v.replace("'", "''");
+        // T-PreQuotedLiteral：LIKE 模式下用户已手工加引号（`'abc'`）→ 剥外引号按内层内容拼 %，
+        // 不再对引号本身转义（`'%'''abc'''%'` 翻倍形态，先红读数见开发计划 §一）
+        String likeBody = PreQuotedLiteral.isComplete(v)
+                ? PreQuotedLiteral.stripQuotes(v).replace("'", "''")
+                : v.replace("'", "''");
         if (like != null) {
             // LIKE 模式：恒引号 + 按位置拼 %（值本身转义）
             switch (like) {
                 case ANYWHERE:
-                    return "'%" + escaped + "%'";
+                    return "'%" + likeBody + "%'";
                 case LEFT:
-                    return "'%" + escaped + "'";
+                    return "'%" + likeBody + "'";
                 case RIGHT:
-                    return "'" + escaped + "%'";
+                    return "'" + likeBody + "%'";
                 case NONE:
-                    return "'" + escaped + "'";
+                    return "'" + likeBody + "'";
                 default:
                     break;
             }
@@ -2254,10 +2259,13 @@ public final class SqlPreviewPanelParamPanelKt {
             String byShape = SqlDateLiteral.renderByShape(raw, dialectName);
             if (byShape != null) return byShape;
         }
-        String escaped = raw.replace("'", "''");
-        if (hint != null && Boolean.TRUE.equals(hint.getQuote())) return "'" + escaped + "'";
-        if (hint != null && Boolean.FALSE.equals(hint.getQuote())) return raw.trim();
+        // T-PreQuotedLiteral：值已是完整引号字面量（用户手工加的 `'abc'`）→ 原样渲染，不再转义包裹
+        //（否则引号翻倍 `'''abc'''` / `''''`——int 参数走 quote 兜底引号档时最常见，先红读数见开发计划 §一）
         String trimmed = raw.trim();
+        if (PreQuotedLiteral.isComplete(trimmed)) return trimmed;
+        String escaped = trimmed.replace("'", "''");
+        if (hint != null && Boolean.TRUE.equals(hint.getQuote())) return "'" + escaped + "'";
+        if (hint != null && Boolean.FALSE.equals(hint.getQuote())) return trimmed;
         return SqlPreviewPanel.NUMBER_REGEX.matcher(trimmed).matches() ? trimmed : "'" + escaped + "'";
     }
 
