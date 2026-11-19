@@ -61,6 +61,41 @@ class McpGateFilterFormDetectTest {
         assertEquals("UNKNOWN", McpGateFilterEpBridge.describe(McpGateFilterEpBridge.FilterForm.UNKNOWN))
     }
 
+    // ---- T-McpGlobalBreakHardening 券01：白名单否决未知契约 ------------------------------
+
+    @Test
+    fun `白名单外多一个方法即归UNKNOWN_防未来契约漂移`() {
+        // 最危险的形态：applyFilters 还在，平台又加了一个方法。旧判据会判 A 并注册，
+        // 新方法落兜底、对象返回类型给 null → 与 261 事故同形。
+        assertEquals(McpGateFilterEpBridge.FilterForm.UNKNOWN, McpGateFilterEpBridge.detectFilterForm(FormAWithExtraMethod::class.java))
+    }
+
+    @Test
+    fun `applyFilters是suspend时归UNKNOWN`() {
+        // suspend 方法经代理返回 null 会被平台当成「协程挂起且永不恢复」，比抛异常更糟
+        assertEquals(McpGateFilterEpBridge.FilterForm.UNKNOWN, McpGateFilterEpBridge.detectFilterForm(SuspendFormA::class.java))
+    }
+
+    @Test
+    fun `getFilters是suspend时归UNKNOWN`() {
+        assertEquals(McpGateFilterEpBridge.FilterForm.UNKNOWN, McpGateFilterEpBridge.detectFilterForm(SuspendFormB::class.java))
+    }
+
+    @Test
+    fun `getUpdates返回非Flow时归UNKNOWN`() {
+        assertEquals(McpGateFilterEpBridge.FilterForm.UNKNOWN, McpGateFilterEpBridge.detectFilterForm(FormAWithBadUpdates::class.java))
+    }
+
+    @Test
+    fun `未知方法清单带签名便于日志定位`() {
+        assertEquals(
+            listOf("getToolAliases/0->Map"),
+            McpGateFilterEpBridge.unknownContractMethods(FormAWithExtraMethod::class.java),
+        )
+        assertEquals(emptyList<String>(), McpGateFilterEpBridge.unknownContractMethods(FormA::class.java))
+        assertEquals(emptyList<String>(), McpGateFilterEpBridge.unknownContractMethods(FormB::class.java))
+    }
+
     // ---- 形态替身（签名与各版本线字节码一致，不链接任何平台类型） -------------------------
 
     /** 262.10968 / 263.7307：`applyFilters(Context, Implementation, SessionOptions, InvocationMode)`。 */
@@ -90,5 +125,29 @@ class McpGateFilterFormDetectTest {
 
     interface Unrelated {
         fun hello(): String
+    }
+
+    /** 假想的未来契约：A 形态原样保留，平台又加了一个方法。 */
+    interface FormAWithExtraMethod {
+        fun applyFilters(context: Any?, clientInfo: Any?, options: Any?, mode: Any?)
+        fun getUpdates(clientInfo: Any?, scope: Any?, options: Any?, mode: Any?): Flow<Any>
+        fun getToolAliases(): Map<String, String>
+    }
+
+    /** A 形态但 applyFilters 被改成 suspend（JVM 上多一个 Continuation 参数、返回 Object）。 */
+    interface SuspendFormA {
+        suspend fun applyFilters(context: Any?, clientInfo: Any?, options: Any?, mode: Any?)
+        fun getUpdates(clientInfo: Any?, scope: Any?, options: Any?, mode: Any?): Flow<Any>
+    }
+
+    /** B 形态但 getFilters 被改成 suspend。 */
+    interface SuspendFormB {
+        suspend fun getFilters(clientInfo: Any?, options: Any?): List<Any?>
+    }
+
+    /** A 形态但 getUpdates 返回的不是 Flow（代理返回值会被平台按 Flow 强转）。 */
+    interface FormAWithBadUpdates {
+        fun applyFilters(context: Any?, clientInfo: Any?, options: Any?, mode: Any?)
+        fun getUpdates(clientInfo: Any?, scope: Any?, options: Any?, mode: Any?): List<Any>
     }
 }
