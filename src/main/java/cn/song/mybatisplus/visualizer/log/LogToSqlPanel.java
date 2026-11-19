@@ -155,8 +155,10 @@ public class LogToSqlPanel extends JPanel implements Disposable {
                         resultHintLabel.setVisible(event.getDocument().getText().isBlank());
                     }
                 };
-        inputEditor.getDocument().addDocumentListener(inputSync);
-        resultEditor.getDocument().addDocumentListener(resultSync);
+        // T-PerfSweep30 05b：两处注册挂本面板 Disposable（本类实现 Disposable，dispose 时平台
+        // 自动摘除）——旧形态单参注册，靠 editor 组件回收间接失效，属「存量单参 DocumentListener」。
+        inputEditor.getDocument().addDocumentListener(inputSync, this);
+        resultEditor.getDocument().addDocumentListener(resultSync, this);
         inputHintLabel.setVisible(inputEditor.getDocument().getText().isBlank());
         resultHintLabel.setVisible(resultEditor.getDocument().getText().isBlank());
     }

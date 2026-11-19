@@ -114,6 +114,15 @@ public abstract class RailCellRendererBase extends JPanel implements ListCellRen
     /** 同模板计数快照（子类提供取值来源）。 */
     protected abstract Map<String, Integer> templateCountsSnapshot();
 
+    /**
+     * T-HdAbsorb D216 第二刀：N+1 窗口嫌疑键集快照（buffer 按刷新拍产出，同线程滑动窗判定）。
+     * null = 本页未接线（历史页），徽章回落第一刀会话级计数判定；日志页由
+     * SqlLogPanel.refreshCountMaps 每拍更新到渲染器字段上。
+     */
+    protected java.util.Set<String> nplusOneSuspectsSnapshot() {
+        return null;
+    }
+
     /** 可见条目最大耗时快照（子类提供取值来源）。 */
     protected abstract Long maxDurationMsSnapshot();
 
@@ -340,14 +349,17 @@ public abstract class RailCellRendererBase extends JPanel implements ListCellRen
         fragments.addAll(SqlEntryPresentation.headerBadgeFragments(
                 entry,
                 templateCountsSnapshot(),
-                dedupeCountsSnapshot()));
+                dedupeCountsSnapshot(),
+                nplusOneSuspectsSnapshot()));
         fragments.addAll(entry.cachedHeaderSource() != null ? entry.cachedHeaderSource() : List.of());
         int width = sqlAreaWidth(list, this);
         headerLine.setForeground(fg);
         headerLine.clear();
         for (SqlTextFragment fragment : clipSqlFragmentsToWidth(fragments, list, width)) {
+            // D235：片段 tag 透传（N+1 徽章命中判定靠 getFragmentTagAt 定位；其余片段 tag 为 null 等价原样）
             headerLine.append(fragment.text(), isSelected
-                    ? SqlEntryPresentation.selectedAttributes(fragment.attributes(), fg) : fragment.attributes());
+                    ? SqlEntryPresentation.selectedAttributes(fragment.attributes(), fg) : fragment.attributes(),
+                    fragment.tag());
         }
         if (list != null) {
             SpeedSearchUtil.applySpeedSearchHighlighting(list, headerLine, false, useSelectionFill);

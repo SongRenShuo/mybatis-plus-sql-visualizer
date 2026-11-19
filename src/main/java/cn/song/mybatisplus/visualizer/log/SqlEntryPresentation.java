@@ -88,7 +88,7 @@ public final class SqlEntryPresentation {
         List<SqlTextFragment> result = new ArrayList<>();
         if (entry.sequenceNumber() > 0) result.add(new SqlTextFragment("#" + entry.sequenceNumber() + " ", SECONDARY));
         add(result, SqlLogPanelKt.formatTimestampFragment(entry));
-        if (showDuration) add(result, SqlLogPanelKt.formatDurationFragment(entry.executionTimeMs(), false));
+        if (showDuration) add(result, SqlLogPanelKt.formatDurationFragment(entry.executionTimeMs(), false, entry.durationKind()));
         add(result, SqlLogPanelKt.formatDatabaseFragment(entry, false));
         add(result, SqlLogPanelKt.formatMcpFragment(entry, false));
         add(result, SqlLogPanelKt.formatUpdateCountFragment(entry, false));
@@ -96,15 +96,23 @@ public final class SqlEntryPresentation {
     }
 
     /**
-     * 动态徽章段（券01 每次算，不可缓存）：⨉去重 + ×N 同结构。
-     * 两个徽章的输入是面板级快照 map，随流式灌入每拍变化——进缓存会吞更新。
+     * 动态徽章段（券01 每次算，不可缓存）：⨉去重 + ×N 同结构 + 疑似 N+1（D216）。
+     * 三个徽章的输入是面板级快照 map，随流式灌入每拍变化——进缓存会吞更新。
+     *
+     * <p>T-HdAbsorb D216 第二刀：{@code nplusOneSuspects} 由日志页渲染器从 buffer 窗口判定集取
+     * （刷新拍一次产出）；null = 历史页/未接线调用方，回落第一刀会话级计数判定。</p>
      */
     public static List<SqlTextFragment> headerBadgeFragments(LogSqlEntry entry, Map<String, Integer> templateCounts) {
-        return headerBadgeFragments(entry, templateCounts, Map.of());
+        return headerBadgeFragments(entry, templateCounts, Map.of(), null);
     }
 
     public static List<SqlTextFragment> headerBadgeFragments(LogSqlEntry entry, Map<String, Integer> templateCounts,
             Map<String, Integer> dedupeCounts) {
+        return headerBadgeFragments(entry, templateCounts, dedupeCounts, null);
+    }
+
+    public static List<SqlTextFragment> headerBadgeFragments(LogSqlEntry entry, Map<String, Integer> templateCounts,
+            Map<String, Integer> dedupeCounts, java.util.Set<String> nplusOneSuspects) {
         List<SqlTextFragment> result = new ArrayList<>();
         // UI013：同键的其他来源可能有丢弃计数，不能把徽章借给未参与去重的 Sharding 执行。
         Integer count = entry.source() == SqlSource.SHARDINGSPHERE
@@ -113,6 +121,14 @@ public final class SqlEntryPresentation {
         kotlin.Pair<String, SimpleTextAttributes> template =
                 SqlLogPanelKt.formatTemplateCountFragment(entry, templateCounts, false);
         if (template != null) result.add(new SqlTextFragment(template.getFirst(), template.getSecond()));
+        // T-HdAbsorb D216：N+1 嫌疑徽章（阈值 ≥5 Registry 可调；与同模板计数徽章分层）。
+        // T-Nplus1Aggregate D235：挂 NPLUS_ONE_BADGE_TAG——点击命中判定靠片段 tag 定位徽章矩形。
+        kotlin.Pair<String, SimpleTextAttributes> nplusOne =
+                SqlLogPanelKt.formatNplusOneSuspectFragment(entry, templateCounts, false, nplusOneSuspects);
+        if (nplusOne != null) {
+            result.add(new SqlTextFragment(nplusOne.getFirst(), nplusOne.getSecond(),
+                    NplusOneAggregateKt.NPLUS_ONE_BADGE_TAG));
+        }
         return result;
     }
 
@@ -156,6 +172,8 @@ public final class SqlEntryPresentation {
                 ? null : dedupeCounts.get(entry.dedupeKey());
         if (count != null && count > 0) result.add(new SqlTextFragment("⨉" + count + " ", SECONDARY));
         add(result, SqlLogPanelKt.formatTemplateCountFragment(entry, templateCounts, selected));
+        // T-HdAbsorb D216：通栏注脚同步嫌疑徽章（存量测试直接断言 details() 的口径文档）
+        add(result, SqlLogPanelKt.formatNplusOneSuspectFragment(entry, templateCounts, selected));
         return result;
     }
 
@@ -169,7 +187,7 @@ public final class SqlEntryPresentation {
         List<SqlTextFragment> result = new ArrayList<>();
         if (entry.sequenceNumber() > 0) result.add(new SqlTextFragment("#" + entry.sequenceNumber() + " ", SECONDARY));
         add(result, SqlLogPanelKt.formatTimestampFragment(entry));
-        if (showDuration) add(result, SqlLogPanelKt.formatDurationFragment(entry.executionTimeMs(), selected));
+        if (showDuration) add(result, SqlLogPanelKt.formatDurationFragment(entry.executionTimeMs(), selected, entry.durationKind()));
         add(result, SqlLogPanelKt.formatDatabaseFragment(entry, selected));
         add(result, SqlLogPanelKt.formatMcpFragment(entry, selected));
         if (showLogDetails) {
@@ -181,6 +199,8 @@ public final class SqlEntryPresentation {
             if (count != null && count > 0) result.add(new SqlTextFragment("⨉" + count + " ", SECONDARY));
         }
         add(result, SqlLogPanelKt.formatTemplateCountFragment(entry, templateCounts, selected));
+        // T-HdAbsorb D216：元信息行同步嫌疑徽章（与 headerBadgeFragments 同口径）
+        add(result, SqlLogPanelKt.formatNplusOneSuspectFragment(entry, templateCounts, selected));
         add(result, SqlLogPanelKt.formatSourceFragment(entry, selected));
         // T-LogMethodName：与渲染器同一组合口径（来源在前、方法名在后），两处不得漂移
         add(result, SqlLogPanelKt.formatMethodFragment(entry, selected));
@@ -267,7 +287,8 @@ public final class SqlEntryPresentation {
             }
             if (low > 0) {
                 String prefix = text.substring(0, text.offsetByCodePoints(0, low));
-                clipped.add(new SqlTextFragment(prefix, fragment.attributes()));
+                // D235：裁剪保留 tag（被裁徽章片段仍可命中——tag 是片段身份，与文本长度无关）
+                clipped.add(new SqlTextFragment(prefix, fragment.attributes(), fragment.tag()));
                 used += measure.applyAsInt(prefix, fragment.attributes());
             }
             break;

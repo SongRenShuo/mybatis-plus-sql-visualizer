@@ -12,7 +12,6 @@ import com.intellij.openapi.editor.event.DocumentListener;
 import com.intellij.openapi.project.Project;
 import java.awt.BorderLayout;
 import java.awt.FlowLayout;
-import java.util.Objects;
 import javax.swing.*;
 import javax.swing.event.ListDataEvent;
 import javax.swing.event.ListDataListener;
@@ -107,9 +106,11 @@ public final class SqlDockedPreview implements Disposable {
                 dockedState.getDisplayMaskEnabled());
         if (content == null) {
             content = SqlClickPreview.buildContent(project, sql, UiTextClipboard::copy, onClose);
+            // T-PerfSweep30 05b：挂本面板 Disposable（本类实现 Disposable，dispose 即摘除）——
+            // 旧形态单参注册，靠 editor 组件回收间接失效。
             content.editor().getDocument().addDocumentListener(new DocumentListener() {
                 @Override public void documentChanged(DocumentEvent event) { updatePinnedStatus(); }
-            });
+            }, this);
         }
         if (!content.editor().getDocument().getText().equals(sql)) {
             updating = true;
@@ -125,7 +126,26 @@ public final class SqlDockedPreview implements Disposable {
 
     private boolean isPinned() {
         isPinnedCallCountForTest++; // F98 测试缝
-        return displayedEntry != null && !Objects.equals(content != null ? content.editor().getDocument().getText() : null, originalSql);
+        return displayedEntry != null && documentDiffersFromOriginal();
+    }
+
+    /**
+     * T-PerfSweep30 04b：逐键路径去分配——{@code document.text} 每次都复制整份文本（O(n) 分配），
+     * 而本判定挂在 documentChanged 上逐键触发。改用 {@code charsSequence} 视图逐段比较：长度先比，
+     * 不同即早退；相同长度再逐字符比，零 String 分配。
+     *
+     * <p>语义与 {@code document.text != originalSql} 逐字等价（Document 的 charsSequence 就是 text 的视图）。</p>
+     */
+    private boolean documentDiffersFromOriginal() {
+        CharSequence chars = content != null ? content.editor().getDocument().getCharsSequence() : null;
+        String original = originalSql;
+        if (chars == null) return false;
+        if (original == null) return false;
+        if (chars.length() != original.length()) return true;
+        for (int i = 0; i < chars.length(); i++) {
+            if (chars.charAt(i) != original.charAt(i)) return true;
+        }
+        return false;
     }
 
     private void updatePinnedStatus() {

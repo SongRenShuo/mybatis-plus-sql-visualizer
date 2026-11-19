@@ -115,6 +115,34 @@ public class SqlLogEntryBuffer {
     private final java.util.concurrent.atomic.AtomicBoolean countFullRebuildPending =
             new java.util.concurrent.atomic.AtomicBoolean(false);
 
+    // ---------- T-HdAbsorb D216 第二刀：同线程滑动窗嫌疑戳 ----------
+
+    /**
+     * D216 第二刀（吸收 Hibernate Debugger {@code RepeatedParameterizedSelectCriterion} 事务分组思路，
+     * 本仓退化口径＝线程+滑动窗）：structureKey → 窗内 (timestamp, threadName) 戳队列（FIFO，
+     * 读取时按窗修剪）。与 presence 计数链<b>独立</b>维护：
+     * <ul>
+     *  <li>入队埋戳<b>不受去重开关影响</b>（D237 解耦：N+1 是诊断能力，去重只是展示偏好），
+     *      structureKey 直接取条目自己的惰性缓存（同实例一次，随条目淘汰回收）；</li>
+     *  <li><b>逐条出队不做摘戳</b>：头部淘汰/融合换实例留下的陈旧戳靠窗龄自愈（窗 60s 上限），
+     *      「刚被淘汰的条目让键多嫌疑 ≤ 一个窗」为如实登记的近似；clear 全量复位；</li>
+     *  <li>读取见 {@link #windowSuspectKeys}（修剪 + 同线程分桶 + 阈值判定，null 线程单桶参与——
+     *      控制台回落通道条目无线程名，按会话级同窗计数回落口径）。</li>
+     * </ul>
+     */
+    private static final class WindowStamp {
+        final long tsMs;
+        final String thread;
+
+        WindowStamp(long tsMs, String thread) {
+            this.tsMs = tsMs;
+            this.thread = thread;
+        }
+    }
+
+    private final java.util.HashMap<String, java.util.ArrayDeque<WindowStamp>> windowStamps =
+            new java.util.HashMap<>();
+
     /** 暂停态。 */
     private volatile boolean paused;
 
@@ -849,6 +877,11 @@ public class SqlLogEntryBuffer {
                             // presence 口径内——增量键集无法表达，面板回退全量重算（与全量重算的现状同价）。
                             countFullRebuildPending.set(true);
                         }
+                        // D237：窗口嫌疑戳**与去重开关解耦**——N+1 是诊断能力，去重只是展示偏好。
+                        // 此前该调用藏在上面 `if (dedupeEnabled && canDedupe)` 内，关掉去重即让 N+1 徽标
+                        // 与 D235 聚合全链静默失效（2026-11-19 用户真机验收发现）。成本实测：structureKey
+                        // 单条 3.8µs（10000 条 38ms）且条目上本就 lazy；ShardingSphere（canDedupe=false）同纳。
+                        markWindowStampLocked(added);
                         // T-DedupeDecouple：跨通道索引与去重开关**解耦**——去重关闭时它照样维护，
                         // 否则兜底查不到候选（真机：关掉「SQL 去重」后同一次执行又出现两条）。
                         // 券F1：不再做 5s 时间窗惰性清除——超窗键是越窗兜底的候选源（见 crossChannelIndex KDoc）。
@@ -1306,6 +1339,63 @@ public class SqlLogEntryBuffer {
     }
 
     /**
+     * T-HdAbsorb D216 第二刀：窗口嫌疑戳登记（调用方须已持 {@code synchronized(entries)}）。
+     *
+     * <p>D237：<b>不再经 structureKeyByDedupe 跨条目缓存</b>——该 map 只在 {@code clear()} 时清空、没有随
+     * 条目淘汰回收，是既有的无界累积点。改用条目自己的 {@code structureKey}：它本就在 {@link LogSqlEntry}
+     * 上惰性缓存（同实例只算一次），成本实测单条 3.8µs；且随条目淘汰自动回收。
+     * 代价仅是同 dedupeKey 的多实例各算一次（收益本来也只有几 µs/条）。</p>
+     */
+    private void markWindowStampLocked(LogSqlEntry entry) {
+        windowStamps.computeIfAbsent(entry.structureKey(), k -> new java.util.ArrayDeque<>())
+                .addLast(new WindowStamp(entry.timestamp(), entry.threadName()));
+    }
+
+    /**
+     * T-HdAbsorb D216 第二刀：窗口嫌疑键集（面板每刷新拍调一次，替代逐格重算）。
+     *
+     * <p>判定口径：structureKey 的窗内戳按线程分桶，<b>任一线程桶</b>计数 ≥ {@code threshold} 即嫌疑；
+     * 线程名 null（控制台回落通道）单独一桶参与判定——按计划「推断不到就退化」的会话级回落，
+     * 使无线程名条目仍有嫌疑检出能力。读取时顺带修剪窗外戳（含被淘汰条目残留的陈旧戳，
+     * 窗龄自愈口径见字段 KDoc）。</p>
+     *
+     * <p>与 {@link NplusOneSuspect#isSuspect} 的关系：本出口产出<b>数据</b>（键集），总开关与阈值语义由
+     * 调用方（徽章层）判定——本函数只按传入阈值做分桶计数，不读 Registry（buffer 不进 UI 门）。</p>
+     */
+    java.util.Set<String> windowSuspectKeys(long nowMs, long windowMs, int threshold) {
+        synchronized (entries) {
+            if (windowStamps.isEmpty() || threshold < 2) return java.util.Set.of();
+            long lo = nowMs - windowMs;
+            java.util.Set<String> out = new java.util.HashSet<>();
+            java.util.Iterator<java.util.Map.Entry<String, java.util.ArrayDeque<WindowStamp>>> it =
+                    windowStamps.entrySet().iterator();
+            while (it.hasNext()) {
+                java.util.Map.Entry<String, java.util.ArrayDeque<WindowStamp>> e = it.next();
+                java.util.ArrayDeque<WindowStamp> q = e.getValue();
+                while (!q.isEmpty() && q.getFirst().tsMs < lo) q.removeFirst();
+                if (q.isEmpty()) {
+                    it.remove();
+                    continue;
+                }
+                java.util.HashMap<String, Integer> byThread = new java.util.HashMap<>();
+                for (WindowStamp s : q) {
+                    String k = s.thread != null ? s.thread : "\u0000";
+                    byThread.merge(k, 1, Integer::sum);
+                }
+                boolean suspect = false;
+                for (Integer c : byThread.values()) {
+                    if (c >= threshold) {
+                        suspect = true;
+                        break;
+                    }
+                }
+                if (suspect) out.add(e.getKey());
+            }
+            return out;
+        }
+    }
+
+    /**
      * 清空全部（去重计数一并归零——徽章与列表内容同生命周期；
      * T-LogRowNumber：捕获序号一并归零——清空后下一条从 #1 起计数）。
      */
@@ -1315,6 +1405,7 @@ public class SqlLogEntryBuffer {
             dedupeIndex.clear(); // T-SqlLogPerf P6：索引随队清空
             dedupeKeyPresence.clear(); // F83：键级在队计数随队清空
             crossChannelIndex.clear(); // T-CrossChannelDedupe：跨通道索引同生命周期清空
+            windowStamps.clear(); // T-HdAbsorb D216 第二刀：窗口嫌疑戳同生命周期清空
             // 券B：清空后悬挂的变更键作废（面板全量重建不消费键集），集合一并清空保持有界口径。
             synchronized (changedCountKeys) {
                 changedCountKeys.clear();

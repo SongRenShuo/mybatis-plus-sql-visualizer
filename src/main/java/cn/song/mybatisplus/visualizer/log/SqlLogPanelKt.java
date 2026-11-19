@@ -627,6 +627,17 @@ public final class SqlLogPanelKt {
 
     /** 耗时片段：颜色分档与原 HTML 通道一致（选中白/无耗时灰/慢红/偏慢橙/正常绿）；无耗时显示 "—" 占位。 */
     public static kotlin.Pair<String, SimpleTextAttributes> formatDurationFragment(Long ms, boolean isSelected) {
+        return formatDurationFragment(ms, isSelected, null);
+    }
+
+    /**
+     * 耗时片段（全参形态）：颜色分档与原 HTML 通道一致；无耗时显示 "—" 占位。
+     *
+     * <p>T-HdAbsorb D215：近似档（{@link DurationKind#APPROXIMATE}，控制台日志解析通道）文本带 {@code ~} 前缀；
+     * 精确档（agent）与 null（未知/旧条目）形态逐字节不变（零回归锚点）。</p>
+     */
+    public static kotlin.Pair<String, SimpleTextAttributes> formatDurationFragment(
+            Long ms, boolean isSelected, DurationKind kind) {
         long threshold = PluginSettings.getInstance().getState().getSlowQueryThresholdMs();
         Color color;
         if (isSelected) {
@@ -641,7 +652,7 @@ public final class SqlLogPanelKt {
         } else {
             color = MpvsUiColors.DURATION_OK;               // 绿：正常
         }
-        String text = (ms != null) ? (ms + "ms") : "—";
+        String text = (ms != null) ? ((kind == DurationKind.APPROXIMATE ? "~" : "") + ms + "ms") : "—";
         return new kotlin.Pair<>(text + " ", new SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, color));
     }
 
@@ -668,6 +679,43 @@ public final class SqlLogPanelKt {
         Color color = isSelected ? new Color(0xFFFFFF) : MpvsUiColors.TEMPLATE_N1;
         return new kotlin.Pair<>(
                 MpSqlVisualizerBundle.message("log.panel.templateBadge", n) + " ",
+                new SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, color));
+    }
+
+    /**
+     * T-HdAbsorb D216：N+1 嫌疑徽章（第一刀）——同模板计数达 {@link NplusOneSuspect#DEFAULT_MIN_COUNT}
+     * （Registry 可调）判嫌疑，落点与「×N 同模板」相邻（元信息行尾），红色加粗作行动信号。
+     * Registry {@code sqlvis.log.nplusOneSuspect} 关闭即不显示（回退通道）；与展示徽章并存
+     * （阈值 5 > 3，嫌疑条目两枚徽章都可见，语义分层：计数提示 vs 行动建议）。
+     *
+     * <p>第二刀（D216 收口）：{@code nplusOneSuspects} 非 null 时走<b>窗口判定</b>——嫌疑集由
+     * {@code SqlLogEntryBuffer.windowSuspectKeys} 按刷新拍产出（同线程滑动窗分桶 + null 线程会话级回落），
+     * 本函数只查键在场；null（历史页/未接线调用方）保持第一刀会话级计数判定，逐字不变。</p>
+     */
+    public static kotlin.Pair<String, SimpleTextAttributes> formatNplusOneSuspectFragment(
+            LogSqlEntry entry, Map<String, Integer> counts, boolean isSelected) {
+        return formatNplusOneSuspectFragment(entry, counts, isSelected, null);
+    }
+
+    /** N+1 嫌疑徽章（全参形态，窗口嫌疑键集注入见三参重载 KDoc）。 */
+    public static kotlin.Pair<String, SimpleTextAttributes> formatNplusOneSuspectFragment(
+            LogSqlEntry entry, Map<String, Integer> counts, boolean isSelected, java.util.Set<String> nplusOneSuspects) {
+        Integer n = counts.get(entry.structureKey());
+        if (n == null) {
+            return null;
+        }
+        if (!NplusOneSuspect.enabledProvider.invoke()) {
+            return null;
+        }
+        boolean suspect = nplusOneSuspects != null
+                ? nplusOneSuspects.contains(entry.structureKey())
+                : NplusOneSuspect.isSuspect(n);
+        if (!suspect) {
+            return null;
+        }
+        Color color = isSelected ? new Color(0xFFFFFF) : MpvsUiColors.NPLUS_ONE_SUSPECT;
+        return new kotlin.Pair<>(
+                MpSqlVisualizerBundle.message("log.panel.nplusOneBadge", n) + " ",
                 new SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, color));
     }
 

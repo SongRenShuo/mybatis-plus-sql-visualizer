@@ -40,11 +40,20 @@ public final class ExecutionTimeParser {
     /** 行尾纯数字 + ms 兜底：行尾 ` 123ms` 或 `] 456ms`（避免误匹配 SQL 内数字）。 */
     private static final Pattern TRAILING_MS_REGEX = Pattern.compile("[\\]\\s]\\s*(\\d+)\\s*ms\\s*$", Pattern.MULTILINE);
 
-    /** 自定义前缀正则缓存——键为前缀原文（用户配置串，天然有界），每条 SQL 不再动态编译。 */
+    /**
+     * 自定义前缀正则缓存——键为前缀原文（用户配置串，天然有界），每条 SQL 不再动态编译。
+     *
+     * <p>T-PerfSweep30 05a：加显式上限（同族 countCache 形态——超限整体清空）。键域是「用户配置的
+     * 耗时前缀」，通常个位数；但配置可被脚本反复改写，无上限的 CHM 在长跑 IDE 里没有回收路径。
+     * 清空代价 = 下次重编译一条 Regex（微秒级）。</p>
+     */
     private static final java.util.concurrent.ConcurrentHashMap<String, Pattern> CUSTOM_PREFIX_REGEX_CACHE =
             new java.util.concurrent.ConcurrentHashMap<>();
 
+    private static final int CUSTOM_PREFIX_CACHE_MAX = 64;
+
     private static Pattern customPrefixRegex(String customPrefix) {
+        if (CUSTOM_PREFIX_REGEX_CACHE.size() >= CUSTOM_PREFIX_CACHE_MAX) CUSTOM_PREFIX_REGEX_CACHE.clear();
         return CUSTOM_PREFIX_REGEX_CACHE.computeIfAbsent(customPrefix,
                 p -> Pattern.compile("(?i)" + Pattern.quote(p) + "\\s*(\\d+)\\s*ms?\\b"));
     }

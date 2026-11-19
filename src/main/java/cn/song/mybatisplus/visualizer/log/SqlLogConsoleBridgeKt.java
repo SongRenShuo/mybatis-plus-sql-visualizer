@@ -199,7 +199,9 @@ public final class SqlLogConsoleBridgeKt {
                     e.dialectName(),
                     // master 为 e.copy(...)——未触及字段须原样携带（actualSql 同权透传）
                     e.actualSql(),
-                    e.captureProvenance()));
+                    e.captureProvenance(),
+                    // T-HdAbsorb D215：控制台回落通道的耗时来自日志文本解析——近似档（展示 ~ 前缀）。
+                    duration != null ? DurationKind.APPROXIMATE : e.durationKind()));
         }
         if (ctx.pendingSource != null) {
             ctx.pendingSource = null;

@@ -24,12 +24,24 @@ public class LogEntryListCellRenderer extends RailCellRendererBase {
     /** O-90：同模板计数快照（「×N 同结构」徽章渲染数据源；refreshList 随 dedupeCounts 一并更新）。 */
     public Map<String, Integer> templateCounts = Map.of();
 
+    /**
+     * T-HdAbsorb D216 第二刀：N+1 窗口嫌疑键集（buffer.windowSuspectKeys 每刷新拍产出；
+     * refreshCountMaps 更新）。null/空集语义见 formatNplusOneSuspectFragment——日志页恒非 null
+     * （空集=无嫌疑），历史页渲染器不设此字段走第一刀会话级判定。
+     */
+    public java.util.Set<String> nplusOneSuspects = null;
+
     /** 当前列表可见条目的最大耗时（refreshList 更新；进度条已退役，仍留作诊断读数与测试断言）。 */
     public Long maxDurationMs;
 
     @Override
     protected Map<String, Integer> templateCountsSnapshot() {
         return templateCounts;
+    }
+
+    @Override
+    protected java.util.Set<String> nplusOneSuspectsSnapshot() {
+        return nplusOneSuspects;
     }
 
     @Override
