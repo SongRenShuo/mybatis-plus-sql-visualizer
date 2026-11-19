@@ -1006,6 +1006,47 @@ expected 10 was 12）与分片 2（`SqlLogPanelFocusTabTest` expected 4 was 6）
 
 **Seen 1× (2026-11-19)**
 
+### L88 运行期手写字节码给平台反射用：复制 metadata 就要把它的**全部成员**补齐，注解元素严格按声明类型编码
+
+**规则**：凡是给平台反射扫描（kotlin-reflect / 注解读取）手写 class 文件，三件事必须同时成立：
+
+1. **复制 `kotlin.Metadata` 时，metadata 描述到的每一个成员都要在类里按签名存在**。业务类的
+   metadata 会带上它的私有/内部辅助函数；壳类只声明工具方法时，kotlin-reflect 展开函数表抛
+   `KotlinReflectionInternalError: Could not compute caller for function: private final suspend fun …`
+   → 该 toolset 一个工具都出不来。做法：给其余方法生成同签名占位（方法体
+   `throw UnsupportedOperationException` 即可，平台不会调用它们），并跳过与基类同签名的
+   （否则 `IncompatibleClassChangeError: overrides final method`）。
+2. **枚举 `element_value` 的 `type_name` 必须与注解元素声明类型逐字相等**。
+   `javaClass.enclosingClass ?: superclass` 对无类体常量会退化成 `java.lang.Enum`，JDK
+   `AnnotationParser.parseEnumValue` 直接抛 `AnnotationTypeMismatchException … (Found data of type
+   java.lang.Enum.TRUE)`。用 `if (javaClass.isEnum) javaClass else superclass`。
+3. **Kotlin 的 `IntArray` 等不是 `Array<*>`**。`when (v) { is Array<*> -> … }` 匹配不到原始数组，
+   掉进 `else → toString()` 写出 `"[I@2b40ff9c"`，读回时同样抛类型不匹配（`Metadata.mv()` 必踩）。
+
+**证据**：D239 四层缺陷叠加（2026-11-19 真机 17:30→18:17 逐层读数），修复 `756011136`；
+单测 `TinyClassFileWriterD239Test` 5/0（枚举+原始数组读回探针）、`McpToolsetShellFactoryTest` 11/0
+（「工具方法保留 suspend 语义」「壳类覆盖业务类全部方法签名」两条守卫）。
+**正例**：真机诊断先打印「平台自己的 asTools 对每个壳类展开出哪个工具」，一轮就能定位到具体类与具体异常。
+**反例**：只看 `declaredMethods.size` 与 `getAnnotation(Metadata) != null` 就判「反射可见」——
+两者都真时 kotlin-reflect 仍可能在展开函数表时炸。
+
+**Seen 1× (2026-11-19)**
+
+### L89 平台「重算」类 API 往往复用旧结果：`requestUpdate` 之外还要摘 provider 缓存
+
+**规则**：调平台的重算入口前先确认它是否带 `previous` 参数复用缓存。
+`McpToolsListProvider.requestUpdate(reason)` 走 `computeAllMcpTools(previous)`，**只在 previous 里
+缺失时才真正计算**，所以注册初期那份「只含前 1 个工具」的结果会被永久沿用——连发三次重算请求
+读数仍只有 1 个。正路：先调平台私有 `invalidateReflectionProviders()`（走合成访问器
+`access$invalidateReflectionProviders`）摘掉反射 provider 的缓存条目，再 `requestUpdate`。
+
+**证据**：D239（2026-11-19 18:20 真机）：11 个壳类各自 `asTools` 都出 1 个工具、自检全绿，
+但 `tools/list` 恒为 1 个；补 `invalidateReflectionProviders` 后连续三轮冷启稳定 165/11。
+**正例**：判「重算有没有生效」看聚合清单读数，不看自己发出的请求条数。
+**反例**：以为「多发几次重算总能收敛」，靠延迟重算兜底——实测 3 次（0s/3s/12s）全部无效。
+
+**Seen 1× (2026-11-19)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
