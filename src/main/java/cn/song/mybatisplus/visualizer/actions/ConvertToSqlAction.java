@@ -269,11 +269,26 @@ public final class ConvertToSqlAction extends AnAction {
     /**
      * JDBC 模板兜底（T-PreviewShortcut）：jdbcTemplate.queryForList / update 等 →
      * JdbcTemplateSqlPreviewService.preview（支持命名参数 / 字符串拼接）。
+     *
+     * <p>T-IbatisAtShapeGate S4（错源兜底）：JDBC 通道认领后渲染失败（{@code isLikelySql} 拒绝——首参不是 SQL
+     * 而是某种语句名）时，<b>再试一次 iBatis 解析</b>（{@link cn.song.mybatisplus.visualizer.ui.gutter.IbatisCallTargets#resolveIgnoringShape}，
+     * 跳过形状正则、只判入口方法名 + 首参字面量）。命中才接管预览，未命中照旧落「未找到」——于是今后语句名
+     * 里再出现第三种自定义字符时，也不会把「语句明明存在」的调用打成错源提示。
+     * 解析在 {@code previewAsync} 的读锁内执行，EDT 只渲染结果。</p>
      */
     private boolean tryJdbcTemplateFallback(Project project, PsiElement element, String sourceLocation) {
         if (JdbcTemplateSqlLocator.INSTANCE.locate(element) != null) {
             SqlPreviewService.previewAsync(project,
-                    () -> JdbcTemplateSqlPreviewService.preview(element, project),
+                    () -> {
+                        PreviewResult jdbc = JdbcTemplateSqlPreviewService.preview(element, project);
+                        if (jdbc != null) return jdbc;
+                        // T-IbatisAtShapeGate S4：JDBC 渲染失败（非 SQL 形态）→ iBatis 解析兜底
+                        cn.song.mybatisplus.visualizer.ui.gutter.IbatisCallTarget target =
+                                cn.song.mybatisplus.visualizer.ui.gutter.IbatisCallTargets.INSTANCE.resolveIgnoringShape(element);
+                        if (target == null) return null;
+                        return cn.song.mybatisplus.visualizer.ui.gutter.IbatisStatementPreview.INSTANCE
+                                .previewResolvedOrNull(project, target.statementId(), target.ownerNamespace());
+                    },
                     (PreviewResult result) -> { SqlPreviewService.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
             return true;
         }
