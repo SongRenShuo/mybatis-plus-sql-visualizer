@@ -71,4 +71,14 @@
 
 ## 六、实施记录
 
-> 立项版（2026-11-20，T-PerfSweep33 未开工）。来源报告第十期 §四（新增面证据）、§五（hiddenbug 对账）、§六.8（EXPLAIN 前热实参实证）。
+> 2026-11-20 主控实施（分支 `t-perfsweep33`，工作树 `.worktrees/t-perfsweep33`，基线 master `ec39a7518`）。四笔提交 + 一笔回填。
+
+- **券03**（`ca1a38a3b`）：EXPLAIN 前热补 `cacheOnly = true`（SqlPreviewPanelExecution.kt）。
+- **券01**（`b64e71e43`）：`resolveOffEdt` 池线程计算 + 代次守卫 + `invokeLater(nonModal)` 回 EDT；文件读取随解析一并后台（`ReadAction.compute` 在 BGT 取读锁，**待验证前提 1 取保守解**：保留读动作包裹）；测试缝 `resolveOffEdtDispatcher` 照 `EdtDispatch.invokeLaterOverride` 惯例；新增代次守卫竞态用例。**实施超出计划两处（按死代码纪律顺手收口）**：①删除只写不读的死状态 `suppressPasteReparse`；②`reparseText` 在统一链后失去全部生产调用方，已删除，竞态测试改连发两次真实入口 `reparseDraftFromEditor`（更贴近真实贴入竞态）。
+- **券02**（`7b318a5d1`）：双帽兜底——**帽值较计划 §五.5 的 20_000 枚口径收紧**为「单键 64 + 键数 1024」（键帽 × 单键帽 = 65_536 枚 ≈ 5MB 最坏界；单键丢最旧保最近段，阈值 5 ≪ 64 检测能力不丢）；新增 `windowStampShapeForTest()` 访问器。
+- **守卫**（`54d1103f1`）：`SqlPreviewDialogOffEdtResolveHotPathTest` 钉两券形态（单点路由 + cacheOnly 实参），合成样本自证防空绿；命名与函数形态按元守卫口径免 GUARD_CLASSES 登记（同 IbatisTypeAliasResolverHotPathTest 先例）。
+- **定向读数**：首轮 8 类 102 例 0 红（DialogPasteReparseTest 4、SqlPreviewDialogTest 12、SizeTest 3、守卫 4、NplusOneWindowBufferTest 10、SqlLogEntryBufferTest 60、ExecFileWriteCountTest 7、ExecTempFileEdtGuardTest 2，XML tests= 逐一核对无 pattern 漏跑）；删码后增量重跑 2 类 8 例 0 红；终态全量定向（上表 8 类）在探针还原后复绿。
+- **反向验证**：三处生产码同时撤修复（入口直调 resolve / 双帽摘除 / cacheOnly 摘除）→ **恰 4 红**（守卫 2 红：「调用点应恰 1 处（现 2）」「EXPLAIN 前热调用缺 cacheOnly = true」；帽测试 2 红：「单键戳队列应被帽住（≤64，现 100）」「键数应被帽住（≤1024，现 1100）」）→ 还原复绿（gradle exit=0，4/0 + 10/0）。注意：探针轮 Bash 管道末命令退出码恒 0 的坑再次出现，判定以 XML 计数为准。
+- **CHANGELOG**：`[Unreleased]` 新增 Changed 三条（一句一条带哈希），随文档提交落账。
+- **not run 声明**：全量门禁未跑（交 CI 收口）；runIde/GUI 验收未跑（弹窗贴入识别的真机观感归用户验收，判据＝贴入大片段无可感停顿）；k2j 端口分支同步未做（该分支按发行 tag 冻结节奏另批同步）。
+
