@@ -822,8 +822,12 @@ class SqlLogPanel(
         isVisible = false
     }
 
-    // ---------- T-Nplus1Aggregate D235：N+1 聚合过滤态摘要行（复用聚焦页签栏行，不过滤态隐藏） ----------
+    // ---------- T-Nplus1Aggregate D235：N+1 聚合过滤态摘要行（独立一行，不进页签栏） ----------
     // 字段声明在 init 块之前（文本序初始化纪律，rebuildFocusTabBar 会读）
+    //
+    // **为什么独立一行**：既有守卫（SqlLogPanelFocusTabTest/RequestFocusTest）按页签栏组件数断言
+    // 「前缀标签 + N chips + 计数标签」——把摘要塞进 focusTabBar 会让计数恒 +2，CI 分片 1/2 两红
+    // （2026-11-19 run 44447731812 实测）。摘要本就不是页签 chip，语义上也该另起一行。
 
     /**
      * D235：N+1 聚合摘要行（单行 `｜` 分段——条数/首末时间/线程名单，跨线程如实标注）。
@@ -838,8 +842,17 @@ class SqlLogPanel(
     private val nplusOneBackButton = JButton().apply {
         isFocusable = false
         isVisible = false
+        text = MpSqlVisualizerBundle.message("log.nplusOneAggregate.back")
         toolTipText = MpSqlVisualizerBundle.message("log.nplusOneAggregate.back.tip")
         addActionListener { exitNplusOneAggregate() }
+    }
+
+    /** D235：摘要行宿主（独立一行，挂 [focusArea] 页签栏之下；无过滤态整行不占高度）。 */
+    private val nplusOneSummaryBar = JPanel(WrapLayout()).apply {
+        isOpaque = false
+        isVisible = false
+        add(nplusOneSummaryLabel)
+        add(nplusOneBackButton)
     }
 
     // ---------- T-UiCoord F2：工具栏单行宿主字段（同样须在 init 之前——init 里 buildToolbar 会赋值；
@@ -1031,11 +1044,6 @@ class SqlLogPanel(
         focusTabBar.removeAll()
         focusTabBar.add(JLabel(MpSqlVisualizerBundle.message("log.focus.label")))
         focusTabs.forEach { focusTabBar.add(buildFocusChip(it)) }
-        // T-Nplus1Aggregate D235：聚合摘要行 + 返回全部（组件常驻挂载，显隐由每拍
-        // updateNplusOneAggregateSummary 控制——过滤态进出只在页签增删时发生，随本重建 revalidate）
-        nplusOneBackButton.text = MpSqlVisualizerBundle.message("log.nplusOneAggregate.back")
-        focusTabBar.add(nplusOneSummaryLabel)
-        focusTabBar.add(nplusOneBackButton)
         focusTabBar.add(focusHiddenLabel)
         focusTabBar.isVisible = focusTabs.isNotEmpty()
         focusTabBar.parent?.revalidate()
@@ -1062,11 +1070,19 @@ class SqlLogPanel(
 
     // ---------- 顶部区域（工具栏行 + 聚焦页签栏 + 搜索条） ----------
 
-    /** 顶部竖向容器：工具栏行（NORTH）+ 聚焦页签栏（CENTER，无页签隐藏不占高度）+ 搜索条（SOUTH）。 */
+    /** 顶部竖向容器：工具栏行（NORTH）+ 聚焦页签栏与聚合摘要行（CENTER）+ 搜索条（SOUTH）。 */
     private fun buildTopPanel(): JPanel {
         val top = JPanel(BorderLayout())
         top.add(buildToolbar(), BorderLayout.NORTH)
-        top.add(focusTabBar, BorderLayout.CENTER)
+        // D235：页签栏与摘要行各占一层——摘要不进 focusTabBar（组件数守卫按 chips 断言，见字段注释）
+        top.add(
+            JPanel(BorderLayout()).apply {
+                isOpaque = false
+                add(focusTabBar, BorderLayout.NORTH)
+                add(nplusOneSummaryBar, BorderLayout.CENTER)
+            },
+            BorderLayout.CENTER,
+        )
         // T-HistorySearchToggles：挂搜索条宿主（搜索框 + MatchCase 开关），显隐契约不变
         top.add(searchBar, BorderLayout.SOUTH)
         return top
@@ -2038,12 +2054,13 @@ class SqlLogPanel(
         }
         val summary = tab?.let { buildNplusOneAggregateSummary(snapshot, it.structureKey) }
         val shouldShow = summary != null
-        val visibilityChanged = nplusOneSummaryLabel.isVisible != shouldShow
+        val visibilityChanged = nplusOneSummaryBar.isVisible != shouldShow
         nplusOneSummaryLabel.text = summary?.let { formatNplusOneAggregateSummary(it) } ?: ""
         nplusOneSummaryLabel.isVisible = shouldShow
         nplusOneBackButton.isVisible = shouldShow
+        nplusOneSummaryBar.isVisible = shouldShow
         // 显隐翻转才 revalidate（每拍重排会放大流式灌入期的布局成本；文本更新不需要重排）
-        if (visibilityChanged) focusTabBar.parent?.revalidate()
+        if (visibilityChanged) nplusOneSummaryBar.parent?.revalidate()
     }
 
     /**
