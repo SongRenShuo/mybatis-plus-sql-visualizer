@@ -87,6 +87,6 @@
   - **A4（正常弹窗不进待命）**：定向测试收口（DialogPasteReparseTest.test正常开窗不进入待命，12/12 绿）+ 静态面（autoParseOnPaste 只有独立空/原文态开窗一路传 true），GUI 面不重复占镜头。
   - **A5（券03）**：测试收口（ExecFileWriteCountTest 7/0 + 守卫钉实参）。
   - 场景脚本 `record/probe_perf33_dialog{,2,3}.py`（一次性探针，按惯例留 record/ 不入库）；证据帧 `build/MPSV-PerfSweep33-UI-shots/`（build 生命周期）。
-- **CI 门禁第一轮（run 44592868282 attempt 1）**：test(4) 分片 1 红＝`SqlStandalonePreviewPanelDialogTest` 未识别文本用例（:116 currentWarning 时序），与本分支改动面（弹窗贴入链/嫌疑戳帽/EXPLAIN 前热）**无机制交集**（该链同步构造弹窗、warning 在 init 落定，diff 未触碰）；同类同分片在 beta.2 发行轮即有「弹窗抖动」瞬态红先例（LESSONS L90）。已按 L90 口径 rerun-failed（attempt 2）做同 SHA 对照，结论见下轮回填。
+- **CI 门禁第一轮（run 44592868282 attempt 1）**：test(4) 分片 1 红＝`SqlStandalonePreviewPanelDialogTest` 未识别文本用例（:116 currentWarning 时序），与本分支改动面（弹窗贴入链/嫌疑戳帽/EXPLAIN 前热）**无机制交集**（该链同步构造弹窗、warning 在 init 落定，diff 未触碰）；同类同分片在 beta.2 发行轮即有「弹窗抖动」瞬态红先例（LESSONS L90）。已按 L90 口径 rerun-failed（attempt 2）做同 SHA 对照——**attempt 2 全绿（test(4) success、gate success，零代码变更）**，L90 瞬态红定性坐实：非本分支回归。门禁终态＝run 44592868282 attempt 2 success（build + test 1~5/fast + verifyplugin + verify×3 + marketplace×3 全绿）。
 - **not run 声明**：全量门禁未跑（交 CI 收口）；k2j 端口分支同步未做（该分支按发行 tag 冻结节奏另批同步）。
 
