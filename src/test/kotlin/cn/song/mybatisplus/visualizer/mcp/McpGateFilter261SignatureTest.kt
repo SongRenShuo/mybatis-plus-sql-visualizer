@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.mcp
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Assume.assumeTrue
@@ -8,6 +9,7 @@ import org.junit.Test
 import java.io.File
 import java.net.URL
 import java.net.URLClassLoader
+import java.util.zip.ZipFile
 
 /**
  * 跨版本契约探测回归：**用真实平台 jar 验 `detectFilterForm` 的判据**，而不是只信本地假接口。
@@ -105,6 +107,133 @@ class McpGateFilter261SignatureTest {
         } catch (_: ClassNotFoundException) {
             // 期望路径：注册器 Class.forName 返回 null 即 return
         }
+    }
+
+    // ---- T-McpGlobalBreakHardening 券05：262/263 走字节级解析（class major 69 载不进 JBR 21） ----
+
+    @Test
+    fun `解析器自证_桩类读成A形态且非suspend`() {
+        val bytes = javaClass.classLoader
+            .getResourceAsStream("com/intellij/mcpserver/McpToolFilterProvider.class")
+            ?.use { it.readBytes() }
+        assumeTrue("测试 classpath 无 mcpStub 桩类，跳过", bytes != null)
+        val methods = classFileMethods(bytes!!)
+        val apply = methods.filter { it.first == "applyFilters" }
+        assertTrue("桩类必须有 applyFilters", apply.isNotEmpty())
+        assertTrue(
+            "applyFilters 必须返回 void（262 字节码实证）",
+            apply.any { it.second.endsWith(")V") },
+        )
+        assertFalse(
+            "applyFilters 不得是 suspend（否则代理返回 null 会被当成永不恢复的挂起）",
+            apply.any { it.second.contains("Continuation") },
+        )
+        assertFalse("262 没有 getFilters", methods.any { it.first == "getFilters" })
+    }
+
+    @Test
+    fun `真实262字节码为A形态且非suspend`() {
+        val bytes = jarClassBytes("262.10968.63")
+        assumeTrue("262 取证产物缺失，跳过", bytes != null)
+        val methods = classFileMethods(bytes!!)
+        val apply = methods.filter { it.first == "applyFilters" }
+        assertTrue("262 必须有 applyFilters", apply.isNotEmpty())
+        assertTrue("262 的 applyFilters 必须返回 void", apply.any { it.second.endsWith(")V") })
+        assertFalse("262 的 applyFilters 不得是 suspend", apply.any { it.second.contains("Continuation") })
+        assertTrue(
+            "262 的 getUpdates 必须返回 Flow",
+            methods.filter { it.first == "getUpdates" }.any { it.second.endsWith(")Lkotlinx/coroutines/flow/Flow;") },
+        )
+    }
+
+    @Test
+    fun `真实263字节码为A形态且非suspend`() {
+        val bytes = jarClassBytes("263.7307.50")
+        assumeTrue("263 取证产物缺失，跳过", bytes != null)
+        val methods = classFileMethods(bytes!!)
+        val apply = methods.filter { it.first == "applyFilters" }
+        assertTrue("263 必须有 applyFilters", apply.isNotEmpty())
+        assertTrue("263 的 applyFilters 必须返回 void", apply.any { it.second.endsWith(")V") })
+        assertFalse("263 的 applyFilters 不得是 suspend", apply.any { it.second.contains("Continuation") })
+    }
+
+    /** 在取证目录里找 `mcpserver.jar` 并取出接口 class 的字节。 */
+    private fun jarClassBytes(versionDir: String): ByteArray? {
+        val root = probeRoot?.resolve(versionDir) ?: return null
+        if (!root.isDirectory) return null
+        val jar = root.walkTopDown().maxDepth(4)
+            .firstOrNull { it.isFile && it.name == "mcpserver.jar" } ?: return null
+        return ZipFile(jar).use { zip ->
+            val entry = zip.getEntry("com/intellij/mcpserver/McpToolFilterProvider.class") ?: return null
+            zip.getInputStream(entry).use { it.readBytes() }
+        }
+    }
+
+    /**
+     * 极简 class 文件解析：只取 method_info 的 name/descriptor。
+     *
+     * 用它而不是 `Class.forName`，是因为 262/263 的 mcpserver jar 是 class file major 69
+     * （Java 25），测试 JVM（JBR 21）载不进去——这曾是旧计划「262/263 未纳入」的原因。
+     */
+    private fun classFileMethods(bytes: ByteArray): List<Pair<String, String>> {
+        var i = 8 // magic(4) + minor(2) + major(2)
+        fun u1(): Int = bytes[i++].toInt() and 0xFF
+        fun u2(): Int {
+            val v = ((bytes[i].toInt() and 0xFF) shl 8) or (bytes[i + 1].toInt() and 0xFF)
+            i += 2
+            return v
+        }
+        fun u4(): Int = (u2() shl 16) or u2()
+        fun skipAttributes() {
+            val count = u2()
+            repeat(count) {
+                i += 2
+                val len = u4()
+                i += len
+            }
+        }
+        fun skipMember() {
+            i += 2
+            u2()
+            u2()
+            skipAttributes()
+        }
+
+        val cpCount = u2()
+        val utf8 = HashMap<Int, String>()
+        var idx = 1
+        while (idx < cpCount) {
+            when (val tag = u1()) {
+                1 -> {
+                    val len = u2()
+                    utf8[idx] = String(bytes, i, len, Charsets.UTF_8)
+                    i += len
+                }
+                7, 8, 16, 19, 20 -> i += 2
+                15 -> i += 3
+                3, 4, 9, 10, 11, 12, 17, 18 -> i += 4
+                5, 6 -> {
+                    i += 8
+                    idx++
+                }
+                else -> error("unsupported constant pool tag $tag")
+            }
+            idx++
+        }
+        i += 6 // access_flags / this_class / super_class
+        val ifaceCount = u2()
+        i += 2 * ifaceCount // interfaces
+        repeat(u2()) { skipMember() } // fields
+        val methodCount = u2()
+        val out = ArrayList<Pair<String, String>>(methodCount)
+        repeat(methodCount) {
+            i += 2 // access_flags
+            val name = utf8[u2()] ?: "?"
+            val desc = utf8[u2()] ?: "?"
+            skipAttributes()
+            out += name to desc
+        }
+        return out
     }
 
     /** 平台包 child-first 且**严格**：目标 jar 没有该包就抛 ClassNotFoundException，绝不落回
