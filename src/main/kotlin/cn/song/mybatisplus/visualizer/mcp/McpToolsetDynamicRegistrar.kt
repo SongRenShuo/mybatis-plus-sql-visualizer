@@ -51,6 +51,9 @@ object McpToolsetDynamicRegistrar {
 
     private const val TOOLSET_EP_NAME = "com.intellij.mcpServer.mcpToolset"
 
+    /** 壳类包前缀（T-McpToolNaming：simpleName 与业务类一致、落 gen 子包避免 classloader 歧义）。 */
+    private const val SHELL_PACKAGE_PREFIX = "cn.song.mybatisplus.visualizer.mcp.gen."
+
     private val registered = AtomicBoolean(false)
 
     /** F29（D1=A）：已成功 define 的壳类缓存（FQN→Class）——define 不可撤销，重试复用免撞同 FQN LinkageError。 */
@@ -89,11 +92,57 @@ object McpToolsetDynamicRegistrar {
             TOOL_CLASSES.forEach { registerToolset(it, toolsetIface) }
             registered.set(true)
             LOG.info("T-McpDynamicToolset: ${TOOL_CLASSES.size} toolsets registered onto mcpToolset EP (dynamic shell form)")
+            // 注册后自检（2026-11-19 真机排障新增）：曾出现「本日志说 11 个、平台「公开的工具」页
+            // 只有 1 个分组、tools/list 只出 1 个」的形态。注释只打本插件视角，无法区分
+            // 「EP 里只有 1 个」与「EP 有 11 个但平台过滤掉 10 个」——这里直接回读 EP
+            // 实例列表，一次读数即定性（每 JVM 一次，成本可忽略）。
+            runCatching {
+                val ext = ExtensionPointName.create<Any>(TOOLSET_EP_NAME).getPoint(null).extensionList
+                val shellHits = ext.count { it.javaClass.name.startsWith(SHELL_PACKAGE_PREFIX) }
+                LOG.info(
+                    "T-McpDynamicToolset: EP self-check total=${ext.size} shells=$shellHits " +
+                        "names=${ext.map { it.javaClass.simpleName }}",
+                )
+            }.onFailure { LOG.warn("T-McpDynamicToolset: EP self-check failed (diagnostic only)", it) }
+            // D238：注册完成后再触发一拍 EP 变更，逼平台在**完整态**重算工具列表。
+            // 真机 2026-11-19 实证：关一次总开关再开，EP 里 11 个（自检 total=48 shells=11），
+            // 平台 tools/list 却只出前 3 个（上一次更极端只出 1 个）。平台 McpToolsListProvider
+            // 每次 EP 变更 launch 一个重算协程、结果 `putAll` 进 toolsByProvider 缓存；11 次注册
+            // 连续触发时靠前的重算会快照到「只注册了前几个」的 EP，后续重算未必覆盖回来。
+            // 重放在全部实例就位后产生两次新变更通知，让最后一次重算读到 11 个。
+            scheduleReplayToForcePlatformRecompute()
         }.onFailure {
             // registered 不置位：下个项目启动重试（动态 EP 未就绪等瞬态失败可自愈）——
             // 已 define/已注册的 FQN 由两本台账跳过，重试只补未完成项
             LOG.warn("T-McpDynamicToolset: mcpToolset EP 注册失败（MCP 工具不可用，其余功能不受影响）", it)
         }
+    }
+
+    /**
+     * D238：注册完成后延迟一拍做一次「全摘除 + 全重注册」重放，逼平台重算工具列表。
+     *
+     * 为什么需要：平台的 `McpToolsListProvider` 对每次 EP 变更 `launch` 一个重算协程（Mutex 串行），
+     * 结果 `putAll` 进 provider→tools 缓存。我们连续注册 11 个时，靠前的重算会读到「只注册了几个」
+     * 的 EP 快照并写缓存，后续重算在某些时序下没能把完整集合覆盖回来——真机表现为「EP 自检 11 个、
+     * 平台只列前 1~3 个」，且关一次总开关就触发（首次冷启动恰好时序正确，所以之前没暴露）。
+     *
+     * 重放发生在 EDT 空闲一拍之后（注册全部就位），产生 12 次新变更通知，最后一次重算读到的必然是
+     * 完整 EP。重放幂等：实例同一批对象，摘除后立刻重注册，门控与过滤链不受影响。
+     */
+    private fun scheduleReplayToForcePlatformRecompute() {
+        com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater({
+            if (!registered.get()) return@invokeLater
+            val snapshot = registeredInstances.values.toList()
+            if (snapshot.isEmpty()) return@invokeLater
+            runCatching {
+                val ep = ExtensionPointName.create<Any>(TOOLSET_EP_NAME).getPoint(null)
+                snapshot.forEach { runCatching { ep.unregisterExtension(it) } }
+                snapshot.forEach { runCatching { ep.registerExtension(it) } }
+                LOG.info("T-McpDynamicToolset: replayed ${snapshot.size} toolset registrations to force platform recompute")
+            }.onFailure {
+                LOG.warn("T-McpDynamicToolset: replay failed（工具清单可能只列出部分，MCP 服务不受影响）", it)
+            }
+        }, com.intellij.openapi.application.ModalityState.nonModal())
     }
 
     /**
@@ -120,7 +169,7 @@ object McpToolsetDynamicRegistrar {
 
     private fun registerToolset(toolClass: Class<*>, toolsetIface: Class<*>) {
         // simpleName 与业务类一致（T-McpToolNaming 分组名=simpleName），gen 子包隔离 FQN
-        registerToolset(toolClass, toolsetIface, "cn.song.mybatisplus.visualizer.mcp.gen." + toolClass.simpleName)
+        registerToolset(toolClass, toolsetIface, SHELL_PACKAGE_PREFIX + toolClass.simpleName)
     }
 
     /** F29 测试触点：显式 shellName 驱动 define/台账路径（EP 注册在平台无 EP 的测试环境会失败，由调用方 runCatching）。 */
