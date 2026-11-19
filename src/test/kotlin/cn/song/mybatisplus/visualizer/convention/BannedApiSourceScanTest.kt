@@ -151,6 +151,9 @@ class BannedApiSourceScanTest {
         val bad = srcTestKotlinTree
             .filter { (f, _) -> f.extension == "kt" || f.extension == "java" }
             .filter { (f, _) -> f.name != "BannedApiSourceScanTest.kt" } // 本守卫自身的报错文案含该片段，须自豁免
+            // T-TestGapSpeed T2（2026-11-04）：BrowserUtil 收敛守卫本体——扫描模式与自证语料含该片段
+            //（T-SyncK2JMaster180：k2j 本轮补建该守卫，豁免行随 master 同步归位）
+            .filter { (f, _) -> f.name != "BrowserUtilConvergenceGuardTest.kt" }
             .filter { (_, text) -> stripComments(text).contains("BrowserUtil.browse(") }
             .map { (f, _) -> f.relativeTo(repoRoot()).path.replace('\\', '/') }
             .toList()
@@ -1336,7 +1339,7 @@ class BannedApiSourceScanTest {
         // 1 处：MCP 执行器（解包后的 cause 判定）。
         "src/main/java/cn/song/mybatisplus/visualizer/mcp/McpDbExecutor.java" to 1,
         // 2 处：预览服务（T-FP-02b 收口：预览主链降级不算「可选能力探测」，见 master 同族注）。
-        "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.java" to 2,
+        "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.java" to 3, // T-SyncK2JMaster180 重登 2→3（dispatchPrewarm 新增 fatal 判定点，实测读数）
     )
 
     /**
@@ -1441,7 +1444,10 @@ class BannedApiSourceScanTest {
     // 生产件（highlight/index/gutter、F9 showTempFileError、revalidateOnEdt 等）把 master 的
     // runCatching 继续落成 try/catch(Throwable)（915+ 个 .java 文件 1168 站点，与
     // BannedApiScanRuleTest.allSites 同口径）。守卫原读数 expected:<998> but was:<1168>。
-    private val fatalCatchSiteTotalBaseline = 1168
+    // T-SyncK2JMaster180 修红（守卫实测重登）：1168 → 1224。本轮 131 提交增量（standalone/
+    // N+1/MCP D238·D239/PerfSweep30~32）把 master 的 runCatching 落成 try/catch(Throwable)
+    // （937 个 .java 文件 1224 站点）。守卫原读数 expected:<1168> but was:<1224>。
+    private val fatalCatchSiteTotalBaseline = 1224
 
     /**
      * 原生执行链里「解包了 `InvocationTargetException` 但未对解包结果判 fatal」的站点数基线

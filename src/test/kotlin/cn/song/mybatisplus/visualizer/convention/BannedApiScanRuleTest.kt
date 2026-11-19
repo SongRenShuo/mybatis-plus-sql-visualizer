@@ -622,7 +622,10 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java" to 17,
         "src/main/java/cn/song/mybatisplus/visualizer/log/agent/AgentManager.java" to 10,
         "src/main/java/cn/song/mybatisplus/visualizer/log/RunConfigurationProcessListener.java" to 8,
-        "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.java" to 2,
+        // T-SyncK2JMaster180 重登 2→3：previewAsync 主链重构（IndexNotReady 分流 runWhenSmart 重试 +
+        // dispatchPrewarm 提取），previewAsync 原 fatal 判定点保留、dispatchPrewarm 落地集新增一处
+        // FatalErrors.isFatal(t) 透传（守卫实测 3，CI run 44638528757 fast(2) 失败信息读数）。
+        "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.java" to 3,
         "src/main/java/cn/song/mybatisplus/visualizer/log/SqlToJavaPanel.java" to 2,
     )
 
@@ -857,12 +860,15 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
             // fatal 判定入落地集/豁免表，其余 30 处为未判定降级站点）。
             // T-SyncK2JMaster179 修红 D：179 轮各路增量（含 highlight/index/gutter 族与 F9/F4 回填）
             // 继续把 master 的 runCatching 落成 try/catch(Throwable)，未判定降级站点 559→659。
-            659,
+            // T-SyncK2JMaster180 修红（守卫实测 659→692）：本轮 131 提交增量（standalone/N+1/MCP D238·D239/
+            // PerfSweep30~32）继续把 master 的 runCatching 落成 try/catch(Throwable)，未判定降级站点 +33。
+            692,
             unjudgedOutside,
         )
         assertEquals(
             "k2j 全量 catch (Throwable …) 站点基线漂移（须与 BannedApiSourceScanTest.fatalCatchSiteTotalBaseline 同步重登）",
-            1168,
+            // T-SyncK2JMaster180 修红（守卫实测 1168→1224）：本轮增量全量站点 +56。
+            1224,
             allSites,
         )
         // 全量对账恒等式（口径说明）：全量 = 豁免登记 + 其余未判定 + 落地判定（regex 口径，含
