@@ -654,6 +654,15 @@ class GuardSelfTestCoverageMetaGuardTest {
          */
         val GUARD_CLASSES = listOf(
             GuardEntry(
+                "convention/EdtBoundedWaitGuardTest.kt",
+                listOf(DecisionFn("unboundedWaitOffenders", FnKind.VIOLATIONS)),
+                "T-UserFreezeTriage 守卫（2026-11-19 用户线程转储）：后台线程等 EDT 一律有界——src/main 除 " +
+                    "util/EdtDispatch.kt（派发器本体）与 update/DynamicInstallSupport.kt（一次性安装的同步卸载）" +
+                    "外不得出现 invokeAndWait。判定内核 unboundedWaitOffenders 返回命中文件清单；" +
+                    "自证语料=自证_裸invokeAndWait必被点名（裸调必报 / 白名单放行 / 空树不报三态），" +
+                    "另有「有界派发器必须真被接线」一条防空绿（接线被撤时不得静默恒绿）。",
+            ),
+            GuardEntry(
                 "convention/ShareExportOffEdtGuardTest.kt",
                 listOf(DecisionFn("offendersOf", FnKind.VIOLATIONS)),
                 "T-PerfSweep30 04a 守卫（T-PerfSweep31 券03 自 dev 移植）：ShareDialog 的 HTML 落盘必须在 " +

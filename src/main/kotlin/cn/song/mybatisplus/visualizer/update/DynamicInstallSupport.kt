@@ -335,11 +335,11 @@ object DynamicInstallSupport {
     internal fun dispatchModalityForUnload(): ModalityState {
         ApplicationManager.getApplication() ?: return ModalityState.nonModal()
         val captured = AtomicReference<ModalityState?>()
-        // write-safe: UI-only（只读当前模态，无文档/模型写；any() 保证模态弹窗存续期跳板照常执行）
         // T-UserFreezeTriage：跳板有界——EDT 被第三方长读锁占住时，无超时的 invokeAndWait 会把
         // 安装线程一起挂死；超时 captured 为 null，[chooseDispatchModality] 既有分支退 nonModal。
         cn.song.mybatisplus.visualizer.util.EdtDispatch.invokeLaterAndWaitBounded(
             reason = "dynamic unload modality probe",
+            // write-safe: UI-only（只读当前模态，无文档/模型写；any() 保证模态弹窗存续期跳板照常执行）
             modality = ModalityState.any(),
             block = { captured.set(ModalityState.current()) },
         )

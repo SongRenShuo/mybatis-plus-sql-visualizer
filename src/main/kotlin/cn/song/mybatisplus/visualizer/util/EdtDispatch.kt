@@ -63,6 +63,8 @@ object EdtDispatch {
             try {
                 if (expireWith == null || !Disposer.isDisposed(expireWith)) block()
             } catch (t: Throwable) {
+                // JVM 级致命错误原样上抛（FatalErrors 口径：崩溃现场不能被吞成一条 WARN）
+                if (FatalErrors.isFatal(t)) throw t
                 LOG.warn("[EdtDispatch] EDT body failed: $reason", t)
             } finally {
                 done.countDown()
