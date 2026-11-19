@@ -167,7 +167,7 @@ class IbatisParamClassQuoteHeavyTest : HeavyPlatformTestCase() {
      * 而 sqlMapConfig 的别名直接给出 FQN。
      */
     fun testTypeAliasResolvesAmbiguousShortName() {
-        IbatisTypeAliasResolver.clearCache()
+        // T-PerfSweep31 券01：v2 无会话级缓存（索引失效交平台），旧 clearCache() 测试隔离随之退役
         addClassFile("UserInP.java", "package p; public class User { private String username; }")
         addClassFile("UserInQ.java", "package q; public class User { private String username; }")
         addXmlFile(

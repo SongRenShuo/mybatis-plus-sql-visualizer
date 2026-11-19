@@ -81,7 +81,7 @@ class XmlIncludeExpanderTest {
     }
 
     @Test
-    fun `跨命名空间refid_报错并移除`() {
+    fun `跨命名空间refid_报错并留占位`() {
         val parsed = XmlMapperParser().parse("""
             <mapper namespace="n">
               <select id="s1">SELECT * FROM t <include refid="other.SqlId"/></select>
@@ -89,7 +89,11 @@ class XmlIncludeExpanderTest {
         """.trimIndent())
         val m = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
         assertTrue(m.errors.any { it.contains("other.SqlId") })
-        assertEquals("SELECT * FROM t", compact(m.renderSql().sql))
+        // T-IncludePlaceholder：缺失片段留注释占位（旧契约是整段移除 → 残句）
+        assertTrue(
+            "缺失处应留 TODO 占位：${m.renderSql().sql}",
+            compact(m.renderSql().sql).contains("TODO: missing <sql id=\"other.SqlId\">"),
+        )
     }
 
     @Test
@@ -223,7 +227,7 @@ class XmlIncludeExpanderTest {
     }
 
     @Test
-    fun `跨命名空间片段_解析失败原因入警示并移除`() {
+    fun `跨命名空间片段_解析失败原因入警示并留占位`() {
         val parsed = XmlMapperParser().parse(
             """
             <mapper namespace="n">
@@ -234,7 +238,11 @@ class XmlIncludeExpanderTest {
         )
         val m = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
         assertTrue("警示应含具体原因：${m.errors}", m.errors.any { it.contains("未找到 namespace 为 other") })
-        assertEquals("SELECT * FROM t", compact(m.renderSql().sql))
+        // T-IncludePlaceholder：缺失片段留注释占位（旧契约是整段移除 → 残句）
+        assertTrue(
+            "缺失处应留 TODO 占位：${m.renderSql().sql}",
+            compact(m.renderSql().sql).contains("TODO: missing <sql id=\"other.SqlId\">"),
+        )
     }
 
     @Test
@@ -249,6 +257,10 @@ class XmlIncludeExpanderTest {
         )
         val m = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
         assertTrue("片段文本无法解析应报错：${m.errors}", m.errors.any { it.contains("无法解析为 XML") })
-        assertEquals("SELECT * FROM t", compact(m.renderSql().sql))
+        // T-IncludePlaceholder：跨命名空间片段取不到时同样留注释占位
+        assertTrue(
+            "缺失处应留 TODO 占位：${m.renderSql().sql}",
+            compact(m.renderSql().sql).contains("TODO: missing <sql id=\"base.Bad\">"),
+        )
     }
 }
