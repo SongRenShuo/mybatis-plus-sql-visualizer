@@ -1171,8 +1171,11 @@ public final class SqlPreviewPanelExecutionKt {
             final String sqlF = sql;
             final String targetNameF = target.getName();
             ApplicationManager.getApplication().executeOnPooledThread(() ->
+                    // T-PerfSweep30 01a：方言重渲染预热走 cache-only——exec 文件内容已由渲染回填写成
+                    // 渲染文本（lastRenderedSql），内容一致即零写盘（原形态会经 projectExecFile 的 document
+                    // 判等兜底，但缓存未命中时会先派一次 document 写再判等，属重复改写）。
                     cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prewarmExecTempFile(
-                            projF, sqlF, targetNameF));
+                            projF, sqlF, targetNameF, true));
         }
         return true;
     }
@@ -2549,13 +2552,19 @@ public final class SqlPreviewPanelExecutionKt {
         SqlExecutor.prepareConsole(
                 proj, sql,
                 consoleComponent -> {
+                    // T-PerfSweep30 01b：**嵌入前**捕获「本面板是否首次嵌入」——判据必须早于 embedConsole，
+                    // 后者内部就会把 lastConsoleEmbeddedId 赋成本次 id，事后判 `== null` 恒 false
+                    // 会让打点永不输出（接手复核实测）。
+                    Integer prevEmbeddedId = p.lastConsoleEmbeddedId;
                     // T-FirstExecResultInvisible F3：预览准备链显式 PREVIEW
                     embedConsole(p, consoleComponent, ConsoleEmbedMode.PREVIEW);
                     p.resultPanel.showEmpty();
                     // T-PreviewFast P7：请求→控制台可见（第三段锚点，用户感知的「预览快不快」）
+                    // T-PerfSweep30 01b：**只在首次嵌入打点**——embedConsole 同实例早退（同组件被平台摘走
+                    // 再挂回等）会重复触发本回调，旧形态每次回调都打，同一次预览打出多条读数。
                     try {
                         long req = SqlPreviewService.lastPreviewRequestMs;
-                        if (req > 0) {
+                        if (shouldLogConsoleVisible(prevEmbeddedId, req)) {
                             Logger.getInstance(SqlPreviewPanel.class)
                                     .info("[T-PreviewFast] request→console-visible: "
                                             + (System.currentTimeMillis() - req) + "ms");
@@ -3031,6 +3040,23 @@ public final class SqlPreviewPanelExecutionKt {
     public static String modeButtonText(@NotNull SqlPreviewPanel p) {
         return MpSqlVisualizerBundle.message(
                 p.compactMode ? "panel.mode.multiline" : "panel.mode.singleline");
+    }
+
+    /**
+     * T-PerfSweep30 01b 测试缝：{@code request→console-visible} 打点判据（纯函数）。
+     *
+     * <p>只在<b>首次嵌入</b>且请求起点有效时打点：
+     * <ul>
+     * <li>{@code prevEmbeddedId} 必须为 null——由调用方在 {@code embedConsole} <b>之前</b>捕获（{@code embedConsole} 内部
+     * 会立刻把 {@code lastConsoleEmbeddedId} 赋成本次 id，事后判 {@code == null} 恒 false，打点永不输出）；</li>
+     * <li>{@code requestMs} &gt; 0——失败请求已把起点清零（{@code previewAsync} 异常分支），不得复用旧读数打出
+     * 跨请求失真值（真机曾出现 10151ms）。</li>
+     * </ul>
+     *
+     * <p>反向验证：把判据改回「事后比较 lastConsoleEmbeddedId」或去掉 requestMs 闸 → 对应用例红。</p>
+     */
+    public static boolean shouldLogConsoleVisible(@Nullable Integer prevEmbeddedId, long requestMs) {
+        return requestMs > 0L && prevEmbeddedId == null;
     }
 
     // R42：影响面预演的内联结果（不触碰编辑器/控制台）——正式承载已迁
