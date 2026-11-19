@@ -17,7 +17,7 @@ import java.io.File
  *     漂移且无处可见；
  *  3. bundle 双语键位 parity（`standalone.*` 与 `log.tab.standalone` 两份 properties 键集一致）。
  *
- * k2j 移植注：守卫读的是 k2j 的 Java 生产源（src/main/java/**.java，master 读 Kotlin）；
+ * k2j 移植注：守卫读的是 k2j 的 Java 生产源（src/main/java 树下所有 .java，master 读 Kotlin）；
  * `STANDALONE_TAB_REGISTRY_KEY` 常量落 `SqlLogPanel`；`Registry.is` 在 Java 源里无反引号；
  * 通道消费点 `manager.onOpenStandalonePreview =` 在 Java 源里是同形字段赋值。
  */

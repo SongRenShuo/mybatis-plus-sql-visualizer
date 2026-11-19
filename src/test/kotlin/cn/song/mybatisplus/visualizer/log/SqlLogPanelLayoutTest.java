@@ -436,8 +436,7 @@ public class SqlLogPanelLayoutTest extends BasePlatformTestCase {
             assertTrue(
                 "registry 默认开启 → 「SQL 预览」工作台 tab 应挂载",
                 panel.tabsForTest().getTabs().stream()
-                    .anyMatch(it -> it.getText().equals(MpSqlVisualizerBundle.message("log.tab.standalone"))),
-            );
+                    .anyMatch(it -> it.getText().equals(MpSqlVisualizerBundle.message("log.tab.standalone"))));
             assertNotNull("面板 init 应注册面板外通道", manager.onOpenStandalonePreview);
             // tab 在场 → select + 聚焦，不得抛异常（构造 SqlInputEditor 的能力由本类既有用例证明）
             panel.openStandalonePreview(null);
@@ -450,7 +449,7 @@ public class SqlLogPanelLayoutTest extends BasePlatformTestCase {
     /** T-SqlPreviewStandalone A-6 反向验证：registry 关闭时工作台 tab 不挂载。 */
     @Test
     public void test独立预览工作台tab_registry关闭时不挂载() throws Exception {
-        com.intellij.openapi.util.registry.Registry registry =
+        com.intellij.openapi.util.registry.RegistryValue registry =
                 com.intellij.openapi.util.registry.Registry.get(SqlLogPanel.STANDALONE_TAB_REGISTRY_KEY);
         boolean old = registry.asBoolean();
         registry.setValue(false);
@@ -460,8 +459,7 @@ public class SqlLogPanelLayoutTest extends BasePlatformTestCase {
                 assertFalse(
                     "registry 关闭 → 工作台 tab 不得挂载",
                     panel.tabsForTest().getTabs().stream()
-                        .anyMatch(it -> it.getText().equals(MpSqlVisualizerBundle.message("log.tab.standalone"))),
-                );
+                        .anyMatch(it -> it.getText().equals(MpSqlVisualizerBundle.message("log.tab.standalone"))));
             } finally {
                 panel.dispose();
             }

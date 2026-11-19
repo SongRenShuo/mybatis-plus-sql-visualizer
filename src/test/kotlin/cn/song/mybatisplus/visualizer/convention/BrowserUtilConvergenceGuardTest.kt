@@ -41,7 +41,7 @@ import org.junit.Test
  */
 class BrowserUtilConvergenceGuardTest : BannedApiScanSupport() {
 
-    companion object {
+    // 内核为实例层：maskNonCode/lineOf/matchingDelimiter 是 BannedApiScanSupport 的实例成员，companion 无实例接收者
         // ------------------------------------------------------------------
         // 判定内核（可注入合成源码：主用例与自证语料共用同一实现）
         // ------------------------------------------------------------------
@@ -75,7 +75,7 @@ class BrowserUtilConvergenceGuardTest : BannedApiScanSupport() {
         )
 
         /** 期望计数：与 src/main 生产调用点同步（当前 4 = SqlLogPanel 1 + SafeBrowser 1 + PluginSettingsPanel 1 + ShareDialog 1——T-PerfSweep30 04a（T-PerfSweep31 券03 移植）把两处导出回调收敛进共享 onSuccess 后 2→1）。 */
-        private const val EXPECTED_TOTAL_CALL_SITES = 4
+        private val EXPECTED_TOTAL_CALL_SITES = 4
 
         /** 一个调用站点：文件相对路径、1-based 行号、命中的 API 形态、最小围合函数体（无方法围合为空串）。 */
         internal data class BrowserUtilCallSite(
@@ -179,7 +179,6 @@ class BrowserUtilConvergenceGuardTest : BannedApiScanSupport() {
             }
             return -1
         }
-    }
 
     // ------------------------------------------------------------------
     // 主用例

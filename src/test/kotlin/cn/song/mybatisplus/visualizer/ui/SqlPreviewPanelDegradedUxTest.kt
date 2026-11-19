@@ -105,17 +105,18 @@ class SqlPreviewPanelDegradedUxTest : BasePlatformTestCase() {
                         ConditionToggle("c1", "false", false, "station_id = 2"),
                     ),
                 ),
-                listOf(),
-                null,
-                listOf(),
-                null,
-                null,
-                null,
-                null,
-                listOf(),
-                null,
-                null,
-                listOf(),
+                listOf(),      // groupBy
+                null,          // having
+                listOf(),      // orderBy
+                null,          // limit
+                null,          // rawFirst
+                null,          // rawAround
+                listOf(),      // rawFirstParams
+                listOf(),      // rawAroundParams
+                null,          // comment
+                listOf(),      // unions
+                null,          // fromSubQuery
+                listOf(),      // fillClauses
             ),
             MySqlDialect.INSTANCE,
             true,
@@ -124,10 +125,15 @@ class SqlPreviewPanelDegradedUxTest : BasePlatformTestCase() {
                 ConditionView("c1", "station_id = 2", "false", false),
             ),
         ),
-        null,
-        listOf(),
-        null,
-        listOf(),
+        null,           // paramHints
+        listOf(),       // candidateTables
+        null,           // batchModel
+        null,           // xmlModel
+        mapOf(),        // initialParamValues
+        listOf(),       // perfWarnings
+        listOf(),       // fillClauses
+        null,           // previousSql
+        listOf(),       // pagesColumns
     )
 
     private fun awaitPrewarmProduct(panel: SqlPreviewPanel, allowRearm: Boolean = true): Pair<VirtualFile, PsiFile>? {
@@ -192,7 +198,7 @@ class SqlPreviewPanelDegradedUxTest : BasePlatformTestCase() {
             assertTrue("超时型横幅仍应给出重试动作", banner.retryVisibleForTest())
             assertFalse("到点后定时器应已停止", panel.degradedGracePendingForTest())
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 
@@ -214,7 +220,7 @@ class SqlPreviewPanelDegradedUxTest : BasePlatformTestCase() {
             )
             assertTrue("失败型横幅应给出重试动作", banner.retryVisibleForTest())
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 
@@ -225,10 +231,10 @@ class SqlPreviewPanelDegradedUxTest : BasePlatformTestCase() {
             panel.showDegradedBannerForTest(PreviewDegradationReason.TIMEOUT)
             assertTrue(panel.degradedGracePendingForTest())
 
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
             assertFalse("clear() 后宽限定时器必须停止（防迟到弹横幅）", panel.degradedGracePendingForTest())
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 
@@ -248,7 +254,7 @@ class SqlPreviewPanelDegradedUxTest : BasePlatformTestCase() {
             val text = panel.editorForTest()?.document?.text ?: ""
             assertTrue("降级态改参数后 SQL 应随之重渲染（UI-022），实际: $text", text.contains("bob"))
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 
@@ -268,7 +274,7 @@ class SqlPreviewPanelDegradedUxTest : BasePlatformTestCase() {
             val text = panel.editorForTest()?.document?.text ?: ""
             assertTrue("降级态勾选条件后 SQL 应追加条件（UI-022），实际: $text", text.contains("station_id = 2"))
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 }

@@ -71,7 +71,7 @@ class TinyClassFileWriterD239Test {
             delegates,
             classAnnotations,
         )
-        return McpToolsetDynamicRegistrar.ShellClassLoader.define(shellFqn, bytes)
+        return McpToolsetDynamicRegistrar.ShellClassLoader.INSTANCE.define(shellFqn, bytes)
     }
 
     /** 1：委托方法出现在 declaredMethods（D239 的核心诉求——declared 必须非 0）。 */
@@ -155,7 +155,7 @@ class TinyClassFileWriterD239Test {
             delegates,
             emptyList(),
         )
-        val shell = McpToolsetDynamicRegistrar.ShellClassLoader.define(fqn, bytes)
+        val shell = McpToolsetDynamicRegistrar.ShellClassLoader.INSTANCE.define(fqn, bytes)
         val m = shell.declaredMethods.first { it.name == "sqlv_check_sql" }
         assertEquals(
             "probe description",
@@ -178,7 +178,7 @@ class TinyClassFileWriterD239Test {
             SqlVisualizerCheckSqlTool::class.java.name,
             D239FakeToolset::class.java.name,
         )
-        val shell = McpToolsetDynamicRegistrar.ShellClassLoader.define(legacyFqn, bytes)
+        val shell = McpToolsetDynamicRegistrar.ShellClassLoader.INSTANCE.define(legacyFqn, bytes)
         assertEquals(SqlVisualizerCheckSqlTool::class.java, shell.superclass)
         assertEquals(0, shell.declaredMethods.size)
     }
