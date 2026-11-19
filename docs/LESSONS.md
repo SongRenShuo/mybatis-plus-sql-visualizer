@@ -882,6 +882,73 @@ unit-test 模式）会让延迟体跑在**已持读动作的测试线程**里，
 
 **Seen 1× (2026-11-17)**
 
+### L81 `Registry.is` 的 `is` 是 Kotlin 关键字——读 Registry 必须反引号
+
+**规则**：Kotlin 里调平台 `Registry.is(key, default)` 一律写 `` Registry.`is`(...) ``。漏反引号的报错
+不像样地指向调用行，而是 `Cannot infer type for type parameter 'R'` / `Syntax error: Call has no
+callee` 三条叠在同一表达式上，看着像类型推断问题。
+
+**证据**：T-Nplus1Aggregate（2026-11-19，`cc8b2d960`）：子代理写的 `NplusOneAggregate.kt` 漏反引号，
+`compileKotlin` 直接失败（37s 白跑）。同仓既有 Registry 读取全带反引号（`NplusOneSuspect.kt`、
+`StandaloneSqlSourceResolver`）——照抄邻居即可避免。
+
+**正例**：新增 Registry 读取时从相邻同类文件复制写法；编译失败先怀疑 `is`/`in`/`object` 这类软关键字调用。
+**反例**：把 `Cannot infer type for type parameter 'R'` 当类型标注问题去补泛型。
+
+**Seen 1× (2026-11-19)**
+
+### L82 JList 渲染类测试的三个陷阱：wrapper 包裹 / model 实例 / 引用相等
+
+**规则**：给「按渲染几何命中」的交互写平台测试时，三条任一不满足就会得到看似「逻辑错」其实是
+「夹具错」的红：
+1. **`list.cellRenderer` 不是你的渲染器**——平台用 `ExpandedItemListCellRendererWrapper` 包裹真实
+   renderer，`as RailCellRendererBase` 抛 CCE。生产路径直接用面板字段（`entryCellRenderer`），测试
+   必须走面板暴露的缝。
+2. **渲染要用 model 里的实例，不是喂进去的原始对象**——buffer 入队会分发 `#N` 序号，原始对象的
+   header 少一段内容，宽度差几个像素，算出的徽章 x 就偏移。
+3. **条目匹配不能用引用相等**——刷新拍重建模型后是新实例，`===` 恒找不到，要用业务键
+   （restoredSql + timestamp）比。
+
+**证据**：T-Nplus1Aggregate（2026-11-19，`cc8b2d960`）：5 条面板用例连红三轮——第一轮 CCE（wrapper），
+第二轮「被点条目应在列表中」（`===`），第三轮「点击徽章应进入过滤态」（用原始 entry 渲染，2px 偏移
+让 `getFragmentTagAt` 落在片段外）。三处修完后 6/6 绿。
+
+**正例**：几何类测试先打印「实际渲染出的片段 tag 分布 + 命中点 x」，证明夹具与生产同源。
+**反例**：看到点击不命中就去改生产判定逻辑。
+
+**Seen 1× (2026-11-19)**
+
+### L83 平台列表/面板测试断言前必须泵 EDT——重建链是分批 `invokeLater` 追加的
+
+**规则**：`SqlLogPanel` 一类面板的刷新拍会把条目分批 `invokeLater { appendRebuildChunk() }` 追加
+（防长冻结的既有设计）。测试里调一次同步刷新方法**不等于**模型已填充：`list.model.size` 仍可能是
+0 或部分值。断言前要 `UIUtil.dispatchAllInvocationEvents()` 轮询到期望状态（带超时，超时消息里打出
+实际 size）；过滤态进出（页签增删 → 重建）同样要走一遍。
+
+**证据**：T-Nplus1Aggregate（2026-11-19，`cc8b2d960`）：5 条面板用例全红在「用可见条数做断言」，
+加 `pumpEdtUntil { model.size >= N }` 后通过。同仓 `SqlStandalonePreviewPanelDialogTest.awaitDialog`
+早就在用同款轮询，是对的既有先例。
+
+**正例**：任何「面板 → 模型 → 断言」链路，断言前泵 EDT 并轮询目标状态。
+**反例**：刷新方法返回后立刻断言条数；或为了过测试把断言放宽成 `>= 0`。
+
+**Seen 1× (2026-11-19)**
+
+### L84 测试断言 UI 文案要用 bundle 同源构造期望，别硬编码某一种语言
+
+**规则**：断言「摘要行含某某文案」时，期望值必须由 `MpSqlVisualizerBundle.message(key, args…)` 现算，
+或退到语言无关的结构判据（参数个数、结尾省略号、「参数前那段」前缀）。测试 JVM 的 locale 未必与
+开发机 IDE 一致，硬编码英文在中文环境必红、反之亦然——这类红与被测逻辑无关。
+
+**证据**：T-Nplus1Aggregate（2026-11-19，`cc8b2d960`）：`NplusOneAggregateSummaryTest` 两条用例把
+`"thread http-nio"` / `"spread across 4 threads"` 写死，运行环境取到中文 bundle 后全红；改成 bundle
+同源期望 + 跨线程段「参数前导前缀」判据后 8/8 绿。
+
+**正例**：文案类断言一律 bundle 同源；需要「不出现某段」的负例复用同一份前缀常量。
+**反例**：看到中文失败就把断言区改成中文——下个英文环境再红一次。
+
+**Seen 1× (2026-11-19)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
