@@ -1245,6 +1245,27 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         return degradedPreviewDocument;
     }
 
+    /** 测试缝（master 1156，T-DegradedPreviewUx P1）：宽限定时器是否在途。 */
+    public boolean degradedGracePendingForTest() {
+        return degradedGraceTimer != null && degradedGraceTimer.isRunning();
+    }
+
+    /** 测试缝（master 1159）：手动触发宽限期到点（不 sleep 真等 2s）。 */
+    public void fireDegradedGraceForTest() {
+        SqlPreviewPanelEditorLifecycleKt.flushDegradedGrace(this);
+    }
+
+    /** 测试缝（master 1162）：按原因分型走生产挂横幅入口（宽限期/立即披露语义与生产逐字一致）。 */
+    public void showDegradedBannerForTest(@NotNull PreviewDegradationReason reason) {
+        SqlPreviewPanelEditorLifecycleKt.showDegradedBanner(this, reason);
+    }
+
+    /** 测试缝（master 1349，UI-022）：按序取动态条件 checkbox（该行不可标注时为 null，下标不跳位）。 */
+    @Nullable
+    public javax.swing.JCheckBox conditionCheckboxForTest(int index) {
+        return index >= 0 && index < conditionCheckBoxes.size() ? conditionCheckBoxes.get(index) : null;
+    }
+
     /**
      * T-ErrorLocateUsability T-ELU-01（O-49）：错误定位动作的<b>显隐判据</b>缝——
      * 锚点可解析 → 非 null（按钮出现）；不可解析 → null（按钮不出现）。
