@@ -283,8 +283,18 @@ public final class DataSourceSettings implements PersistentStateComponent<DataSo
     private static final java.util.concurrent.ConcurrentHashMap<String, java.util.Optional<Method>> methodCache =
             new java.util.concurrent.ConcurrentHashMap<>();
 
+    /**
+     * T-PerfSweep30 05a：显式上限（同族 {@code log.SqlLogFileReader} 的 countCache 形态——超限整体清空）。
+     *
+     * <p>键域本来就小（平台 Database runner 类名 + 方法签名，几十个），但「键域小」是<b>观察</b>不是
+     * <b>保证</b>：反射探测的 fqcn 来自配置与扫描结果，理论上可被插件/用户配置撑大。缓存只是加速，
+     * 清空后下一次重付 forName/getMethod（毫秒级），故整体清空比 LRU 更简单且无淘汰顺序开销。</p>
+     */
+    private static final int REFLECT_CACHE_MAX = 256;
+
     @Nullable
     private static Class<?> cachedClass(@NotNull String fqcn) {
+        if (classCache.size() >= REFLECT_CACHE_MAX) classCache.clear();
         return classCache.computeIfAbsent(fqcn, name -> {
             try {
                 Class<?> cls = Class.forName(name);
@@ -307,6 +317,7 @@ public final class DataSourceSettings implements PersistentStateComponent<DataSo
             key.append(paramTypes[i].getName());
         }
         key.append(')');
+        if (methodCache.size() >= REFLECT_CACHE_MAX) methodCache.clear();
         return methodCache.computeIfAbsent(key.toString(), k -> {
             try {
                 return java.util.Optional.of(clazz.getMethod(name, paramTypes));
