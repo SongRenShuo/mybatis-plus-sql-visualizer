@@ -120,4 +120,23 @@ class McpConfigurableGateTest : BasePlatformTestCase() {
             offConfigurable.bannerGateLineForTest(),
         )
     }
+
+    // ---- T-McpGlobalBreakHardening（20261119）：apply 必须广播设置变更 --------------------
+
+    /**
+     * 过滤 EP 的热同步（McpGateRegistrationController）订阅 PluginSettings.SETTINGS_CHANGE_TOPIC；
+     * 261 真机 GUI 走查实测：MCP 子页 apply 不广播时，总开关 Apply 后两注册面都不摘（工具消失
+     * 只是平台 isEnabled 过滤的副作用，过滤 provider 仍挂在平台上）——热切换必须靠这条广播。
+     *
+     * k2j 适配：SettingsChangeListener 为 Java @FunctionalInterface，Kotlin lambda SAM 直转。
+     */
+    fun testapply后必须广播设置变更事件() {
+        var fired = 0
+        val connection = com.intellij.openapi.application.ApplicationManager.getApplication()
+            .messageBus.connect(testRootDisposable)
+        connection.subscribe(PluginSettings.SETTINGS_CHANGE_TOPIC, SettingsChangeListener { fired++ })
+        val configurable = newConfigurable()
+        configurable.apply()
+        assertEquals("apply 必须广播 SETTINGS_CHANGE_TOPIC（过滤 EP 热同步的触发源）", 1, fired)
+    }
 }
