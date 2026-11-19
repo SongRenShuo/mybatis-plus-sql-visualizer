@@ -1386,7 +1386,11 @@ public final class DataSourceSelector {
             Object docObj = historyViewer.getClass().getMethod("getDocument").invoke(historyViewer);
             if (!(docObj instanceof Document)) return;
             Document doc = (Document) docObj;
-            WriteCommandAction.runWriteCommandAction(project, () -> doc.setText(""));
+            // T-UserFreezeTriage：空文档不开写命令——预览切换是每轮都走的高频路径，
+            // 无变化的写也要抢一次写锁（外部长读锁在场时这笔白等会被读成「插件卡住」）。
+            if (doc.getTextLength() > 0) {
+                WriteCommandAction.runWriteCommandAction(project, () -> doc.setText(""));
+            }
             LOG.info("[M36] console history cleared (preview switch)");
         } catch (Throwable e) {
             Throwable cause = e.getCause();
@@ -1902,6 +1906,20 @@ public final class DataSourceSelector {
         } catch (Throwable ignored) {
             // ignore
         }
+        // T-HdAbsorb D218：last-used 写入时顺带落**连接事实指纹**（url+user+dbms 归一哈希）——
+        // 数据源改名/UUID 重排后，UUID/名字两级记忆全落空时由指纹兜底恢复静默复用。
+        // 名字解析不出唯一源（弹窗路径/多同名）或读不到 URL → 清指纹键，绝不留指认错源的旧值。
+        try {
+            List<Object> named = DataSourceSettings.getAllDataSources(project).stream()
+                    .filter(it -> name.equals(DataSourceSettings.getName(it)))
+                    .collect(java.util.stream.Collectors.toList());
+            Object ds = named.size() == 1 ? named.get(0) : null; // singleOrNull 语义
+            DataSourceFingerprint.remember(project, moduleKey,
+                    ds != null ? DataSourceFingerprint.fingerprintOfDataSource(ds) : null);
+        } catch (Throwable it) {
+            Logger.getInstance(DataSourceSelector.class)
+                    .warn("[D218] fingerprint remember skipped", it);
+        }
     }
 
     /** 单层写入（键构造统一走 {@link LastUsedKeys}；双写两层由 {@link #rememberRunner(Project, String, String, String)} 编排）。 */
@@ -1947,6 +1965,9 @@ public final class DataSourceSelector {
     private static void clearLastUsed(com.intellij.ide.util.PropertiesComponent pc, @Nullable String moduleKey) {
         pc.unsetValue(LastUsedKeys.displayNameKey(moduleKey));
         pc.unsetValue(LastUsedKeys.dataSourceIdKey(moduleKey));
+        // T-HdAbsorb D218：清记忆连指纹层一起清——记忆没了指纹还留着，会在「无记忆」
+        // 入口被指纹兜底复活，违背「用户点了清空就该干净」的 W4 语义。
+        pc.unsetValue(LastUsedKeys.key(DataSourceFingerprint.FINGERPRINT_KEY, moduleKey));
     }
 
     /**
@@ -2538,10 +2559,17 @@ public final class DataSourceSelector {
                 // 外部覆盖须走既有冲突语义）仍走 document 路径，T-EC-01 同临界区落盘语义不变。
                 Document fileDoc = fdm.getCachedDocument(vf);
                 if (fileDoc == null || (!isExecDocOpenInEditor(vf) && !fdm.isDocumentUnsaved(fileDoc))) {
-                    try {
-                        vf.setBinaryContent(text.getBytes(StandardCharsets.UTF_8));
-                    } catch (Throwable ignored) {
-                        // ignore
+                    // T-PerfSweep30 01c：零窗口直写分支同样先内容判等——「内容已一致」时
+                    // setBinaryContent 会把相同字节再写一遍（VFS 时间戳/索引噪音），旧实现仅靠
+                    // 上游 projectExecFile 差量快路径拦，直调面（syncExecVfContentIfNeeded 等）
+                    // 无保护。判等不计数、不一致才计数并写。
+                    if (fileDoc == null || !fileDoc.getText().equals(text)) {
+                        cn.song.mybatisplus.visualizer.execute.ExecFileWriteMetrics.countWrite(); // T-PerfSweep30 01c：真实内容变更（零窗口直写）计入写次数缝
+                        try {
+                            vf.setBinaryContent(text.getBytes(StandardCharsets.UTF_8));
+                        } catch (Throwable ignored) {
+                            // ignore
+                        }
                     }
                     if (fileDoc != null) {
                         // 缓存 doc 是干净态：同步从盘重载对齐新内容（平台对「外部改盘+干净 doc」
@@ -2550,6 +2578,7 @@ public final class DataSourceSelector {
                     }
                 } else {
                     if (!fileDoc.getText().equals(text)) {
+                        cn.song.mybatisplus.visualizer.execute.ExecFileWriteMetrics.countWrite(); // T-PerfSweep30 01c：真实内容变更（document 分支）计入写次数缝
                         fileDoc.setText(text);
                     }
                     // setText 的 write command 结束时自动 commit；显式 commitDocument 双保险
@@ -2933,12 +2962,22 @@ public final class DataSourceSelector {
             String sql,
             @Nullable String renderedDialectName,
             Logger LOG) {
+        prewarmExecTempFileOnBackgroundThread(project, sql, renderedDialectName, LOG, false);
+    }
+
+    /** 全参形态（master 默认参展开）：{@code cacheOnly=true} 内容已一致即零写盘（T-PerfSweep30 01a）。 */
+    public static void prewarmExecTempFileOnBackgroundThread(
+            Project project,
+            String sql,
+            @Nullable String renderedDialectName,
+            Logger LOG,
+            boolean cacheOnly) {
         if (ApplicationManager.getApplication().isDispatchThread()) {
             LOG.warn("[M36] prewarmExecTempFileOnBackgroundThread called on EDT — refused (slow ops)");
             return;
         }
         if (project.isDisposed() || sql.isBlank()) return;
-        DataSourceSelectorResultsKt.prewarmExecTempFileInner(project, sql, LOG, renderedDialectName);
+        DataSourceSelectorResultsKt.prewarmExecTempFileInner(project, sql, LOG, renderedDialectName, cacheOnly);
     }
 
     /**
@@ -2963,6 +3002,12 @@ public final class DataSourceSelector {
     }
 
     public static void prewarmExecTempFile(Project project, String sql, @Nullable String renderedDialectName) {
+        prewarmExecTempFile(project, sql, renderedDialectName, false);
+    }
+
+    /** 全参形态（master 默认参展开）：{@code cacheOnly=true} 内容已一致即零写盘（T-PerfSweep30 01a/01c）。 */
+    public static void prewarmExecTempFile(Project project, String sql, @Nullable String renderedDialectName,
+                                           boolean cacheOnly) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         if (ApplicationManager.getApplication().isDispatchThread()) {
             LOG.warn("[M36] prewarmExecTempFile called on EDT — refused (slow ops, T-ExecSlowOps F2)");
@@ -2987,6 +3032,8 @@ public final class DataSourceSelector {
             // T-UiFixGate9：有界派发（原 T-PreviewFast P2 的 nonBlocking=true fire-and-forget 已退役，
             // 见 projectExecFile 内注释）——缓存命中刷新同样不得留下跨边界的排队写：排队拍落在
             // 测试/交互边界时，迟到的 VFS 会话会命中 setText→save 窗口的「已改未存」态收集冲突。
+            // T-PerfSweep30 01a：缓存命中形态一律 cache-only——projectExecFile 自身的内容判等
+            // 快路径（document/快照双源）保证内容一致时零写盘，与预热链判据同函数同口径。
             try {
                 DataSourceSelectorResultsKt.projectExecFile(project, sql);
             } catch (Throwable e) {
@@ -3005,7 +3052,7 @@ public final class DataSourceSelector {
         }
         java.util.concurrent.Future<?> prewarmFuture =
                 com.intellij.util.concurrency.AppExecutorUtil.getAppExecutorService().submit(() ->
-                        DataSourceSelectorResultsKt.prewarmExecTempFileInner(project, sql, LOG));
+                        DataSourceSelectorResultsKt.prewarmExecTempFileInner(project, sql, LOG, null, cacheOnly));
         try {
             prewarmFuture.get(EXEC_PREWARM_BUDGET_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
         } catch (java.util.concurrent.TimeoutException e) {
