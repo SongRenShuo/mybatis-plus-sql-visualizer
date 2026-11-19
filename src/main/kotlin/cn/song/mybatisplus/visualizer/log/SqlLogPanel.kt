@@ -873,6 +873,15 @@ class SqlLogPanel(
         add(nplusOneBackLink)
     }
 
+    /**
+     * D235：当前活跃的聚合键（点击徽标进入时记录，退出/页签被关时清空）。
+     *
+     * **为什么需要它**（2026-11-19 修正）：摘要行原先按「页签键 ∈ 当前嫌疑集」显示，而嫌疑集
+     * 按 60 秒滑动窗算——用户进入聚合态几十秒后窗口过期，摘要行会自己消失（真机截图复现）。
+     * 聚合是用户主动进入的状态，是否显示摘要只取决于「从哪进来」，与判定窗无关。
+     */
+    private var nplusOneActiveKey: String? = null
+
     // ---------- T-UiCoord F2：工具栏单行宿主字段（同样须在 init 之前——init 里 buildToolbar 会赋值；
     // 声明晚于 init 会让赋值被随后的 `= null` 初始化器覆盖回 null） ----------
 
@@ -1074,13 +1083,33 @@ class SqlLogPanel(
 
     /** 单个聚焦页签 chip：名称 + ✕ 关闭（关闭即摘除过滤器并刷新）。 */
     private fun buildFocusChip(tab: FocusTab): JComponent {
-        val chip = JPanel(FlowLayout(FlowLayout.LEFT, 2, 0)).apply { isOpaque = false }
-        chip.add(JLabel(tab.label).apply { toolTipText = tab.label })
-        chip.add(JButton(AllIcons.Actions.Close).apply {
-            isFocusable = false
-            toolTipText = MpSqlVisualizerBundle.message("log.focus.close")
-            addActionListener { removeFocusTab(tab) }
-        })
+        // 对齐纪律（2026-11-19 用户反馈「× 与页签文字错位、偏低」）：原实现是两个组件塞进
+        // FlowLayout——JButton 自带边框与内边距，preferredSize 高度大于文字，行内顶部对齐后
+        // 视觉中心明显下沉。改用 BoxLayout(X_AXIS) + 两件 alignmentY 统一 CENTER，关闭键改
+        // JBLabel（图标 + 手型），无按钮边框干扰。
+        val chip = JPanel().apply {
+            layout = javax.swing.BoxLayout(this, javax.swing.BoxLayout.X_AXIS)
+            isOpaque = false
+        }
+        chip.add(
+            JBLabel(tab.label).apply {
+                toolTipText = tab.label
+                alignmentY = java.awt.Component.CENTER_ALIGNMENT
+            },
+        )
+        chip.add(
+            JBLabel(AllIcons.Actions.Close).apply {
+                toolTipText = MpSqlVisualizerBundle.message("log.focus.close")
+                cursor = java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
+                alignmentY = java.awt.Component.CENTER_ALIGNMENT
+                border = JBUI.Borders.empty(0, 4, 0, 2)
+                addMouseListener(object : java.awt.event.MouseAdapter() {
+                    override fun mouseClicked(e: java.awt.event.MouseEvent) {
+                        removeFocusTab(tab)
+                    }
+                })
+            },
+        )
         return chip
     }
 
@@ -2059,21 +2088,29 @@ class SqlLogPanel(
         )
         entryCellRenderer.nplusOneSuspects = nplusOneSuspects
         // T-Nplus1Aggregate D235：聚合摘要行随拍更新（条数源=完整快照该键条目数——口径生命线）
-        updateNplusOneAggregateSummary(snapshot, nplusOneSuspects)
+        updateNplusOneAggregateSummary(snapshot)
     }
 
     /**
-     * T-Nplus1Aggregate D235：聚合摘要行随刷新拍更新。过滤态判定＝聚焦页签里有同结构页签
-     * 且其 structureKey 在当前嫌疑集（与徽章判定同一数据源，构造上同值）；摘要条数取
-     * **完整快照**该键条目数（不随过滤/搜索波动——计划册「组内条目数==完整列表该键条目数」
-     * 的断言口径）。回退开关关 / 无过滤态 / 键不在嫌疑集（页签可残留嫌疑过期的键）→ 隐藏。
+     * T-Nplus1Aggregate D235：聚合摘要行随刷新拍更新。
+     *
+     * 过滤态判定＝[nplusOneActiveKey] 命中的同结构页签（**进入时记录的键**，不是「当前嫌疑集」）。
+     * 2026-11-19 修正：原判据是「页签键 ∈ 当前嫌疑集」，而嫌疑集按 60 秒滑动窗算——用户点徽标
+     * 进入聚合后几十秒，窗口一过键就移出嫌疑集，**摘要行当场自己消失**（真机截图复现：只剩
+     * 「聚焦：同结构 5 条」而 N+1 摘要不见了）。聚合态是用户主动进入的状态，不该被判定窗中途撤掉。
+     *
+     * 摘要条数取**完整快照**该键条目数（不随过滤/搜索波动——「组内条目数==完整列表该键条目数」）。
+     * 回退开关关 / 无活跃聚合键 / 页签已被关掉 → 隐藏。
      */
-    private fun updateNplusOneAggregateSummary(snapshot: List<LogSqlEntry>, suspects: Set<String>) {
-        val tab = if (NplusOneAggregate.enabledProvider()) {
-            focusTabs.filterIsInstance<FocusTab.Template>().firstOrNull { it.structureKey in suspects }
+    private fun updateNplusOneAggregateSummary(snapshot: List<LogSqlEntry>) {
+        val activeKey = nplusOneActiveKey
+        val tab = if (NplusOneAggregate.enabledProvider() && activeKey != null) {
+            focusTabs.filterIsInstance<FocusTab.Template>().firstOrNull { it.structureKey == activeKey }
         } else {
             null
         }
+        // 页签已被关掉（用户点 chip 的 ×）：同步清掉活跃键，避免残留态让下一轮摘要误显
+        if (tab == null && activeKey != null) nplusOneActiveKey = null
         val summary = tab?.let { buildNplusOneAggregateSummary(snapshot, it.structureKey) }
         val shouldShow = summary != null
         val visibilityChanged = nplusOneSummaryBar.isVisible != shouldShow
@@ -2104,6 +2141,7 @@ class SqlLogPanel(
         if (suspects.isEmpty()) return false
         val entry = nplusOneBadgeEntryAt(list, entryCellRenderer, e.point, suspects) ?: return false
         val n = templateCounts[entry.structureKey] ?: return false
+        nplusOneActiveKey = entry.structureKey
         addFocusTab(FocusTab.Template(entry.structureKey, n))
         return true
     }
@@ -2113,6 +2151,7 @@ class SqlLogPanel(
      * 聚焦页签，列表恢复原状（方法/请求页签不受影响）。无过滤态时 no-op（Esc 不吃既有通道）。
      */
     internal fun exitNplusOneAggregate() {
+        nplusOneActiveKey = null
         val hadTemplateTabs = focusTabs.removeAll { it is FocusTab.Template }
         if (hadTemplateTabs) {
             rebuildFocusTabBar()

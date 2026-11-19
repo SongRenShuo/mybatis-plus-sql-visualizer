@@ -197,6 +197,24 @@ class SqlLogPanelNplusOneAggregateTest : BasePlatformTestCase() {
         assertFalse("无徽章条目点击不进入过滤态", panel.tryEnterNplusOneAggregate(clickAt(otherClick)))
     }
 
+    /**
+     * 负例：从**右键「只看同结构」**进入过滤态（`addFocusTabForTest` 等价该入口）时，
+     * 不该出现 N+1 摘要行——摘要只属于「点徽标进来」的那条路径。
+     *
+     * 这条同时钉住 2026-11-19 的修正：摘要显隐判据已从「页签键 ∈ 当前嫌疑集」改为
+     * 「进入时记录的活跃键」——否则 60 秒判定窗一过摘要会自己消失（真机截图复现）。
+     * 窗口过期场景无法在单测里等 60 秒，由该判据的构造（与 suspects 无关）保证。
+     */
+    fun test右键同结构进入_不显示N加1摘要() {
+        val (key, _) = addNplusOneFixtures()
+        panel.addFocusTabForTest(FocusTab.Template(key, 6))
+        panel.refreshListForTest()
+        UIUtil.dispatchAllInvocationEvents()
+        assertTrue("过滤态已建立", panel.focusTabsForTest().isNotEmpty())
+        assertFalse("非聚合入口不应显示 N+1 摘要", panel.nplusOneSummaryLabelForTest.isVisible)
+        assertFalse("非聚合入口不显示 N+1 标签", panel.nplusOneSummaryBadgeForTest.isVisible)
+    }
+
     /** 源码扫描守卫（NplusOneBadgeFragmentTest 范式）：接线被摘即红。 */
     fun test接线守卫_点击与Esc都接了聚合过滤态() {
         var dir = java.io.File(System.getProperty("user.dir") ?: ".")
