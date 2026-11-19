@@ -4,6 +4,8 @@ import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.standalone.StandaloneSqlSourceResolver
 import cn.song.mybatisplus.visualizer.ui.standalone.StandaloneWarningText
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.util.Disposer
@@ -97,9 +99,6 @@ class SqlPreviewDialog(
     /** 文本连续未变化的轮询次数（达到 [PASTE_REPARSE_STABLE_TICKS] 即视为停手）。 */
     private var stableTicks = 0
 
-    /** 面板自身写文档期间抑制（[SqlPreviewPanel.showResult] 会重写编辑器全文）。 */
-    private var suppressPasteReparse = false
-
     /**
      * 草稿文本来源（测试缝：headless 下弹窗编辑器可能还没建出来，
      * 用例注入固定文本即可驱动同一重识别链）。
@@ -162,24 +161,13 @@ class SqlPreviewDialog(
      *
      * 识别走与工作台页签**同一条链**（[StandaloneSqlSourceResolver]：风味判定 + 双链择优），
      * 失败文案同源（[StandaloneWarningText]）。命中后立即交还手动，不再自动解析。
+     *
+     * T-PerfSweep33 券01：识别挪池线程（见 [resolveOffEdt]）；本入口只在 EDT 读草稿文本。
      */
     internal fun reparseDraftFromEditor() {
         if (!pasteReparseArmed) return
         val text = draftTextProvider()?.takeIf { it.isNotBlank() } ?: return
-        val resolved = runCatching { StandaloneSqlSourceResolver.resolve(text) }.getOrNull() ?: return
-        val fresh = resolved.failure?.let { failure ->
-            resolved.result.copy(
-                warning = StandaloneWarningText.failure(failure),
-                informationalWarning = false,
-            )
-        } ?: resolved.result
-        stopPasteReparse()
-        suppressPasteReparse = true
-        try {
-            panel.showResult(fresh)
-        } finally {
-            suppressPasteReparse = false
-        }
+        resolveOffEdt({ text }, ::applyResolvedAsFresh)
     }
 
     /** 测试访问器：是否仍待命。 */
@@ -190,6 +178,9 @@ class SqlPreviewDialog(
      *
      * 与「粘贴」走同一条识别链（[StandaloneSqlSourceResolver]）——选文件只是换了个取文本的入口，
      * 不存在第二条口径。载入后立即交还手动（不会再被自动重解析改写）。
+     *
+     * T-PerfSweep33 券01：文件读取（磁盘 IO）随解析一并挪池线程——原形态在 EDT 的 ReadAction
+     * 里直读大 mapper XML（性能分析第十期 §4.1 的 EDT IO 面）；空文件保持旧口径不识别不回填。
      */
     private fun loadFileIntoPreview() {
         val proj = project ?: return
@@ -197,19 +188,71 @@ class SqlPreviewDialog(
             .createSingleFileDescriptor("xml")
             .withTitle(MpSqlVisualizerBundle.message("dialog.preview.loadFile.title"))
         val file = com.intellij.openapi.fileChooser.FileChooser.chooseFile(descriptor, proj, null) ?: return
-        val text = runCatching {
-            @Suppress("DEPRECATION") // 243 编译目标：ReadAction.compute(ThrowableComputable) 仅此重载
-            com.intellij.openapi.application.ReadAction.compute<String, Throwable> {
-                com.intellij.openapi.vfs.VfsUtilCore.loadText(file)
-            }
-        }.getOrNull()
-        if (text.isNullOrBlank()) return
-        reparseText(text)
+        resolveOffEdt(
+            textSource = {
+                val text = runCatching {
+                    @Suppress("DEPRECATION") // 243 编译目标：ReadAction.compute(ThrowableComputable) 仅此重载
+                    com.intellij.openapi.application.ReadAction.compute<String, Throwable> {
+                        com.intellij.openapi.vfs.VfsUtilCore.loadText(file)
+                    }
+                }.getOrNull()
+                text?.takeIf { it.isNotBlank() }
+            },
+            applyOnEdt = ::applyResolvedAsFresh,
+        )
     }
 
-    /** 直给文本走一次识别并回填面板（选文件路径用；不依赖待命态）。 */
-    internal fun reparseText(text: String) {
-        val resolved = runCatching { StandaloneSqlSourceResolver.resolve(text) }.getOrNull() ?: return
+    // ------------------------------------------------------------------
+    // T-PerfSweep33 券01：识别链挪池线程（性能分析第十期 §4.1）
+    // ------------------------------------------------------------------
+
+    /** 解析代次守卫：只应用最后一次请求的产物（贴入停手与手动操作竞态时保最后一次）。 */
+    private var resolveGeneration = 0
+
+    /**
+     * 测试缝：替换「池线程计算 + invokeLater 回 EDT」的派发（默认 null = 生产形态）。
+     * 契约：计算完回调 [onDone] 恰一次（空文本/识别失败传 null，不回调则无回填）。用例注入
+     * 同步形态即可确定性驱动同一条链——先例＝[cn.song.mybatisplus.visualizer.util.EdtDispatch.invokeLaterOverride]。
+     */
+    internal var resolveOffEdtDispatcher: (
+        (textSource: () -> String?, onDone: (StandaloneSqlSourceResolver.Resolved?) -> Unit) -> Unit
+    )? = null
+
+    /**
+     * 识别链后台化。`StandaloneSqlSourceResolver.resolve` 是纯文本链（零 PSI/索引；工作台页签同链
+     * 早已池线程化——SqlStandalonePreviewPanel），但最坏 8 次 DOM 解析、输入上限 100k 字符，
+     * EDT 直跑可停数百毫秒。代次守卫只应用最后一次请求；弹窗已释放时丢弃（迟到产物面）。
+     */
+    private fun resolveOffEdt(textSource: () -> String?, applyOnEdt: (StandaloneSqlSourceResolver.Resolved) -> Unit) {
+        val generation = ++resolveGeneration
+        val seam = resolveOffEdtDispatcher
+        if (seam != null) {
+            seam(textSource) { deliverResolved(generation, it, applyOnEdt) }
+            return
+        }
+        val app = ApplicationManager.getApplication()
+        app.executeOnPooledThread {
+            val text = runCatching(textSource).getOrNull()
+            val resolved = text?.let { runCatching { StandaloneSqlSourceResolver.resolve(it) }.getOrNull() }
+            app.invokeLater({ deliverResolved(generation, resolved, applyOnEdt) }, ModalityState.nonModal())
+        }
+    }
+
+    /** 迟到产物闸：只应用最后一次请求；弹窗已释放时丢弃。 */
+    private fun deliverResolved(
+        generation: Int,
+        resolved: StandaloneSqlSourceResolver.Resolved?,
+        applyOnEdt: (StandaloneSqlSourceResolver.Resolved) -> Unit,
+    ) {
+        if (isDisposed || generation != resolveGeneration) return
+        resolved?.let(applyOnEdt)
+    }
+
+    /**
+     * 识别产物回填（失败文案同源 [StandaloneWarningText]）；命中后停轮询、交还手动——
+     * 不再自动解析，与用户后续编辑互不打架。
+     */
+    private fun applyResolvedAsFresh(resolved: StandaloneSqlSourceResolver.Resolved) {
         val fresh = resolved.failure?.let { failure ->
             resolved.result.copy(
                 warning = StandaloneWarningText.failure(failure),
@@ -217,12 +260,7 @@ class SqlPreviewDialog(
             )
         } ?: resolved.result
         stopPasteReparse()
-        suppressPasteReparse = true
-        try {
-            panel.showResult(fresh)
-        } finally {
-            suppressPasteReparse = false
-        }
+        panel.showResult(fresh)
     }
 
     override fun dispose() {
