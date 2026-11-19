@@ -426,6 +426,50 @@ public class SqlLogPanelLayoutTest extends BasePlatformTestCase {
         }
     }
 
+    // ---- T-SqlPreviewStandalone D-2：registry 默认开启时工作台 tab 挂载 + 面板外通道注册在位 ----
+
+    @Test
+    public void test独立预览工作台tab_默认registry开启时挂载且通道已注册() throws Exception {
+        SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
+        try {
+            waitForEdt();
+            assertTrue(
+                "registry 默认开启 → 「SQL 预览」工作台 tab 应挂载",
+                panel.tabsForTest().getTabs().stream()
+                    .anyMatch(it -> it.getText().equals(MpSqlVisualizerBundle.message("log.tab.standalone"))),
+            );
+            assertNotNull("面板 init 应注册面板外通道", manager.onOpenStandalonePreview);
+            // tab 在场 → select + 聚焦，不得抛异常（构造 SqlInputEditor 的能力由本类既有用例证明）
+            panel.openStandalonePreview(null);
+            waitForEdt();
+        } finally {
+            panel.dispose();
+        }
+    }
+
+    /** T-SqlPreviewStandalone A-6 反向验证：registry 关闭时工作台 tab 不挂载。 */
+    @Test
+    public void test独立预览工作台tab_registry关闭时不挂载() throws Exception {
+        com.intellij.openapi.util.registry.Registry registry =
+                com.intellij.openapi.util.registry.Registry.get(SqlLogPanel.STANDALONE_TAB_REGISTRY_KEY);
+        boolean old = registry.asBoolean();
+        registry.setValue(false);
+        try {
+            SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
+            try {
+                assertFalse(
+                    "registry 关闭 → 工作台 tab 不得挂载",
+                    panel.tabsForTest().getTabs().stream()
+                        .anyMatch(it -> it.getText().equals(MpSqlVisualizerBundle.message("log.tab.standalone"))),
+                );
+            } finally {
+                panel.dispose();
+            }
+        } finally {
+            registry.setValue(old);
+        }
+    }
+
     /** 用户日常侧边栏宽度（2026-09-21 真机截图量测：内容区约 460px）——单行契约的主验宽度。 */
     private static final int USER_SIDEBAR_WIDTH = 460;
 
