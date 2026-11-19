@@ -3,24 +3,25 @@
 > 本目录存放从本地记忆系统（`~/.zcode/cli/memories/projects/.../memory/`）归档的历史记忆文件。
 > 这些内容已完成/已交付/已修复，不再需要每次会话加载，但作为历史记录保留。
 >
-> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简），2026-09-17（第十一次精简），2026-09-18（第十二次精简），2026-09-19（第十三次精简），2026-09-20（第十四次精简），2026-09-23（第十五次精简），2026-09-24（第十六次精简），2026-09-25（第十七次精简），2026-09-29（第二十一次精简），2026-09-30（第二十二次精简，零归档收拢轮），2026-10-01（第二十三次精简，零归档索引瘦身轮），2026-10-02~05（第二十四~二十七次精简，四连零归档读数刷新轮），2026-10-06（第二十八次精简，零归档勘正轮），2026-10-07（第二十九次精简，零归档勘正+双档去重轮），2026-10-08（第三十次精简，零归档勘正+双孤儿入册轮），2026-10-29（第三十一次精简，47 文件归档波次+索引瘦身 247→198 行），2026-11-07（第三十二次精简，51 文件归档波次+索引重建 304→236 行），2026-11-10（第三十三次精简，16 文件归档波次+孤儿 33 补册），2026-11-13（第三十四次精简，28 文件归档波次+孤儿 7 补册），2026-11-17（第三十五次精简，15 文件归档波次+孤儿 8 补册），2026-11-18（第三十六次精简，8 文件归档+去重 4+错记忆订正）
+> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简），2026-09-17（第十一次精简），2026-09-18（第十二次精简），2026-09-19（第十三次精简），2026-09-20（第十四次精简），2026-09-23（第十五次精简），2026-09-24（第十六次精简），2026-09-25（第十七次精简），2026-09-29（第二十一次精简），2026-09-30（第二十二次精简，零归档收拢轮），2026-10-01（第二十三次精简，零归档索引瘦身轮），2026-10-02~05（第二十四~二十七次精简，四连零归档读数刷新轮），2026-10-06（第二十八次精简，零归档勘正轮），2026-10-07（第二十九次精简，零归档勘正+双档去重轮），2026-10-08（第三十次精简，零归档勘正+双孤儿入册轮），2026-10-29（第三十一次精简，47 文件归档波次+索引瘦身 247→198 行），2026-11-07（第三十二次精简，51 文件归档波次+索引重建 304→236 行），2026-11-10（第三十三次精简，16 文件归档波次+孤儿 33 补册），2026-11-13（第三十四次精简，28 文件归档波次+孤儿 7 补册），2026-11-17（第三十五次精简，15 文件归档波次+孤儿 8 补册），2026-11-18（第三十六次精简，8 文件归档+去重 4+错记忆订正），2026-11-19（第三十七次精简，4 文件归档+孤儿 2 处置+去重 1+错记忆订正）
 > **原始位置**：`~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-09474abd1ce62ee6/memory/`
 > **全局备份**：`~/.zcode/cli/memories/global/`（128 个 md，2026-11-17 实测）
-> **项目记忆**：保留 369 个内容文件 + MEMORY.md 索引（第三十六次精简后）
+> **项目记忆**：保留 381 个内容文件 + MEMORY.md 索引（第三十七次精简后）
 
 ---
 
-## 已修复 Bug（310 个）
+## 已修复 Bug（312 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
+| [project-mcp-global-break-hardening-20261118.md](bug-fixes/project-mcp-global-break-hardening-20261118.md) | T-McpGlobalBreakHardening 全收官（四笔生产提交 `db2eaaaef`/`d00b49801`/`c75203c7b`/`e08f7430e`，随 v2026.11.19-beta.1 发行）：MCP 结构性免疫批＝契约白名单+未知方法熔断+总开关联动+Registry 逃生开关+门控状态行；真机走查修出两真缺陷（263 工具集三钩子缺失致 tools/list 92 只剩 1 工具且零异常日志、MCP 子页 apply 不广播 SETTINGS_CHANGE_TOPIC 致热同步从未触发）；真机 E2E 判据（tools/list 全在+注册完成日志，`/stream` 200 不算数）已并入 reference-261-e2e-local-recipe（在役）；残留风险=toolset EP 仍「类可达即注册」无白名单 |
+| [project-testgap-speed-20261104.md](bug-fixes/project-testgap-speed-20261104.md) | T-TestGapSpeed 六券+T8+T9 全收口（收口轮 tip `52a80ccf`/T8 `3c55f11f`/T9 `1011339e` 均在 master，T8 随 2026.11.10 发行）：踩坑盲区补测 G1~G5 落地；提效＝`-PtestShardMaxLane=5` 收口轮 32m57s→5m02s≈6.5 倍+perf 串行尾道；减量诚实天花板≈总串行 2%、删测试换秒数路线终结（B 档不做）；析取教训＝judge 前先查常量真值别信注释数字、侦察报告说「未见用例」不可信；残项（use 真机证据边界验收、T7 releaseGate 动态让路留办）已折入 pending-plans |
 | [project-release-20261117-beta1.md](bug-fixes/project-release-20261117-beta1.md) | v2026.11.17-beta.1 内测发行收官（发行提交 `609ebd6df`、tag `2026.11.17-beta.1`+正式版 `2026.11.17` 双仓推齐、Gitee 双 Release 200、CHANGELOG 落账实测闭环；单修复 T-IbatisAtShapeGate `164e6a884`）；收尾三态核查与 release-beta.ps1 内置提速已并入 skill 流程 |
 | [project-perfsweep31-audit-and-32-plan.md](bug-fixes/project-perfsweep31-audit-and-32-plan.md) | 第九期性能分析+T-PerfSweep32 已实施（t-perfsweep31 分支 tip `efcfad0b6` 推双仓，CI run 44133130041 全量绿；未合 master，复验三件与「发行物料以合并后树构建」迁 pending-plans）：券01~05 全落、券02 键卫生五触达点、反向双探针红→绿、收口轮修分支遗留 3 红（死守卫 HotPathTest 缺 @Test=静默零执行 → 新元守卫 TestClassVisibilityGuardTest）；索引口径订正=合流后 master 3 个索引 EP |
 | [project-k2j-178-divergence-and-179.md](bug-fixes/project-k2j-178-divergence-and-179.md) | k2j 同号 178 双支线分叉处置+T-SyncK2JMaster179 收官（20261117，41 笔、锚点→`906039f29` 双仓推齐、CI push-test 连续全绿）：判已做以 .port-sync+origin tip 为准；test(5) 超时真因（离线复算分片抓 15 个漏移植+冷沙盒 VfsRootAccess `NO_FS_ROOTS_ACCESS_CHECK=1`）；对抗时序不如消除时序（lookupOverrideForTest 注入确定性锚点）；坑 45~48 已迁入端口册 [[project-kotlin-to-java-port-sync]] |
 | [project-preview-inlay-native-yield-20261112.md](bug-fixes/project-preview-inlay-native-yield-20261112.md) | T-PreviewInlayNativeYield 已实施（`NativeColumnInlayYieldGate` 在 master，`InsertColumnInlayGateTest` 守卫）：预览 INSERT 列名提示让位 IDEA 原生 sql.column.names.inlay.hints；D1 能力级整体让位+探测失败保留+测试钉 `probe={false}`；平台机制详版仍在役（pitfall-inlay-native-sql-column-hints-duplicate + reference-intellij-native-sql-column-inlay） |
 | [project-competitive-r39-20261118.md](bug-fixes/project-competitive-r39-20261118.md) | 竞品对比第三十九轮（20261118 短窗，R40 已接替）：D213 达成/D211 差一步（update.json 仍 beta.1）/D214 升级随 T-PreQuotedLiteral 转正批同批/zMyBatis 扳机③首响 Z-67 启用/DBX 基线被 rebase 作废改 API compare；pending 全在仓内落地册 `docs/开发计划/20261118-0136-*` |
 | [project-cross-channel-dedupe-20261105.md](bug-fixes/project-cross-channel-dedupe-20261105.md) | T-CrossChannelDedupe 主修已合 master `029864bf` 并发行（跨通道等价键兜底折叠 5s 窗）：残余两笔（agent 捕获面四族 setter+四参 setObject「织了不捕」、二进制签名归一 `<binary>`）与真机复验仍开，现行状态由 pending-plans 承载；键分叉六类机制=pitfall-cross-channel-dedupe-key-divergence（在役） |
-| [project-branch-align-merge-20261116.md](bug-fixes/project-branch-align-merge-20261116.md) | T-BranchAlignMerge 全分支对齐合流终局（20261117 收官 `09f129ae5`）：八支全对齐（吃 master 组 6 支+insight 吃 dev）双仓已推、八轮 CI gate 全绿、修红账本四类根因五轮闭环；可复用＝分支级 CI dispatch（build-plugin.yml workflow_dispatch mode=gate，push-test 只挂 master）、NestGate 跨线显式裁决、并行车道推 master 前先 fetch 判祖先再 rebase、`gh run rerun --failed-jobs` 偶发不生效改派全新 run |
 | [project-branch-align-merge-20261116.md](bug-fixes/project-branch-align-merge-20261116.md) | T-BranchAlignMerge 全分支对齐合流终局（20261117 收官 `09f129ae5`）：八支全对齐（吃 master 组 6 支+insight 吃 dev）双仓已推、八轮 CI gate 全绿、修红账本四类根因五轮闭环；可复用＝分支级 CI dispatch（build-plugin.yml workflow_dispatch mode=gate，push-test 只挂 master）、NestGate 跨线显式裁决、并行车道推 master 前先 fetch 判祖先再 rebase、`gh run rerun --failed-jobs` 偶发不生效改派全新 run |
 | [project-index-scan-sweep2-20261116.md](bug-fixes/project-index-scan-sweep2-20261116.md) | T-IndexScanSweep2 已实施合 master（`978c7f289`，CI `43816779504` 8/8）：补全候选名称清单改项目级服务（`MapperNamespaceIndex` v2 加 `#mapper`/`#config`）；javap 推翻 `getModificationStamp(Project,String)` 存在性，改 `getIndexModificationStamp` ⊕ 逐文件 modStamp；C3~C5 判不做（回补按项目+结构版本缓存） |
 | [project-ibatis-gutter-perf-20261116.md](bug-fixes/project-ibatis-gutter-perf-20261116.md) | T-IbatisGutterPerf 全链收官（双仓已推、CI 六轮 8/8、用户复验通过）：iBatis 图标索引化（`b5ccf14c7`/`bcad37b84`）+三态缓存收回（`8eca5211f`）+MyBatis 同族（`c0bc9b043`）+P4 机制清扫（`501db7d89`）+延迟预热读动作+箭头门槛（`e4b3fdd27`）+跨命名空间精确匹配（`2eecbdcba`） |
@@ -373,10 +374,12 @@
 | [project-master-into-dev-merge-20261103.md](bug-fixes/project-master-into-dev-merge-20261103.md) | T-MasterToDevMerge 两轮反向合流档（1103 首轮 `1bf55efa`+1106 二轮 `fafc2042`/`f80d7aab`，二轮 22 冲突）——master 语义增量必须搬进 dev 新文件；源码扫描守卫前提会过期；判失败是否合并引入=临时 worktree 检出合并前 HEAD 对照复跑 |
 | [reference-ci-linux-migration.md](bug-fixes/reference-ci-linux-migration.md) | CI 换 Linux runner 调研定案（2026-11-05：只值 2~4 分钟、7 处硬阻塞、混合迁移被 10GB 缓存上限互踢）——维持 Windows runner 不迁；再提迁移先读本档 |
 
-## 已解决踩坑（108 个）
+## 已解决踩坑（110 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
+| [pitfall-xml-preview-mock-param-blindspots.md](pitfalls/pitfall-xml-preview-mock-param-blindspots.md) | XML 预览模拟参数八类失真面（foreach item 恒空对象/OBJECT 参数无属性/`${}` 空值塌陷/迭代 trim 致 `andand`/`)or(`/choose 互斥默认全开/基线告警混入，M1/M2 已修随 2026.11.11 发行；第八面＝面板 foreach 框是值列表不是次数，填值覆盖 M2 注入对象致 `BETWEEN '1' AND ?`，`89c74c663` 注入时置只读，随 2026.11.12 发行）：同轮判定「不做成对值输入」（按映射顺序逗号分隔本就能填 `.value`/`.secondValue`）；`order by 1` 可执行但语义被改写属已知边界 |
+| [pitfall-flag-field-overwritten-by-default-param.md](pitfalls/pitfall-flag-field-overwritten-by-default-param.md) | 跨调用标志位被默认参数就地覆盖 ⇒ 动作静默失效（置 true 后调带默认 false 形参的函数被就地抹掉；已修 `fdfee15a3` 随 v2026.11.19-beta.1 发行）：回归用例必须走真实动作路径（`OpenInDialogAction` 已 internal），反向 4/4 红；直调内部函数的自证用例抓不到这类失效 |
 | [pitfall-toolbar-refresh-before-addnotify-warn.md](pitfalls/pitfall-toolbar-refresh-before-addnotify-warn.md) | 工具栏 addNotify 之前手动刷新=无操作+一条带自家 toolbar id 的平台 WARN（`toolbar manual update is ignored`）——构造期「先设状态再刷界面」习惯在这里只换来噪声；修法已落地 `c79026ea9`（删构造期调用）；判据=真机看排序 tooltip 与菜单勾选，别造单测 |
 | [pitfall-docker-guard-hangs-indefinitely.md](pitfalls/pitfall-docker-guard-hangs-indefinitely.md) | docker 引擎半活态（管道在、守护进程不应答）让 `assumeDockerAvailable` 无限挂死而非跳过——HTTP 读无超时、`catch (Throwable)` 永不触发，整片门禁挂住且零错误读数；判别＝`timeout 10 docker info` 看退出码（管道接 head 会误读 0）；根治＝`mpvs.docker.tests.enabled` 显式开关（`e166ee1`，缺省关，`-PmpvDockerTests=true` 才跑容器验证），日常判别口径沉淀 AGENTS.md 与测试约定；dbx 替代 Oracle 用例未实施；含 testcontainers 策略写回、buildSrc 临时排除口径等实测细节 |
 | [pitfall-xmltext-cdata-literal.md](pitfalls/pitfall-xmltext-cdata-literal.md) | 平台 PSI 的 `XmlText.text` 对 CDATA 返回带 `<![CDATA[ ]]>` 包裹的字面全文（「CDATA 已展开」说法被判别性读数证伪）——按展开口径写的 hbm 命名查询提取链带缺口且非判别性断言恒绿；修法＝unwrap 正则剥包裹+断言改「不含包裹标记」；hbm 缺口已修（dev `1406754` 共享 `XmlDirectText` 口径），新写 XML 文本提取代码前先读本档 |
@@ -546,11 +549,15 @@
 
 ---
 
+**第三十七次精简（2026-11-19，4 个归档 + 孤儿 2 处置 + 去重 1 + 错记忆订正）**：归档判定先 git 实测——T-McpGlobalBreakHardening 四笔生产提交全在 master（`e08f7430e`/`db2eaaaef`/`d00b49801`/`c75203c7b`）且随 v2026.11.19-beta.1 发行（`b2a1d0729`/落账 `b6967b075`）；T-TestGapSpeed 收口 tip `52a80ccf`/T8 `3c55f11f`/T9 `1011339e` 均在 master（T8 随 2026.11.10 tag 发行）；xml-preview 第八面修复 `89c74c663` 在 2026.11.12 tag 内；flag-field 修复 `fdfee15a3` 在 master。归 **bug-fixes 2**（mcp-global-break-hardening、testgap-speed）+ **pitfalls 2**（xml-preview-mock-param-blindspots、flag-field-overwritten-by-default-param）。孤儿 2 处置：feedback-user-visible-changelog-ordering 补册 §四（用户 20261119 更新日志排序口径，检查清单补条款待用户答复）；project-pending-plans.md.bak-20261029 删（当日备份留底）。去重 1：本 README bug-fixes 表 BranchAlignMerge 双行并一（35 轮遗留）。**错记忆订正**：R40 审计提交 `27a54cfa4` 索引行「未推」过期——实测已在 master 与双远端（`git branch -a --contains` 命中 origin/github/master），MEMORY.md 与 pending-plans 两处订正。pending-plans 刷新：5 个悬空 wikilink 改指归档路径（a08-nightly/competitive-round37/mapper-nav-shortcut/pages-hql/merge-preview-trio）；testgap 残项（use 真机证据边界验收＋T7 releaseGate 动态让路留办）折入；「指针-合流债」重测（master 与 origin/master `ad44954a7` 对齐 0 欠推；dev..master=87 / master..dev=348；route 领先 144 / 落后 87）。项目 memory 385→381 内容文件。全量备份 memory-backup-20261119（388 项，含全部删除件）。
+
+---
+
 ## 统计
 
 | 位置 | 文件数 |
 |------|--------|
-| 项目 memory（保留） | 370（含 MEMORY.md；内容文件 369） |
+| 项目 memory（保留） | 382（含 MEMORY.md；内容文件 381） |
 | 全局记忆 global/ | 128 |
-| 归档 archive/ | 427（bug-fixes 310 + pitfalls 108 + methodology 2 + user-context 6 + README） |
-| **合计** | **925** |
+| 归档 archive/ | 431（bug-fixes 312 + pitfalls 110 + methodology 2 + user-context 6 + README） |
+| **合计** | **941** |
