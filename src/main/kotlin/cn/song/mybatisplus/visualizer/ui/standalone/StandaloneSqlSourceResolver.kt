@@ -2,9 +2,11 @@ package cn.song.mybatisplus.visualizer.ui.standalone
 
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
+import cn.song.mybatisplus.visualizer.sql.SqlPerfAnalyzer
 import cn.song.mybatisplus.visualizer.sql.placeholderPositions
 import cn.song.mybatisplus.visualizer.ui.IbatisXmlPreviewService
 import cn.song.mybatisplus.visualizer.ui.XmlPreviewService
+import com.intellij.openapi.util.registry.Registry
 
 /**
  * 独立预览工作台的双源解析器（T-SqlPreviewStandalone D-1 / D-1b）。
@@ -219,7 +221,7 @@ object StandaloneSqlSourceResolver {
             )
         }
         return Resolved(
-            result = run.result ?: emptyPreviewResult(),
+            result = run.result?.let { withPerfCheck(it) } ?: emptyPreviewResult(),
             kind = Kind.XML_STATEMENT,
             statementId = statementId,
             statementCount = countStatementBlocks(decoded),
@@ -237,6 +239,36 @@ object StandaloneSqlSourceResolver {
         wrapperType = null,
         tableName = null,
     )
+
+    // ------------------------------------------------------------------
+    // D234/T-StandaloneExecPhase2：粘贴即体检
+    // ------------------------------------------------------------------
+
+    /** Registry 键（plugin.xml `<registryKey>` 登记，默认开）：关=不填 perfWarnings（旧行为，建议行不出现）。 */
+    internal const val PERF_CHECK_REGISTRY_KEY = "sqlvis.preview.standalonePerfCheck"
+
+    /** 生产默认读取（单独暴露：测试用例还原缝不引平台类字面量，避免 testFast 划桶误踢）。 */
+    internal val defaultPerfCheckEnabledProvider: () -> Boolean = {
+        runCatching { Registry.`is`(PERF_CHECK_REGISTRY_KEY, true) }.getOrDefault(true)
+    }
+
+    /** 测试缝：总开关读取（生产＝`Registry.is(KEY, true)`）。 */
+    internal var perfCheckEnabledProvider: () -> Boolean = defaultPerfCheckEnabledProvider
+
+    /**
+     * 解析产物补填 [PreviewResult.perfWarnings]（粘贴即体检）：内嵌面板 ResultView 的既有
+     * 性能建议渲染面直接消费——与 ORM 消费路径（SqlPreviewServiceEnhancements F-2）同一
+     * 渲染面、同一规则引擎，**无双报**（面板只渲染 result 携带的一份）。
+     *
+     * 分析是纯文本函数（[SqlPerfAnalyzer] 自带 LRU 缓存），方言取默认推断；失败静默返回
+     * 原载荷——体检是增强面，绝不影响识别主链。
+     */
+    private fun withPerfCheck(result: PreviewResult): PreviewResult {
+        if (!perfCheckEnabledProvider()) return result
+        if (result.sql.isBlank()) return result
+        val warnings = runCatching { SqlPerfAnalyzer.analyze(result.sql) }.getOrNull() ?: return result
+        return result.copy(perfWarnings = warnings)
+    }
 
     /**
      * 包根：[XmlMapperParser] 要求根元素 `<mapper>`（解析失败告「不是 MyBatis mapper 文件」）。
@@ -347,14 +379,16 @@ object StandaloneSqlSourceResolver {
         dollarRaw = hasDollarRawSegment(input)
         val sql = placeholderSql.toString()
         return Resolved(
-            result = PreviewResult(
-                sql = sql,
-                compactSql = sql,
-                unresolvedParams = sources,
-                paramTable = ParameterReplacer.buildParamTable(sources),
-                wrapperType = null,
-                tableName = null,
-                hasDollarRawSegments = dollarRaw,
+            result = withPerfCheck(
+                PreviewResult(
+                    sql = sql,
+                    compactSql = sql,
+                    unresolvedParams = sources,
+                    paramTable = ParameterReplacer.buildParamTable(sources),
+                    wrapperType = null,
+                    tableName = null,
+                    hasDollarRawSegments = dollarRaw,
+                ),
             ),
             kind = Kind.PLAIN_SQL,
             paramCount = events.size,

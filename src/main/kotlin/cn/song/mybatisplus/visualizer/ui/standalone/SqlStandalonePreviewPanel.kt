@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.SqlInputEditor
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
+import cn.song.mybatisplus.visualizer.ui.executeSql
 import cn.song.mybatisplus.visualizer.ui.showResult
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
@@ -94,7 +95,8 @@ class SqlStandalonePreviewPanel(
         })
     }
 
-    /** 内嵌预览面板（懒创建；Disposer 挂本面板，防双 Editor 常驻）。 */
+    /** 内嵌预览面板（懒创建；Disposer 挂本面板，防双 Editor 常驻）。@Volatile：ExecuteAction 的 update 在 BGT 读（面板内执行入口同口径先例）。 */
+    @Volatile
     private var previewPanel: SqlPreviewPanel? = null
 
     /** Disposer 防重注册守卫（对齐 SqlLogPanel.historyPanelRegistered 先例）。 */
@@ -107,6 +109,9 @@ class SqlStandalonePreviewPanel(
 
     /** 解析预览动作实例（字段化：构造期就要注册组件级快捷键，不能每次建工具栏都新建一个）。 */
     private val resolveAction = ResolveAction()
+
+    /** 执行 SQL 动作实例（字段化同 [resolveAction] 先例；enable 随内嵌面板存亡翻转）。 */
+    private val executeAction = ExecuteAction()
 
     init {
         Disposer.register(this, inputEditor)
@@ -156,6 +161,7 @@ class SqlStandalonePreviewPanel(
     private fun buildInputToolbar(): JPanel {
         val group = DefaultActionGroup(
             resolveAction,
+            executeAction,
             FormatAction(),
             ClearAction(),
             OpenInDialogAction(),
@@ -180,6 +186,40 @@ class SqlStandalonePreviewPanel(
         }
     }
 
+    /**
+     * 执行 SQL（D233/T-StandaloneExecPhase2）：把内嵌预览面板的产物送既有执行链——
+     * Schema 校验 / DML 确认 / `${}` raw 确认门 / 未知参数确认门 / 方言闸 / 控制台内嵌
+     * 全部复用 [executeSql]（`SqlPreviewPanelExecution.kt` 的 internal 扩展），本动作只做
+     * 入口与 enable 判定，不另设闸门（弹窗克制红线：模态确认只留给执行链既有形态）。
+     *
+     * enable 判定＝内嵌面板已创建（懒创建只在解析成功路径发生——未识别文本+开弹窗不建面板）
+     * 且未被清空；面板无 SQL 文本时 [executeSql] 静默 return（M36 既有口径），点不出事故。
+     */
+    /**
+     * **`internal` 而非 `private`**：回归用例必须走真实动作路径（对齐 [OpenInDialogAction]
+     * 的既有口径——只测面板方法会漏掉接线缺陷）。
+     */
+    internal inner class ExecuteAction : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = MpvsIcons.Execute
+            e.presentation.text = MpSqlVisualizerBundle.message("standalone.action.execute")
+            e.presentation.description = MpSqlVisualizerBundle.message("standalone.action.execute.description")
+            e.presentation.isEnabled = previewPanel != null
+        }
+
+        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+
+        override fun actionPerformed(e: AnActionEvent) {
+            val panel = previewPanel
+            if (panel == null) {
+                // 竞态兜底（update 拦可见性后仍到不了这里）：给引导不裸跑
+                setStatus(MpSqlVisualizerBundle.message("standalone.status.execute.noPreview"))
+                return
+            }
+            panel.executeSql()
+        }
+    }
+
     /** 格式化输入区 SQL（SqlFormatter 幂等；程序性写入不触发补全，对齐 SqlToJavaPanel.FormatAction）。 */
     private inner class FormatAction : AnAction() {
         override fun update(e: AnActionEvent) {
@@ -194,8 +234,8 @@ class SqlStandalonePreviewPanel(
         }
     }
 
-    /** 清空：作废在途解析、清输入、预览区回到空态提示（释放内嵌面板，下轮解析重建）。 */
-    private inner class ClearAction : AnAction() {
+    /** 清空：作废在途解析、清输入、预览区回到空态提示（释放内嵌面板，下轮解析重建）。**`internal`**：回归用例走真实动作路径（同 [OpenInDialogAction] 口径）。 */
+    internal inner class ClearAction : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.icon = MpvsIcons.Clear
             e.presentation.text = MpSqlVisualizerBundle.message("standalone.action.clear")
@@ -441,6 +481,12 @@ class SqlStandalonePreviewPanel(
 
     /** 测试缝：内嵌预览面板当前生效的空态提示（证工作台专用文案真的接上了）。 */
     internal fun embeddedPreviewHintForTest(): String = ensurePreviewPanel().previewEmptyHintForTest()
+
+    /** 测试缝：ExecuteAction 的 enable 判定现值（**不触发懒创建**——与 embeddedPreviewHintForTest 不同，读的是裸字段）。 */
+    internal fun executeActionEnabledForTest(): Boolean = previewPanel != null
+
+    /** 测试缝：状态行现值（无面板时点执行的引导文案断言）。 */
+    internal fun statusTextForTest(): String = statusLabel.text
 
     override fun dispose() {
         if (disposed) return

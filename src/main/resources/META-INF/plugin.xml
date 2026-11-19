@@ -529,6 +529,12 @@
              语句入口不受影响。代码读取：log/SqlLogPanel.kt（STANDALONE_TAB_REGISTRY_KEY 文件级常量）。 -->
         <registryKey key="sqlvis.preview.standaloneTab" defaultValue="true"
                      description="Show the standalone SQL preview workbench tab in the main sidebar tool window (paste SQL or mapper XML fragments, then format / fill values / copy / open in dialog). Disable to remove the tab after a restart; statement-entry previews are unaffected."/>
+        <!-- T-StandaloneExecPhase2 D234：独立工作台「粘贴即体检」。默认开＝解析产物补填
+             perfWarnings（SqlPerfAnalyzer 同一规则引擎），内嵌面板既有性能建议行直接呈现；
+             关掉即回到不带体检的旧行为（回退通道）。代码读取：
+             ui/standalone/StandaloneSqlSourceResolver.PERF_CHECK_REGISTRY_KEY。 -->
+        <registryKey key="sqlvis.preview.standalonePerfCheck" defaultValue="true"
+                     description="Run static SQL perf checks on standalone-workbench paste input and show the advice via the existing perf-warning row. Disable to skip the check (legacy behavior)."/>
         <!-- T-IbatisXmlArrowCallerGate：iBatis `<sqlMap>` 语句行的跳转箭头是否要求「Java 侧真的存在
              调用点」。默认 true＝只有存在调用点才出箭头（改名/删调用后箭头消失，不制造点开必空的假图标）；
              false＝回到旧行为（无条件出箭头，目标留到点击时查）。回退通道，下一版删除。
