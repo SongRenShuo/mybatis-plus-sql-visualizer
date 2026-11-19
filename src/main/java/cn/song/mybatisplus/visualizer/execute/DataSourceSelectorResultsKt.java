@@ -688,6 +688,27 @@ public final class DataSourceSelectorResultsKt {
                         + ") - drop memory, show popup");
                 // 只清该模块那一层：其它模块的记忆与项目级兜底不该被一处的歧义连坐。
                 forgetLastRunner(project, moduleKeyForLastUsed);
+            } else if (!runners.isEmpty()) {
+                // T-HdAbsorb D218：UUID/名字两级全落空（数据源改名 / UUID 重排）时按**连接事实指纹**
+                // （url+user+dbms 归一哈希，DataSourceFingerprint）兜底——指纹唯一命中且该名在 runner
+                // 集合里才静默复用；歧义/零命中/枚举失败一律照旧弹窗，不新增绕过方言闸的路径。
+                String fpName = null;
+                try {
+                    fpName = DataSourceFingerprint.resolveRunnerName(project, moduleKeyForLastUsed);
+                } catch (Throwable ignored) {
+                    // 枚举失败照旧弹窗
+                }
+                Object fpMatched = fpName != null
+                        ? runners.stream().filter(r -> getRunnerName(r).equals(fpName)).findFirst().orElse(null)
+                        : null;
+                if (fpMatched != null) {
+                    LOG.info("[M36] silent reuse last runner by fingerprint: " + fpName
+                            + " (moduleKey=" + moduleKeyForLastUsed + ")");
+                    chosenRunnerName[0] = fpName;
+                    runRunner(project, fpMatched, true, runnerError, moduleKeyForLastUsed);
+                    if (callback != null) callback.accept(true);
+                    return;
+                }
             }
         }
 
@@ -992,9 +1013,13 @@ public final class DataSourceSelectorResultsKt {
             return false;
         }
         try {
-            WriteCommandAction.runWriteCommandAction(project, () -> {
-                editor.getDocument().setText(sql);
-            });
+            // T-UserFreezeTriage：与仓内其余写点同规——内容已一致就不开写命令（每次写都要抢写锁，
+            // 外部长读锁在场时这笔白等会被用户读成「插件卡住」）。
+            if (!editor.getDocument().getText().equals(sql)) {
+                WriteCommandAction.runWriteCommandAction(project, () -> {
+                    editor.getDocument().setText(sql);
+                });
+            }
         } catch (Throwable ignored) {
             // ignore
         }
@@ -2106,6 +2131,9 @@ public final class DataSourceSelectorResultsKt {
     public static File projectExecFile(Project project, String sql, boolean preferProjectRoot)
             throws java.io.IOException {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
+        // T-PerfSweep30 01a 测试缝：入口计数（cache-only 命中应完全不进本函数——它后面的两次
+        // syncExecVfContentIfNeeded 收敛各付一次 EDT 派发探测，正是本券要省的）
+        cn.song.mybatisplus.visualizer.execute.ExecFileWriteMetrics.countProjectFileCall();
         // T-UiFixGate9：生命周期守卫——dispose（含 temporarily-disposed）后放弃整个写链。首建形态
         //（VFS 无条目）的裸写 FileUtil.writeToFile 不经 document、无任何 dispose 检查，死项目上照写
         // 磁盘即第二冲突源的一部分；返回 null 走既有「writeFile 失败 → 跳过」降级。
@@ -2145,6 +2173,7 @@ public final class DataSourceSelectorResultsKt {
                 vf = existing;
             } else {
                 // VFS 无该条目（首次创建）：不可能存在 document（无 vf 可挂），裸写安全
+                cn.song.mybatisplus.visualizer.execute.ExecFileWriteMetrics.countWrite(); // T-PerfSweep30 01c：首建裸写计入写次数缝
                 com.intellij.openapi.util.io.FileUtil.writeToFile(f, sql);
                 return f;
             }
@@ -2176,33 +2205,95 @@ public final class DataSourceSelectorResultsKt {
     /** {@link #prewarmExecTempFileInner(project, sql, LOG, renderedDialectName)} 的真实链（已持有 in-flight 标记；仅后台线程调用）。 */
     public static void prewarmExecTempFileInner(Project project, String sql, Logger LOG,
                                                 @Nullable String renderedDialectName) {
+        prewarmExecTempFileInner(project, sql, LOG, renderedDialectName, false);
+    }
+
+    /** 全参形态（master 默认参展开）：{@code cacheOnly=true} 时内容已一致即零写盘（T-PerfSweep30 01a）。 */
+    public static void prewarmExecTempFileInner(Project project, String sql, Logger LOG,
+                                                @Nullable String renderedDialectName, boolean cacheOnly) {
         lastTempFileFailure = null;
+        // T-PerfSweep30 01a（dev ead67d725 移植，T-PerfSweep31 券03）：cache-only 形态——VFS 已有
+        // exec 条目且内容与本次 SQL 一致时**跳过写盘**，只做 refresh＋方言映射＋findFile＋填缓存槽
+        // （性能分析第八期 §三 账本①：同一预览打开内预热原文写盘与渲染回填/方言重渲染预热重复改写
+        // 同一文件）。两条不变量保持不变：
+        //  ① 首建（VFS 无条目）裸写仍在 execFileWriteLock 锁内、与存在性检查原子（下方 projectExecFile 未走）；
+        //  ② VFS 已有条目绝不裸写（T-ExecDocSync3）——cache-only 判等成立即返回，判等不成立才走既有写路径。
+        // 判等口径与写路径**同函数**（projectExecFile 锁内即用它）：document 文本优先、否则读「最近写入
+        // 内容+写入时 VFS 时间戳」快照；两者皆不可用（外部写入/无 document）时不采信 → 保守走写路径。
+        boolean cacheOnlyHit = false;
+        File cacheOnlyTarget = null;
+        if (cacheOnly) {
+            String base = project.getBasePath();
+            if (base == null) {
+                LOG.warn("[M36] exec prewarm cache-only abandoned: project.basePath null");
+                return;
+            }
+            // 落点判据与 projectExecFile **同口径**（master 侧 T-ExecPsiGate R6：主落点可能被项目根
+            // 备用落点接管——dev 原版固定 .idea 路径在本仓形态下会判错文件）：
+            File rootDir = DataSourceSelector.execRootFallbackProjects.contains(project)
+                    ? new File(base, ".sql-visualizer") : null;
+            File dir = rootDir != null ? new File(rootDir, "exec") : execPrimaryDir(project);
+            if (dir == null) {
+                LOG.warn("[M36] exec prewarm cache-only abandoned: exec dir unavailable");
+                return;
+            }
+            File f = new File(dir, "mpsql-exec.sql");
+            // 判等前先 refresh 到 VFS 可见——首次裸写（FileUtil.writeToFile）后 VFS 条目可能尚未建立，
+            // findFileByIoFile 会返回 null（误判「not visible」→ 保守走写路径）。refresh 是只读操作，
+            // 不触写；与下方主链 refresh 段同款（BGT 裸调合法）。
+            VirtualFile existing = null;
+            try {
+                existing = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(f);
+            } catch (Throwable ignored) {
+                // 保守走写路径
+            }
+            if (existing != null && execFileContentMatches(project, existing, sql)) {
+                LOG.info("[M36] exec prewarm cache-only: content already matches — write SKIPPED (T-PerfSweep30 01a)");
+                // 零写盘：跳过下方 projectExecFile（其差量快路径同判据，但会多一次 document 派发探测），
+                // 保留 refresh＋映射＋findFile＋填槽。
+                cacheOnlyHit = true;
+                cacheOnlyTarget = f;
+            } else {
+                LOG.info("[M36] exec prewarm cache-only: content mismatch (or not visible) — falling back to write path "
+                        + "(T-PerfSweep30 01a)");
+            }
+        }
         // BGT 不得持写意向锁同步 refresh：刷新会话推进也需要 WIL/EDT，会互等自锁。
         // EDT 冷路径 createTempPsiFile 的 WIRA 语境不同，必须保留；这里只移除后台预热包装。
         File ioFile;
-        try {
-            ioFile = projectExecFile(project, sql);
-        } catch (Throwable e) {
-            // T-FatalPassthrough T-FP-02b（独立复核阻断 2）：fatal 上浮（预热跑在 BGT，透传由平台
-            // 记录现场）；非 fatal 仍返回（writeFile 失败 → 跳过预热，语义逐字不变）。
-            if (FatalErrors.isFatal(e)) throw (Error) e;
-            LOG.warn("[M36] exec prewarm writeFile failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
-            return;
+        if (cacheOnlyHit) {
+            ioFile = cacheOnlyTarget;
+        } else {
+            try {
+                ioFile = projectExecFile(project, sql,
+                        DataSourceSelector.execRootFallbackProjects.contains(project));
+            } catch (Throwable e) {
+                // T-FatalPassthrough T-FP-02b（独立复核阻断 2）：fatal 上浮（预热跑在 BGT，透传由平台
+                // 记录现场）；非 fatal 仍返回（writeFile 失败 → 跳过预热，语义逐字不变）。
+                if (FatalErrors.isFatal(e)) throw (Error) e;
+                LOG.warn("[M36] exec prewarm writeFile failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+                return;
+            }
+            if (ioFile == null) return;
         }
-        if (ioFile == null) return;
         // T-ExecDocSync2 F4：refresh 前强制收敛——projectExecFile 的 doc 写在 EDT 落盘后、本
         // refresh 之前，用户在控制台（document 即 exec 文件 document）键入可插入 modified-unsaved
         // 态；此时 refresh 命中「doc 已修改 && 磁盘≠文档」即弹 File Cache Conflict（第四轮残余竞态，
         // 开发计划 §1.3）。findFileByIoFile（与 projectExecFile 内裸调同形态，prewarm DONE 日志
         // 实证 BGT 可调）命中即过一遍分叉探测 + EDT 派发收敛，正常恒 no-op。
-        try {
-            VirtualFile vf0 = LocalFileSystem.getInstance().findFileByIoFile(ioFile);
-            if (vf0 != null) {
-                syncExecVfContentIfNeeded(project, vf0, sql);
+        // T-PerfSweep30 01a（dev 移植）：cache-only 命中形态**跳过本收敛**——判等已证内容一致
+        // （document 文本或写入快照），不存在分叉面；且本收敛的 dispatchDocWriteOnEdt 会把相同
+        // 内容再派一次 document 写（旧实现下 cache-only 快路径形同虚设）。
+        if (!cacheOnlyHit) {
+            try {
+                VirtualFile vf0 = LocalFileSystem.getInstance().findFileByIoFile(ioFile);
+                if (vf0 != null) {
+                    syncExecVfContentIfNeeded(project, vf0, sql);
+                }
+            } catch (Throwable e) {
+                if (FatalErrors.isFatal(e)) throw (Error) e; // T-FP-02：fatal 透传
+                LOG.warn("[M36] exec prewarm pre-refresh converge FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage());
             }
-        } catch (Throwable e) {
-            if (FatalErrors.isFatal(e)) throw (Error) e; // T-FP-02：fatal 透传
-            LOG.warn("[M36] exec prewarm pre-refresh converge FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage());
         }
         VirtualFile vf;
         try {
@@ -2217,12 +2308,15 @@ public final class DataSourceSelectorResultsKt {
             return;
         }
         // T-EC-04：同冷路径——裸写残留的防御收口（正常恒 no-op）
-        try {
-            syncExecVfContentIfNeeded(project, vf, sql);
-        } catch (Throwable e) {
-            if (FatalErrors.isFatal(e)) throw (Error) e; // T-FP-02：fatal 透传
-            LOG.warn("[M36] exec prewarm syncVfContent failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
-            return;
+        // T-PerfSweep30 01a（dev 移植）：cache-only 命中同样跳过（判等已证内容一致，无防御面；避免重复派写）
+        if (!cacheOnlyHit) {
+            try {
+                syncExecVfContentIfNeeded(project, vf, sql);
+            } catch (Throwable e) {
+                if (FatalErrors.isFatal(e)) throw (Error) e; // T-FP-02：fatal 透传
+                LOG.warn("[M36] exec prewarm syncVfContent failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+                return;
+            }
         }
         // T-ExecSlowOps F1：BGT 两段式映射（读探测稳态跳过 / 首见派 EDT + 有界等待）。
         // O-145 W7：预览提供了渲染方言时 exec PSI 同步该事实；旧调用仍走 O-136 数据源路由
