@@ -413,6 +413,15 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
      * 预热新建（clear 重预热随之更新），createEditor 热态同步消费、冷态注册回调回 EDT 装配。
      */
     public volatile PrewarmAwait<Pair<VirtualFile, PsiFile>> prewarmAwait = null;
+
+    /**
+     * T-FirstOpenDegradedLabel 二轮：本面板是否已自动补过一轮预热。
+     *
+     * <p>编辑器因 removeNotify（标签切换/隐藏）释放后重建时，上一轮产物早已被消费——旧行为直接报
+     * 「完整编辑器尚未就绪」（硬失败档横幅）。现在自动重预热一次把语义拉回「在途」，但只补一次
+     * 防止预热持续失败时的自动循环；新产物发布成功会复位（见 publishPrewarmProduct）。</p>
+     */
+    public boolean prewarmAutoRetried = false;
     /** T-GifRerecord：预热失败标志——await 快速降级用，避免 EDT 空等 2s 后再走降级路径。 */
     public volatile boolean prewarmFailed = false;
 
@@ -515,8 +524,31 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     /**
      * T-UxOnboard T-UX-02：预览编辑器空态引导（原生 placeholder，显隐由编辑器随空文档管理）。
      * 常态下预览内容即编辑器全文、placeholder 不可见；用户清空文档后原生提示接管。
+     *
+     * <p>T-StandaloneHintAndWarning：可被构造器 {@code emptyHint} 覆盖（独立工作台的输入是整段粘贴
+     * 文本，「选中代码按 Alt+Shift+Q」是编辑器流的假承诺）。</p>
      */
-    public final String previewEmptyHint = MpSqlVisualizerBundle.message("panel.preview.emptyHint");
+    public final String previewEmptyHint;
+
+    /**
+     * T-DialogPasteReparse：当前编辑区文本（原生控制台文档优先，自建编辑器兜底；空返回 null）。
+     *
+     * <p>「先开弹窗、后贴内容」场景需要它——弹窗里的编辑器只是普通 SQL 编辑器，贴进去的
+     * iBatis/MyBatis 片段不会被任何链识别；重新识别必须能把<b>用户当前的草稿</b>读出来。</p>
+     */
+    @Nullable
+    public String currentDraftText() {
+        String nativeText = nativeEditorDoc != null ? nativeEditorDoc.getText() : null;
+        if (nativeText != null && !nativeText.isBlank()) return nativeText;
+        String draft = editor != null && editor.getDocument() != null ? editor.getDocument().getText() : null;
+        return draft != null && !draft.isBlank() ? draft : null;
+    }
+
+    /** T-DialogPasteReparse：当前草稿所在文档（挂「贴入即识别」监听用；两者皆无时 null）。 */
+    @Nullable
+    public Document draftDocument() {
+        return nativeEditorDoc != null ? nativeEditorDoc : (editor != null ? editor.getDocument() : null);
+    }
 
     /** M36：已内嵌的原生控制台 UI 组件（清空/释放时级联 dispose）。 */
     public JComponent embeddedConsole = null;
@@ -922,8 +954,24 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     }
 
     public SqlPreviewPanel(@Nullable Project project) {
+        this(project, null);
+    }
+
+    /**
+     * 全参构造（master 默认参展开）。
+     *
+     * <p>{@code emptyHint}（T-StandaloneHintAndWarning）：空态提示文案覆盖（null = 沿用
+     * {@code panel.preview.emptyHint}）。原文案写的是「选中代码按 Alt+Shift+Q 可再次预览」——那是
+     * <b>编辑器里点预览</b>那条流的语义；独立工作台的输入是整段粘贴文本、且 {@code ConvertToSqlAction}
+     * 在 {@code input.sql} 上恒 disabled（update 只认 Java/XML/kt），搬过去就是假承诺。
+     * 工作台传入自己的文案（键 {@code standalone.preview.emptyHint}）。</p>
+     */
+    public SqlPreviewPanel(@Nullable Project project, @Nullable String emptyHint) {
         super(new BorderLayout());
         this.project = project;
+        this.previewEmptyHint = emptyHint != null
+                ? emptyHint
+                : MpSqlVisualizerBundle.message("panel.preview.emptyHint");
         this.diagramPanel = new DiagramPanel(project);
         this.stackHover = new StackFrameHover(project);
 
