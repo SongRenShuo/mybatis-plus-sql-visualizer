@@ -1080,6 +1080,11 @@ public class SqlLogPanel extends JPanel implements Disposable {
         return (RailCellRendererBase) entryCellRenderer.getListCellRendererComponent(list, entry, index, selected, false);
     }
 
+    /** D235 测试缝：selected 默认 false 的两参形态（Kotlin 默认参 Java 等价）。 */
+    RailCellRendererBase renderEntryForTest(LogSqlEntry entry, int index) {
+        return renderEntryForTest(entry, index, false);
+    }
+
     private void addFocusTab(FocusTab tab) {
         List<FocusTab> next;
         if (tab instanceof FocusTab.Request request) {
