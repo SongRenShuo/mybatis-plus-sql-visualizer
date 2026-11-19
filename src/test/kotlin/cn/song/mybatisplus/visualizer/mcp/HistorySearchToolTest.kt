@@ -122,4 +122,52 @@ class HistorySearchToolTest {
         val s2 = SqlVisualizerHistorySearchToolKt.historySearchArgsSummary("", "", null, null, "", false)
         assertTrue("空过滤条件的 null 段应为字面 null：$s2", s2.contains("fromMs=null"))
     }
+
+    // ------------------------------------------------------------------
+    // D219 输出分档：detail=false 紧凑清单（无 SQL 预览正文），null/true 历史契约不变
+    // ------------------------------------------------------------------
+
+    /** k2j 适配：Result/Hit 为 Java record——具名实参改位置形态（与上方既有构造同款）。 */
+    private fun oneHitResult(): HistorySearchService.Result = HistorySearchService.Result(
+        1, 1, false,
+        1, 1, false,
+        null,
+        listOf(
+            HistorySearchService.Hit(
+                1_759_190_400_000L,
+                "SELECT * FROM t_user WHERE id = 1",
+                "UNKNOWN",
+                "src/UserService.java",
+                42,
+                12L,
+                "MySQL",
+                "UserMapper#selectById",
+                null,
+                "sql-history-2026-09-30.sql",
+            ),
+        ),
+    )
+
+    @Test
+    fun test分档_默认档含SQL预览() {
+        val text = tool.formatResult(oneHitResult())
+        assertTrue(text.contains("SELECT * FROM t_user WHERE id = 1"))
+    }
+
+    @Test
+    fun test分档_显式明细档含SQL预览() {
+        val text = tool.formatResult(oneHitResult(), true)
+        assertTrue(text.contains("SELECT * FROM t_user WHERE id = 1"))
+    }
+
+    @Test
+    fun test分档_紧凑档无SQL预览但有头字段() {
+        val text = tool.formatResult(oneHitResult(), false)
+        assertTrue("紧凑档应含头字段 mapper", text.contains("mapper=UserMapper#selectById"))
+        assertTrue("紧凑档应含时间戳", text.contains("2026-09-30"))
+        assertTrue("紧凑档不应输出 SQL 预览正文", !text.contains("SELECT * FROM t_user WHERE id = 1"))
+        assertTrue("紧凑档应带 compact 说明", text.contains("compact listing"))
+        // 反向对照：同一条目默认档必含预览（摘掉 compact 分支此断言必红）
+        assertTrue(tool.formatResult(oneHitResult()).contains("SELECT * FROM t_user WHERE id = 1"))
+    }
 }
