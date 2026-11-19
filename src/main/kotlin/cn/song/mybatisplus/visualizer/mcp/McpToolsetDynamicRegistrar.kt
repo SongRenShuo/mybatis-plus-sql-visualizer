@@ -122,9 +122,52 @@ object McpToolsetDynamicRegistrar {
                     }
                 }
             }.onFailure { LOG.warn("T-McpDynamicToolset: refl probe failed", it) }
+            // D239 长期诊断：直接调平台自己的 asTools 逐个壳类展开（ReflectionToolsProvider 同款
+            // 入口），一行汇总「每个壳类出哪个工具」——平台侧异常被吞成一行 WARN，这里能点名到
+            // 具体 toolset 并打全栈。历史上它一眼区分出三类根因（枚举 type_name、原始类型数组、
+            // metadata 函数表缺成员），下次平台再改扫描口径同样先看这行。
+            runCatching {
+                val toolsetIface = Class.forName("com.intellij.mcpserver.McpToolset")
+                val jsonCls = Class.forName("kotlinx.serialization.json.Json")
+                val json = Class.forName("com.intellij.mcpserver.impl.util.McpServerJsonKt")
+                    .getMethod("getMcpServerJson").invoke(null)
+                val asTools = Class.forName("com.intellij.mcpserver.impl.util.ToolsetReflection_utilKt")
+                    .getMethod("asTools", toolsetIface, jsonCls)
+                val parts = registeredInstances.values.map { inst ->
+                    runCatching {
+                        @Suppress("UNCHECKED_CAST")
+                        val tools = asTools.invoke(null, inst, json) as Collection<Any>
+                        val names = tools.joinToString(",") { t ->
+                            runCatching {
+                                val d = t.javaClass.getMethod("getDescriptor").invoke(t)
+                                d.javaClass.getMethod("getName").invoke(d) as String
+                            }.getOrElse { "?" }
+                        }
+                        "${inst.javaClass.simpleName}=[$names]"
+                    }.getOrElse { e ->
+                        val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
+                        LOG.warn("T-McpDynamicToolset: asTools failed for ${inst.javaClass.simpleName}", cause)
+                        "${inst.javaClass.simpleName}=FAILED(${cause.javaClass.simpleName})"
+                    }
+                }
+                LOG.info("T-McpDynamicToolset: shell self-check ${parts.joinToString(" | ")}")
+            }.onFailure { LOG.warn("T-McpDynamicToolset: asTools probe unavailable", it) }
             // D238：注册完成后**主动请平台重算工具列表**（见 requestPlatformToolsRecompute KDoc）。
             // 真机 2026-11-19 实证：平台只在 EP 变更时重算，而它自己那次重算可能快照到半成品 EP。
             requestPlatformToolsRecompute("toolsets-registered")
+            // D239：平台重算与注册存在竞态（真机 2026-11-19 18:10 实测：11 个 toolset 各自
+            // asTools 都出 1 个工具，但聚合清单只留了前 2 个）。补两次延迟重算兜底，
+            // 让清单在 IDE 启动稳定后再收敛一次。
+            runCatching {
+                val scheduler = com.intellij.util.concurrency.AppExecutorUtil.getAppScheduledExecutorService()
+                listOf(3L, 12L).forEach { secs ->
+                    scheduler.schedule(
+                        { requestPlatformToolsRecompute("delayed-${secs}s") },
+                        secs,
+                        java.util.concurrent.TimeUnit.SECONDS,
+                    )
+                }
+            }.onFailure { LOG.warn("T-McpDynamicToolset: delayed recompute scheduling failed", it) }
         }.onFailure {
             // registered 不置位：下个项目启动重试（动态 EP 未就绪等瞬态失败可自愈）——
             // 已 define/已注册的 FQN 由两本台账跳过，重试只补未完成项
@@ -169,6 +212,10 @@ object McpToolsetDynamicRegistrar {
      * 故：关闭照常摘 EP（平台会算成 0），注册完成后由本函数**在 EP 已完整时就位**主动请求一次重算。
      * 反射面：`McpServerService.getToolsStateProvider$intellij_mcpserver()` → provider 的 private
      * `requestUpdate(String)`；服务未创建（平台没用 MCP）时零操作，失败只记 WARN。
+     *
+     * **D239 补正（2026-11-19 18:10 真机）**：单次「就位后重算」仍不够——11 个壳类各自
+     * `asTools` 都能出 1 个工具（自检行实证），但聚合清单只留了前 2 个；再补两次延迟重算
+     * （3s / 12s）后 `tools/list` 稳定 11 个。故 [registerOnce] 里在本次调用之外另排了延迟重算。
      */
     private fun requestPlatformToolsRecompute(reason: String) {
         runCatching {
@@ -183,6 +230,18 @@ object McpToolsetDynamicRegistrar {
                 it.name.startsWith("getToolsStateProvider") && it.parameterCount == 0
             } ?: return@runCatching
             val provider = runCatching { getter.invoke(svc) }.getOrNull() ?: return@runCatching
+            // D239 五轮（2026-11-19 18:20 真机定案）：**必须先摘掉 ReflectionToolsProvider 的
+            // 缓存条目再请求重算**。`McpToolsListProvider.requestUpdate` 重算时会把 `toolsByProvider`
+            // 里已有的 provider 结果原样复用（`computeAllMcpTools(previous)` 只在 previous 缺失时
+            // 才算），于是注册初期那份「只含前 1 个工具」的结果被永久沿用——三次重算请求全部无效。
+            // 平台自己摘缓存的入口是私有 `invalidateReflectionProviders()`，走合成访问器调用。
+            runCatching {
+                val invalidate = provider.javaClass.getMethod(
+                    "access\$invalidateReflectionProviders",
+                    provider.javaClass,
+                )
+                invalidate.invoke(null, provider)
+            }.onFailure { LOG.warn("T-McpDynamicToolset: invalidateReflectionProviders 不可用", it) }
             val update = provider.javaClass.getDeclaredMethod("requestUpdate", String::class.java).apply {
                 isAccessible = true
             }
@@ -205,11 +264,16 @@ object McpToolsetDynamicRegistrar {
 
     /**
      * D239：壳类形态改造——`final class <Shell> extends McpToolsetSupport implements McpToolset`，
-     * **自己声明工具方法**（委托体转发到原工具类）+ 复制方法注解 + 复制 class 级 `kotlin.Metadata`。
+     * **自己声明工具方法**（委托体转发到原工具类）+ 复制方法注解 + 复制 class 级 `kotlin.Metadata`
+     * + **为业务类的其余方法声明占位**（见下）。
      *
      * 为什么不再「extends 工具类、零成员」：真机 2026-11-19 定案，零成员壳类在 kotlin-reflect 眼里
      * `declared=0 / kotlinMeta=false`，平台扫不到 `@McpTool` 方法 → `requireAnyTool` 抛异常打断
      * toolset 遍历 → 工具清单只列前 1~3 个（详见 D238/D239 册）。
+     *
+     * 为什么还要占位方法：复制的 metadata 描述业务类的**全部**成员，kotlin-reflect 展开函数表时
+     * 逐个按签名找 Java 方法，缺一个就抛 `Could not compute caller for function`（真机 18:01
+     * 逐壳类实证）→ 整个 toolset 归零。私有/内部辅助函数不会被平台当工具调用，占位体抛异常即可。
      *
      * 委托而非 override：工具方法是 Kotlin `suspend fun`（默认 final）不可覆写；壳类与工具类分属
      * 两条继承链，壳类声明同名同描述符方法、方法体 `new 工具类()` + `invokevirtual` 转发即可。
@@ -262,6 +326,18 @@ object McpToolsetDynamicRegistrar {
         is Enum<*> -> value
         is Class<*> -> value
         is Array<*> -> value.map { encodeAnnotationValue(it) }
+        // 原始类型数组（D239 真机 2026-11-19 定案）：Kotlin 的 IntArray 等**不是** Array<*>，
+        // 只有对象数组才匹配上一条分支。漏掉这些分支会掉进 else 被 toString 成 "[I@1a2b3c"，
+        // 真机表现为 `AnnotationTypeMismatchException: kotlin.Metadata.mv()
+        // (Found data of type java.lang.String[[I@…)` → kotlin-reflect 解析壳类即失败。
+        is IntArray -> value.toList()
+        is BooleanArray -> value.toList()
+        is ByteArray -> value.toList()
+        is ShortArray -> value.toList()
+        is CharArray -> value.toList()
+        is LongArray -> value.toList()
+        is FloatArray -> value.toList()
+        is DoubleArray -> value.toList()
         is List<*> -> value.map { encodeAnnotationValue(it) }
         else -> value.toString()
     }
@@ -286,7 +362,8 @@ object McpToolsetDynamicRegistrar {
     /**
      * 壳类字节码（D239 形态）：`final class <Shell> extends McpToolsetSupport implements McpToolset`，
      * 构造器为 `(String toolName)`；每个带 `@McpTool` 的工具方法在壳类里声明为同描述符的委托方法，
-     * 并复制该方法上的全部注解；class 上复制工具类的 `kotlin.Metadata`。
+     * 并复制该方法上的全部注解（`@McpTool` / `@McpDescription` / `@McpToolHints`），
+     * 同时复制 class 级 `kotlin.Metadata`（suspend 语义的来源，见下方注释）。
      *
      * 版本 V17（major 61）：243 JBR 21 可加载，且与插件常规编译目标一致。
      * 生成器为 [TinyClassFileWriter] 手写字节码（真机 ASM 不可达修复，见其 KDoc），零外部依赖。
@@ -294,20 +371,62 @@ object McpToolsetDynamicRegistrar {
      */
     internal fun shellBytes(superClass: Class<*>, iface: Class<*>, shellName: String): ByteArray {
         val methods = toolMethods(superClass)
-        val delegates = methods.map { m ->
-            TinyClassFileWriter.DelegateMethod(
-                name = m.name,
-                descriptor = methodDescriptor(m),
-                targetClassFqn = superClass.name,
-                annotations = m.annotations.map(::toAnnotationValue),
-            )
+        val toolSignatures = methods.mapTo(HashSet()) { it.name + methodDescriptor(it) }
+        val baseSignatures = HashSet<String>()
+        var base: Class<*>? = McpToolsetSupport::class.java
+        while (base != null) {
+            base.declaredMethods.forEach { baseSignatures.add(it.name + methodDescriptor(it)) }
+            base = base.superclass
         }
-        // D239 二轮（2026-11-19 真机）：**不复制 kotlin.Metadata**。
-        // 首轮复制了业务类的 metadata，结果是 kotlin-reflect 按该 metadata 去壳类里找函数表、
-        // 签名对不上 → 全部 toolset 展开失败（tools/list 从 1~3 个掉到 0 个，比不修还差）。
-        // 现在壳类无 metadata，kotlin-reflect 退化为 Java 反射视图，仍能看到自己声明的
-        // @McpTool 方法（declared=1 已实测）；注解是运行时可见的，展开链不依赖 metadata。
-        val classAnnotations = emptyList<TinyClassFileWriter.AnnotationValue>()
+        val delegates = buildList {
+            methods.forEach { m ->
+                add(
+                    TinyClassFileWriter.DelegateMethod(
+                        name = m.name,
+                        descriptor = methodDescriptor(m),
+                        targetClassFqn = superClass.name,
+                        annotations = m.annotations.map(::toAnnotationValue),
+                    ),
+                )
+            }
+            // D239 四轮（2026-11-19 真机定案）：**业务类的其余方法也要在壳类里占位**。
+            // 复制的 metadata 描述了业务类的全部成员，kotlin-reflect 展开函数表时逐个按签名
+            // 去壳类里找 Java 方法，找不到就抛
+            //   KotlinReflectionInternalError: Could not compute caller for function:
+            //   private final suspend fun executeExplain(...)
+            // → 该 toolset 一个工具都出不来（真机 18:01 逐壳类实证：只有「metadata 里仅一个
+            // 工具函数」的两个类活着）。私有/内部辅助函数不会被平台当工具调用，占位体抛异常即可。
+            superClass.declaredMethods
+                .filterNot { it.isSynthetic }
+                .filterNot { it.name + methodDescriptor(it) in toolSignatures }
+                // 占位方法若与基类同名同签名，会撞「override final method」（壳 extends
+                // McpToolsetSupport）——那类方法本来也不在业务类 metadata 里，跳过即可。
+                .filterNot { it.name + methodDescriptor(it) in baseSignatures }
+                .forEach { m ->
+                    add(
+                        TinyClassFileWriter.DelegateMethod(
+                            name = m.name,
+                            descriptor = methodDescriptor(m),
+                            targetClassFqn = superClass.name,
+                            stub = true,
+                        ),
+                    )
+                }
+        }
+        // D239 三轮（2026-11-19 真机逐层取证）：**必须复制 kotlin.Metadata**。
+        //  - 无 metadata：kotlin-reflect 走 Java 视图，委托方法的 Continuation 被当成普通参数
+        //    → 平台 CallableBridge 报 `Type kotlin.coroutines.Continuation<...> of parameter 'argN'
+        //    is not serializable` → toolset 加载失败（真机 17:37 实证）。
+        //  - 二轮曾以「metadata 致解析失败」为由摘掉它，实为误判：首轮栈顶
+        //    `ReflectClassStructure.processAnnotationArguments` 抛 InvocationTargetException，
+        //    真因是枚举注解 type_name 写成 java.lang.Enum（见 TinyClassFileWriter.declaringJavaClass），
+        //    与 metadata 无关。枚举修好后 metadata 才能正常工作。
+        //  - metadata 描述的是业务类的函数表；壳类声明了同名同描述符的委托方法，
+        //    kotlin-reflect 按签名即可匹配，工具方法因此被识别为 suspend（参数表不含 Continuation）。
+        val classAnnotations = listOfNotNull(
+            runCatching { superClass.getAnnotation(Metadata::class.java) }.getOrNull()
+                ?.let(::toAnnotationValue),
+        )
         return TinyClassFileWriter.shellBytes(
             shellName = shellName,
             // D239：父类改为 McpToolsetSupport（三钩子来源），工具类只作委托目标

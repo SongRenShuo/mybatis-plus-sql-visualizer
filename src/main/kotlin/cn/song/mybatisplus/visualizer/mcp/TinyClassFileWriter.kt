@@ -46,6 +46,16 @@ internal object TinyClassFileWriter {
         val descriptor: String,
         val targetClassFqn: String,
         val annotations: List<AnnotationValue> = emptyList(),
+        /**
+         * 占位方法（D239 四轮）：方法体只有 `throw new UnsupportedOperationException()`。
+         *
+         * 为什么需要：壳类复制了业务类的 `kotlin.Metadata`，而 metadata 里描述的**每一个**成员
+         * 都必须在壳类里按签名找得到 Java 方法，否则 kotlin-reflect 在展开函数表时抛
+         * `KotlinReflectionInternalError: Could not compute caller for function: private final
+         * suspend fun executeExplain(...)`（真机 2026-11-19 18:01 逐壳类实证）→ 该 toolset 一个
+         * 工具都出不来。业务类的私有/内部辅助函数不会被平台当工具调用，故占位体抛异常即可。
+         */
+        val stub: Boolean = false,
     )
 
     /** 兼容旧签名：只生成「extends + 无参构造」的最小壳（无方法/无注解）。 */
@@ -105,12 +115,32 @@ internal object TinyClassFileWriter {
         val prepared = delegates.map { d ->
             val nameIdx = cp.utf8(d.name)
             val descIdx = cp.utf8(d.descriptor)
+            val body = ByteArrayOutputStream(64)
+            val o = DataOutputStream(body)
+            val paramWidth = jvmParameters(d.descriptor)
+                .fold(0) { acc, p -> acc + if (p == 'J' || p == 'D') 2 else 1 }
+            if (d.stub) {
+                // new UnsupportedOperationException(); athrow
+                val uoe = cp.classRef("java/lang/UnsupportedOperationException")
+                o.writeByte(0xbb) // new
+                o.writeShort(uoe)
+                o.writeByte(0x59) // dup
+                o.writeByte(0xb7) // invokespecial <init>()V
+                o.writeShort(cp.methodRef(uoe, cp.nameAndType(initName, cp.utf8("()V"))))
+                o.writeByte(0xbf) // athrow
+                return@map PreparedMethod(
+                    nameIdx = nameIdx,
+                    descIdx = descIdx,
+                    code = body.toByteArray(),
+                    maxStack = 2,
+                    maxLocals = 1 + paramWidth,
+                    annotations = buildAnnotations(cp, d.annotations),
+                )
+            }
             val targetClass = cp.classRef(d.targetClassFqn.replace('.', '/'))
             val targetInit = cp.methodRef(targetClass, cp.nameAndType(initName, cp.utf8("()V")))
             val targetCall = cp.methodRef(targetClass, cp.nameAndType(nameIdx, descIdx))
 
-            val body = ByteArrayOutputStream(64)
-            val o = DataOutputStream(body)
             o.writeByte(0xbb) // new
             o.writeShort(targetClass)
             o.writeByte(0x59) // dup
@@ -265,6 +295,19 @@ internal object TinyClassFileWriter {
                 out.writeByte('I'.code)
                 out.writeShort(cp.integer(value))
             }
+            // B/S/C 与 Z/I 一样用 CONSTANT_Integer 承载（class 文件规范），仅 tag 不同。
+            is Byte -> {
+                out.writeByte('B'.code)
+                out.writeShort(cp.integer(value.toInt()))
+            }
+            is Short -> {
+                out.writeByte('S'.code)
+                out.writeShort(cp.integer(value.toInt()))
+            }
+            is Char -> {
+                out.writeByte('C'.code)
+                out.writeShort(cp.integer(value.code))
+            }
             is List<*> -> {
                 out.writeByte('['.code)
                 out.writeShort(value.size)
@@ -289,8 +332,20 @@ internal object TinyClassFileWriter {
         }
     }
 
+    /**
+     * 枚举常量所属的枚举类。
+     *
+     * **不能从 `javaClass.enclosingClass ?: superclass` 推**（D239 真机 2026-11-19 定案）：
+     * 无类体的枚举常量 `javaClass` 就是枚举类本身，`enclosingClass` 为 null、`superclass` 是
+     * `java.lang.Enum`——按旧写法会把 type_name 写成 `Ljava/lang/Enum;`，而 JDK 的
+     * `AnnotationParser.parseEnumValue` 要求 class 文件里的枚举类型名与注解元素声明类型**逐字相等**，
+     * 不等即抛 AnnotationTypeMismatchException（真机原话：
+     * `Incorrectly typed data found for annotation element McpToolHints.readOnlyHint()
+     *  (Found data of type java.lang.Enum.TRUE)`）→ 整个 toolset 加载失败、工具全不出现。
+     * 带类体的常量（`javaClass` 是匿名子类）才回退到 `superclass`。
+     */
     private val Enum<*>.declaringJavaClass: Class<*>
-        get() = javaClass.enclosingClass?.takeIf { it.isEnum } ?: javaClass.superclass
+        get() = if (javaClass.isEnum) javaClass else javaClass.superclass
 
     /** 解析方法描述符参数类型（引用/数组统一归为 'L'，基本类型按原字符 'I'/'J'/'F'/'D'/'Z'…）。 */
     private fun jvmParameters(descriptor: String): List<Char> {

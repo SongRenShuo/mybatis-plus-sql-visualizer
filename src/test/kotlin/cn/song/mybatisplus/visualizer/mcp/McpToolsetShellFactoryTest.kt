@@ -2,6 +2,8 @@ package cn.song.mybatisplus.visualizer.mcp
 
 import cn.song.mybatisplus.visualizer.acp.SignatureDistroDiscovery
 import java.io.File
+import kotlin.jvm.kotlin
+import kotlin.reflect.full.declaredFunctions
 import java.net.JarURLConnection
 import java.net.URL
 import java.net.URLConnection
@@ -185,14 +187,105 @@ class McpToolsetShellFactoryTest {
         val ann = m.getAnnotation(com.intellij.mcpserver.annotations.McpTool::class.java)
         assertNotNull("委托方法应复制 @McpTool", ann)
         assertEquals("sqlv_check_sql", ann!!.name)
-        // D239 二轮：不复制 Metadata（复制业务类 metadata 会让 kotlin-reflect 解析失败、全部工具消失）
-        assertNull("壳类不复制 kotlin.Metadata（二轮定案）", shell.getAnnotation(Metadata::class.java))
+        // D239 三轮：必须复制 Metadata——没有它 kotlin-reflect 走 Java 视图，委托方法的
+        // Continuation 会当成普通参数，平台 CallableBridge 直接判不可序列化。
+        assertNotNull("壳类应复制 kotlin.Metadata（suspend 语义来源）", shell.getAnnotation(Metadata::class.java))
         // 委托目标可达：new 实例 + 调用转发方法（suspend 形态直接传 null Continuation 会 NPE，
         // 故只断言方法存在与注解正确，不做真实调用）
     }
 
-    /** 模拟工具基类：三钩子与业务方法全在此层（壳继承、不生成）。 */
-    open class FakeTool {
+    /**
+     * D239 三轮：壳类在 kotlin-reflect 眼里必须保留 **suspend 语义**。
+     *
+     * 真机 2026-11-19 17:37 实证：无 `kotlin.Metadata` 时 kotlin-reflect 走 Java 视图，
+     * 委托方法的 `Continuation` 被当成普通参数（`arg4`），平台 `CallableBridge.ensureSerializable`
+     * 直接抛 `Type kotlin.coroutines.Continuation<...> is not serializable` → toolset 加载失败。
+     * 本用例把那条真机失败条件钉在单测层。
+     */
+    @Test
+    fun `壳类工具方法在 kotlin-reflect 里保留 suspend 语义`() {
+        val shellName = "cn.song.mybatisplus.visualizer.mcp.gen.ProbeKt" + System.nanoTime()
+        val bytes = McpToolsetDynamicRegistrar.shellBytes(
+            SqlVisualizerCheckSqlTool::class.java,
+            FakeToolset::class.java,
+            shellName,
+        )
+        val shell = McpToolsetDynamicRegistrar.ShellClassLoader.define(shellName, bytes)
+        val fn = shell.kotlin.declaredFunctions.firstOrNull { it.name == "sqlv_check_sql" }
+        assertNotNull("kotlin-reflect 应能看到壳类自己声明的工具方法", fn)
+        assertTrue(
+            "工具方法必须被识别为 suspend（否则 Continuation 进参数表、平台序列化失败）",
+            fn!!.isSuspend,
+        )
+        assertTrue(
+            "参数表不得含 Continuation，实际：${fn.parameters.map { it.name }}",
+            fn.parameters.none { it.type.classifier == kotlin.coroutines.Continuation::class },
+        )
+    }
+
+    /**
+     * D239 三轮：**全部 11 个**壳类的工具方法都必须被 kotlin-reflect 认成 suspend。
+     *
+     * 真机 2026-11-19 17:47 实测：只有第一个 toolset 出工具，其余 10 个仍报
+     * `Continuation ... of parameter 'argN' is not serializable`——说明部分壳类的
+     * `kotlin.Metadata` 没能把委托方法解析成 Kotlin 函数。本用例逐个跑，失败时直接点名是哪个。
+     */
+    @Test
+    fun `全部壳类的工具方法都保留 suspend 语义`() {
+        val failures = mutableListOf<String>()
+        McpToolsetDynamicRegistrar.TOOL_CLASSES.forEachIndexed { index, toolClass ->
+            val shellName = "cn.song.mybatisplus.visualizer.mcp.gen.ProbeAll${index}_" + System.nanoTime()
+            val bytes = McpToolsetDynamicRegistrar.shellBytes(toolClass, FakeToolset::class.java, shellName)
+            val shell = McpToolsetDynamicRegistrar.ShellClassLoader.define(shellName, bytes)
+            val meta = shell.getAnnotation(Metadata::class.java)
+            val fn = runCatching { shell.kotlin.declaredFunctions }.getOrElse { e ->
+                failures.add("${toolClass.simpleName}: kotlin-reflect 抛 ${e.javaClass.simpleName}: ${e.message}")
+                return@forEachIndexed
+            }.firstOrNull { it.annotations.any { a -> a.annotationClass.simpleName == "McpTool" } }
+            if (meta == null) {
+                failures.add("${toolClass.simpleName}: 壳类没有 Metadata")
+            } else if (fn == null) {
+                failures.add(
+                    "${toolClass.simpleName}: kotlin-reflect 里找不到带 @McpTool 的函数，" +
+                        "declared=${runCatching { shell.kotlin.declaredFunctions.map { it.name } }.getOrNull()}",
+                )
+            } else if (!fn.isSuspend) {
+                failures.add(
+                    "${toolClass.simpleName}: ${fn.name} 未被识别为 suspend，" +
+                        "参数=${fn.parameters.map { it.name }}",
+                )
+            }
+        }
+        assertTrue("以下壳类的 suspend 语义丢失：\n" + failures.joinToString("\n"), failures.isEmpty())
+    }
+
+    /**
+     * D239 四轮：壳类必须覆盖业务类的**全部**方法签名。
+     *
+     * 复制的 metadata 描述了业务类全部成员，kotlin-reflect 展开函数表时逐个按签名找 Java 方法，
+     * 缺一个就抛 `KotlinReflectionInternalError: Could not compute caller for function`，
+     * 整个 toolset 归零（真机 2026-11-19 18:01 实证）。本用例按签名对账。
+     */
+    @Test
+    fun `壳类覆盖业务类全部方法签名`() {
+        val problems = mutableListOf<String>()
+        McpToolsetDynamicRegistrar.TOOL_CLASSES.forEachIndexed { index, toolClass ->
+            val shellName = "cn.song.mybatisplus.visualizer.mcp.gen.ProbeSig${index}_" + System.nanoTime()
+            val bytes = McpToolsetDynamicRegistrar.shellBytes(toolClass, FakeToolset::class.java, shellName)
+            val shell = McpToolsetDynamicRegistrar.ShellClassLoader.define(shellName, bytes)
+            val shellSigs = shell.declaredMethods.mapTo(HashSet()) { signatureOf(it) }
+            toolClass.declaredMethods
+                .filterNot { it.isSynthetic }
+                .filterNot { signatureOf(it) in shellSigs }
+                .forEach { problems.add("${toolClass.simpleName}: 缺 ${signatureOf(it)}") }
+        }
+        assertTrue("壳类缺少业务类方法签名：\n" + problems.joinToString("\n"), problems.isEmpty())
+    }
+
+    private fun signatureOf(m: java.lang.reflect.Method): String =
+        m.name + "(" + m.parameterTypes.joinToString(",") { it.name } + ")"
+
+    /** 模拟工具基类：三钩子与业务方法全在此层（壳继承、不生成）。 */    open class FakeTool {
         fun isEnabled(): Boolean = true
         fun isExperimental(): Boolean = false
         fun alwaysIncluded(): Boolean = false
@@ -226,8 +319,12 @@ class McpToolsetShellFactoryTest {
         assertTrue("三钩子继承可调（McpToolsetSupport 提供）", tool.isEnabled())
         assertTrue(!tool.isExperimental())
         assertTrue(!tool.alwaysIncluded())
-        // FakeTool 无 @McpTool 方法 → 不生成委托方法（壳类 declaredMethods 为 0）
-        assertEquals("无 @McpTool 方法时不生成委托", 0, shell.declaredMethods.size)
+        // FakeTool 无 @McpTool 方法 → 不生成委托；但业务方法要留占位（D239 四轮：复制的
+        // metadata 描述全部成员，缺一个 kotlin-reflect 就抛 Could not compute caller）。
+        // FakeTool 只声明了 business()（isEnabled 等三个钩子与基类同签名，被跳过）。
+        val declared = shell.declaredMethods.map { it.name }
+        assertTrue("无 @McpTool 时不应生成工具委托，实际：$declared", "sqlv_check_sql" !in declared)
+        assertTrue("业务方法应有占位，实际：$declared", "business" in declared)
     }
 
     /** F29 反向验证探针：同 FQN 二次 define 必 LinkageError（ShellClassLoader 单例、define 不可逆）——

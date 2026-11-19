@@ -1,6 +1,9 @@
 package cn.song.mybatisplus.visualizer.mcp
 
+import com.intellij.mcpserver.annotations.McpDescription
 import com.intellij.mcpserver.annotations.McpTool
+import com.intellij.mcpserver.annotations.McpToolHintValue
+import com.intellij.mcpserver.annotations.McpToolHints
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -102,8 +105,67 @@ class TinyClassFileWriterD239Test {
         assertEquals(1, meta!!.kind)
     }
 
-    /** 4：旧签名（无委托、无注解）仍可加载——回归保护，生产回退路径依赖它。 */
+    /**
+     * 4：枚举型注解元素（`@McpToolHints` 的 `McpToolHintValue`）与字符串注解（`@McpDescription`）可读。
+     *
+     * 真机 2026-11-19 定案：枚举 element_value 的 type_name 写成 `Ljava/lang/Enum;` 时，
+     * JDK `AnnotationParser.parseEnumValue` 抛
+     * `Incorrectly typed data found for annotation element McpToolHints.readOnlyHint()
+     *  (Found data of type java.lang.Enum.TRUE)`，整轮 toolset 加载失败、工具全不出现。
+     * 本用例就是那条缺陷的反向探针——读注解的那一刻就会炸，不必等真机。
+     */
     @Test
+    fun `枚举与字符串注解元素可被反射读取`() {
+        val fqn = "cn.song.mybatisplus.visualizer.mcp.gen.D239HintShell" + System.nanoTime()
+        val delegates = listOf(
+            TinyClassFileWriter.DelegateMethod(
+                name = "sqlv_check_sql",
+                descriptor = "(Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;",
+                targetClassFqn = SqlVisualizerCheckSqlTool::class.java.name,
+                annotations = listOf(
+                    TinyClassFileWriter.AnnotationValue(
+                        "Lcom/intellij/mcpserver/annotations/McpTool;",
+                        listOf("name" to "sqlv_check_sql", "title" to "probe title"),
+                    ),
+                    TinyClassFileWriter.AnnotationValue(
+                        "Lcom/intellij/mcpserver/annotations/McpDescription;",
+                        listOf("description" to "probe description"),
+                    ),
+                    TinyClassFileWriter.AnnotationValue(
+                        "Lcom/intellij/mcpserver/annotations/McpToolHints;",
+                        listOf(
+                            "readOnlyHint" to McpToolHintValue.TRUE,
+                            "destructiveHint" to McpToolHintValue.FALSE,
+                            "idempotentHint" to McpToolHintValue.UNSPECIFIED,
+                            "openWorldHint" to McpToolHintValue.UNSPECIFIED,
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val bytes = TinyClassFileWriter.shellBytes(
+            shellName = fqn,
+            superName = McpToolsetSupport::class.java.name,
+            ifaceName = D239FakeToolset::class.java.name,
+            superCtorArg = "sqlv_check_sql",
+            delegates = delegates,
+            classAnnotations = emptyList(),
+        )
+        val shell = McpToolsetDynamicRegistrar.ShellClassLoader.define(fqn, bytes)
+        val m = shell.declaredMethods.first { it.name == "sqlv_check_sql" }
+        assertEquals(
+            "probe description",
+            m.getAnnotation(McpDescription::class.java)?.description,
+        )
+        val hints = m.getAnnotation(McpToolHints::class.java)
+        assertNotNull("方法应带 @McpToolHints（读不到即枚举 type_name 编码错）", hints)
+        assertEquals(McpToolHintValue.TRUE, hints!!.readOnlyHint)
+        assertEquals(McpToolHintValue.FALSE, hints.destructiveHint)
+        assertEquals(McpToolHintValue.UNSPECIFIED, hints.idempotentHint)
+        assertEquals(McpToolHintValue.UNSPECIFIED, hints.openWorldHint)
+    }
+
+    /** 5：旧签名（无委托、无注解）仍可加载——回归保护，生产回退路径依赖它。 */    @Test
     fun `旧签名无参壳仍可加载`() {
         val legacyFqn = "cn.song.mybatisplus.visualizer.mcp.gen.D239LegacyShell" + System.nanoTime()
         val bytes = TinyClassFileWriter.shellBytes(
