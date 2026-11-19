@@ -1049,6 +1049,21 @@ expected 10 was 12）与分片 2（`SqlLogPanelFocusTabTest` expected 4 was 6）
 
 **Seen 1× (2026-11-19)**
 
+### L90 弹窗类测试打开后立即断言「异步填充的面板状态」会偶发空——断言前先轮询等条件成立
+
+**规则**：`awaitDialog()` 拿到弹窗 ≠ 弹窗内异步链路（警告横幅、摘要行、异步识别回填）已经跑完。
+`SqlStandalonePreviewPanelDialogTest.test在弹框中打开_未识别文本也弹窗` 在 `assertNotNull(dialog)` 之后
+**立即** `assertTrue(warning.isNotBlank())`，CI windows runner 上偶发 warning 尚未填充 → 假红
+（961 例只红这 1 例，同 src 在另一轮 run 44562342176 全绿）。判据：断言的是「最终会成立的状态」时，
+用带超时的轮询/await 断言，不用瞬时断言；判「打开动作本身」才允许 assertNotNull 后直读。
+**证据**：CI run 44567164326 首轮 `testShard4` 961 tests 1 failed（`AssertionFailedError` 于
+`SqlStandalonePreviewPanelDialogTest.kt:116`，warning 为空串）；`git diff 9dd35bb66 4596fa90b -- src/`
+为空（同代码在 run 44562342176 同分片全绿）→ 瞬态定性成立；`gh run rerun --failed` 后同 run 全绿。
+**正例**：失败先做同 src 跨 run 对照（前一轮全绿 ⇒ 瞬态），再 rerun-failed-jobs，不改代码不前移 tag。
+**反例**：看到红就怀疑新改动引入回归，去动生产代码或重排队列——本轮 src 与上一轮完全相同。
+
+**Seen 1× (2026-11-19)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
