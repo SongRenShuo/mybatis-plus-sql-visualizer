@@ -45,3 +45,18 @@
 - gradle 前先 `python C:/Users/USER/.zcode/cli/parallel_tasks.py check`，本任务 `register --name t-nplus1-aggregate --sandbox t-nplus1-aggregate`；跑完 `done --name t-nplus1-aggregate`（禁裸 done）。
 - 只跑定向测试（`--tests "<FQCN>"`），禁全量、禁构建校验、禁 clean、禁 `--stop`。
 - 报告须回答：定向读数、反向读数、提交哈希清单（按时间序）、收口时树是否干净。
+
+## §六 实施记录
+
+- **20261119 08:25～10:40（车道变更：子代理两度失败于并发/配额限额，主控接手收口）**：子代理已完成实现与测试落盘但未提交、未跑测试；主控审查后接手，修完下列五项后定向 14/14 全绿并提交 `cc8b2d960`（11 文件 666 行）。
+- **§三.1 前提证伪（子代理实测）**：徽章不在 rail 矩形上，而是元信息行 `headerLine` 的文本片段——实现改「片段 tag + `SimpleColoredComponent.getFragmentTagAt(x)` 片段级命中」，并用 `SqlTextFragment.tag` 透传（含 `clipSqlFragments` 裁剪保留 tag）。
+- **§二.3 形态选择**：过滤复用既有 `FocusTab.Template`（右键「只看同结构」同一过滤器），未另造过滤机制。
+- **主控接手修复清单（均为子代理未跑测试留下的真实缺陷）**：
+  1. `NplusOneAggregate.REGISTRY_KEY` 读取漏反引号 → `Registry.is` 是 Kotlin 关键字，编译失败；改 ```Registry.`is`(...)```。
+  2. 摘要断言硬编码英文文案（受测试 JVM locale 影响）→ 改 bundle 同源构造期望 + 参数前导前缀判据（跨语言稳健）。
+  3. 面板用例缺 EDT 泵：刷新拍重建链分批 `invokeLater` 追加模型，单拍刷新后模型仍空 → 加 `pumpEdtUntil` 轮询。
+  4. 条目匹配用引用相等（`===`）→ 刷新拍重建模型后实例不同，改值匹配（`restoredSql`+`timestamp`）。
+  5. 测试经 `list.cellRenderer` 取渲染器 → 平台包 `ExpandedItemListCellRendererWrapper`，cast 抛 CCE；面板补 `renderEntryForTest` 缝。**并用 `model` 里的实例渲染**（入队分发的 `#N` 序号影响 header 宽度，2px 偏差即命中失败——本轮最隐蔽的一条）。
+- **定向读数**：`NplusOneAggregateSummaryTest` 8/0/0/0；`SqlLogPanelNplusOneAggregateTest` 6/0/0/0（全量未跑＝not run）。
+- **反向验证**：摘掉 `tryEnterNplusOneAggregate` 内 `addFocusTab` 接线 → 点击进入/返回全部/Esc 三条恰红，回退开关/非徽章区/接线守卫三条保持绿（探针精度良好）；探针已还原，树干净。
+- 待办：真机 GUI 验收（用户）；`SqlLogPanel` 已 2900+ 行，本批新增逻辑已尽量外置到 `NplusOneAggregate.kt`/`NplusOneBadgeClick.kt` 两个小文件。
