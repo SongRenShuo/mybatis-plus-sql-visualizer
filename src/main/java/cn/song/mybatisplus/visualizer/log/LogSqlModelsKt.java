@@ -289,13 +289,22 @@ public final class LogSqlModelsKt {
                 existing.updateCount() != null ? existing.updateCount() : incoming.updateCount(),
                 existing.databaseName() != null ? existing.databaseName() : incoming.databaseName(),
                 existing.dialectName() != null ? existing.dialectName() : incoming.dialectName(),
-                existing.actualSql(), mergedProvenance(existing.captureProvenance(), incoming.captureProvenance()));
+                existing.actualSql(), mergedProvenance(existing.captureProvenance(), incoming.captureProvenance()),
+                // T-HdAbsorb D215：耗时档随融合升级——agent（EXECUTION）比控制台解析（APPROXIMATE）精确，
+                // 融合条目取更精确一侧；null 让位任意已知档。
+                mergedDurationKind(existing.durationKind(), incoming.durationKind()));
     }
 
     public static CaptureProvenance mergedProvenance(CaptureProvenance existing, CaptureProvenance incoming) {
         if (existing == CaptureProvenance.UNKNOWN) return incoming;
         if (incoming != CaptureProvenance.UNKNOWN && incoming != existing) return CaptureProvenance.MERGED;
         return existing;
+    }
+
+    /** D215：耗时档融合（EXECUTION > APPROXIMATE > null，融合语义与 mergedProvenance 同族）。 */
+    public static DurationKind mergedDurationKind(DurationKind existing, DurationKind incoming) {
+        if (existing == DurationKind.EXECUTION || incoming == DurationKind.EXECUTION) return DurationKind.EXECUTION;
+        return existing != null ? existing : incoming;
     }
 
     public static java.util.List<String> mergeUpgradedAspects(LogSqlEntry existing, LogSqlEntry merged) {

@@ -120,7 +120,13 @@ public record LogSqlEntry(
      */
     String actualSql,
     /** 捕获通道；旧条目和未打标的生产者保持 UNKNOWN。 */
-    CaptureProvenance captureProvenance
+    CaptureProvenance captureProvenance,
+    /**
+     * T-HdAbsorb D215：耗时测量来源分档（见 {@link DurationKind}）。agent 通道 = EXECUTION（经调试器
+     * 挂起补偿）；控制台日志回落 = APPROXIMATE（展示 {@code ~} 前缀）；null = 未知（历史读回 / 旧条目），
+     * 展示与既有行为逐字节一致。主构造字段——随 copy() 走（mergeDuplicateEntry 融合不丢档）。
+     */
+    DurationKind durationKind
 ) {
     /** 摘要最大长度。 */
     private static final int MAX_SUMMARY_LENGTH = 160;
@@ -435,7 +441,7 @@ public record LogSqlEntry(
                        String databaseName) {
         this(rawSql, restoredSql, params, timestamp, logTimestamp, summary, source, executionTimeMs,
             sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, null, sequenceNumber,
-            mapperStatement, errorText, requestTag, updateCount, databaseName, null, null, CaptureProvenance.UNKNOWN);
+            mapperStatement, errorText, requestTag, updateCount, databaseName, null, null, CaptureProvenance.UNKNOWN, null);
     }
 
     /** 保留新增归因前的完整构造签名（旧 20 参形态，旧生产者默认尚未归因）。 */
@@ -447,13 +453,13 @@ public record LogSqlEntry(
                        String databaseName, String actualSql) {
         this(rawSql, restoredSql, params, timestamp, logTimestamp, summary, source, executionTimeMs,
             sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, null, sequenceNumber,
-            mapperStatement, errorText, requestTag, updateCount, databaseName, null, actualSql, CaptureProvenance.UNKNOWN);
+            mapperStatement, errorText, requestTag, updateCount, databaseName, null, actualSql, CaptureProvenance.UNKNOWN, null);
     }
 
     /**
      * K2J 互操作：master 新增 {@code threadName}（T-StackBizFrame S3，声明序插在 stackDigest 与
      * sequenceNumber 之间）与 {@code dialectName}（T-DialectInferFix，插在 databaseName 与 actualSql
-     * 之间）取默认 null 的历史 21 参形态（Kotlin 默认参的 Java 等价），委托 23 参规范构造器。
+     * 之间）取默认 null 的历史 21 参形态（Kotlin 默认参的 Java 等价），委托 24 参规范构造器。
      */
     public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params, long timestamp,
                        Long logTimestamp, String summary, SqlSource source, Long executionTimeMs,
@@ -463,7 +469,25 @@ public record LogSqlEntry(
                        String databaseName, String actualSql, CaptureProvenance captureProvenance) {
         this(rawSql, restoredSql, params, timestamp, logTimestamp, summary, source, executionTimeMs,
             sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, null, sequenceNumber,
-            mapperStatement, errorText, requestTag, updateCount, databaseName, null, actualSql, captureProvenance);
+            mapperStatement, errorText, requestTag, updateCount, databaseName, null, actualSql, captureProvenance, null);
+    }
+
+    /**
+     * K2J 互操作：master 新增 {@code durationKind}（T-HdAbsorb D215，追加在 captureProvenance 之后，
+     * 默认 null）的历史 23 参形态（Kotlin 默认参的 Java 等价），委托 24 参规范构造器——
+     * 历史读回/解析链的既有全参构造点（SqlLogFileReader 等）档位 null=未知，展示零回归。
+     */
+    public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params, long timestamp,
+                       Long logTimestamp, String summary, SqlSource source, Long executionTimeMs,
+                       String sourceFile, int sourceLine, List<kotlin.Pair<String, Integer>> sourceCandidates,
+                       List<String> candidateClasses, String stackDigest, long sequenceNumber,
+                       String mapperStatement, String errorText, String requestTag, Long updateCount,
+                       String databaseName, String dialectName, String actualSql,
+                       CaptureProvenance captureProvenance) {
+        this(rawSql, restoredSql, params, timestamp, logTimestamp, summary, source, executionTimeMs,
+            sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, null, sequenceNumber,
+            mapperStatement, errorText, requestTag, updateCount, databaseName, dialectName, actualSql,
+            captureProvenance, null);
     }
 
     /** 仅原始/还原 SQL + 参数（其余取默认）。 */
@@ -499,55 +523,55 @@ public record LogSqlEntry(
     public LogSqlEntry withSequenceNumber(long newSequenceNumber) {
         return new LogSqlEntry(rawSql, restoredSql, params, timestamp, logTimestamp, summary, source,
             executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, threadName, newSequenceNumber,
-            mapperStatement, errorText, requestTag, updateCount, databaseName, dialectName, actualSql, captureProvenance);
+            mapperStatement, errorText, requestTag, updateCount, databaseName, dialectName, actualSql, captureProvenance, durationKind);
     }
 
     /** O-147：修订应用拷贝原语——rawSql 覆写（其余字段同 {@link #withSequenceNumber} 形态）。 */
     public LogSqlEntry withRawSql(String newRawSql) {
         return new LogSqlEntry(newRawSql, restoredSql, params, timestamp, logTimestamp, summary, source,
             executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, threadName, sequenceNumber,
-            mapperStatement, errorText, requestTag, updateCount, databaseName, dialectName, actualSql, captureProvenance);
+            mapperStatement, errorText, requestTag, updateCount, databaseName, dialectName, actualSql, captureProvenance, durationKind);
     }
 
     /** O-147：修订应用拷贝原语——restoredSql 覆写。 */
     public LogSqlEntry withRestoredSql(String newRestoredSql) {
         return new LogSqlEntry(rawSql, newRestoredSql, params, timestamp, logTimestamp, summary, source,
             executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, threadName, sequenceNumber,
-            mapperStatement, errorText, requestTag, updateCount, databaseName, dialectName, actualSql, captureProvenance);
+            mapperStatement, errorText, requestTag, updateCount, databaseName, dialectName, actualSql, captureProvenance, durationKind);
     }
 
     /** O-147：修订应用拷贝原语——params 覆写。 */
     public LogSqlEntry withParams(List<LogSqlParam> newParams) {
         return new LogSqlEntry(rawSql, restoredSql, newParams, timestamp, logTimestamp, summary, source,
             executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, threadName, sequenceNumber,
-            mapperStatement, errorText, requestTag, updateCount, databaseName, dialectName, actualSql, captureProvenance);
+            mapperStatement, errorText, requestTag, updateCount, databaseName, dialectName, actualSql, captureProvenance, durationKind);
     }
 
     /** O-147：修订应用拷贝原语——timestamp 覆写。 */
     public LogSqlEntry withTimestamp(long newTimestamp) {
         return new LogSqlEntry(rawSql, restoredSql, params, newTimestamp, logTimestamp, summary, source,
             executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, threadName, sequenceNumber,
-            mapperStatement, errorText, requestTag, updateCount, databaseName, dialectName, actualSql, captureProvenance);
+            mapperStatement, errorText, requestTag, updateCount, databaseName, dialectName, actualSql, captureProvenance, durationKind);
     }
 
     /** T-AgentLogTime：以本条为原型返回带日志原始时间的副本（copy(logTimestamp=…) 的 Java 等价）。 */
     public LogSqlEntry withLogTimestamp(Long newLogTimestamp) {
         return new LogSqlEntry(rawSql, restoredSql, params, timestamp, newLogTimestamp, summary, source,
             executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, threadName, sequenceNumber,
-            mapperStatement, errorText, requestTag, updateCount, databaseName, dialectName, actualSql, captureProvenance);
+            mapperStatement, errorText, requestTag, updateCount, databaseName, dialectName, actualSql, captureProvenance, durationKind);
     }
 
     /** T-M55-02：以本条为原型返回带执行报错的副本（copy(errorText=…) 的 Java 等价；缓冲错误反向绑定用）。 */
     public LogSqlEntry withErrorText(String newErrorText) {
         return new LogSqlEntry(rawSql, restoredSql, params, timestamp, logTimestamp, summary, source,
             executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, threadName, sequenceNumber,
-            mapperStatement, newErrorText, requestTag, updateCount, databaseName, dialectName, actualSql, captureProvenance);
+            mapperStatement, newErrorText, requestTag, updateCount, databaseName, dialectName, actualSql, captureProvenance, durationKind);
     }
 
     public LogSqlEntry withCaptureProvenance(CaptureProvenance provenance) {
         return new LogSqlEntry(rawSql, restoredSql, params, timestamp, logTimestamp, summary, source,
             executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, threadName, sequenceNumber,
-            mapperStatement, errorText, requestTag, updateCount, databaseName, dialectName, actualSql, provenance);
+            mapperStatement, errorText, requestTag, updateCount, databaseName, dialectName, actualSql, provenance, durationKind);
     }
 
     public CaptureProvenance getCaptureProvenance() {
