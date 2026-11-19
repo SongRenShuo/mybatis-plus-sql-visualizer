@@ -6,6 +6,7 @@ import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ReadAction;
 import com.intellij.openapi.progress.ProcessCanceledException;
 import com.intellij.openapi.progress.ProgressManager;
+import com.intellij.openapi.project.DumbService;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.roots.ProjectRootModificationTracker;
 import kotlin.Unit;
@@ -64,6 +65,11 @@ public class EntityClassFinder {
     /** 按表名查找实体类（须在 ReadAction 内调用——PSI 索引访问）。 */
     public List<PsiClass> find(String tableName) {
         if (tableName == null || tableName.isBlank()) return List.of();
+        // T-PerfSweep30 券02（02c）：dumb 态入口早退返回空列表——本方法覆盖的全部索引访问
+        // （快路径 PsiShortNamesCache.getClassName 三个点 + @TableName 反查全量扫描 + 库扫描
+        // 缓存回取 restoreMatched）在索引构建期都不可信，返回空列表即既有「无实体 → 字符串列名
+        // 回落」语义，不改扫描结构与缓存。
+        if (DumbService.isDumb(project)) return List.of();
         EntityResolver resolver = new EntityResolver();
         // 源码优先；库兜底只做候选名索引查询，不在反查热路径全扫 classpath。
         List<PsiClass> result = findByCandidateNames(tableName, resolver, GlobalSearchScope.projectScope(project));
@@ -125,6 +131,9 @@ public class EntityClassFinder {
     /** 四道闸：开关、本结构版本一次、冷却窗口、全局在途上限。 */
     private void requestLibrarySweep() {
         if (!isLibrarySweepEnabled()) return;
+        // T-PerfSweep30 券02（02c）：dumb 态不投递后台扫描（runLibrarySweepNow 内另有早退兜底，
+        // 此处先行拦下可避免白占「本版本已投递」登记）。
+        if (DumbService.isDumb(project)) return;
         if (!markSweepDispatched()) return;
         if (inFlightSweep.get() >= MAX_IN_FLIGHT_SWEEP) return;
         if (sweepDispatchForTest != null) {
@@ -194,6 +203,10 @@ public class EntityClassFinder {
 
     /** 全 classpath 唯一全量扫描，必须 BGT 调用，不可包外层 ReadAction。 */
     public int runLibrarySweepNow() {
+        // T-PerfSweep30 券02（02c）：dumb 态早退——短名清单与逐名检索（PsiShortNamesCache 两处）
+        // 都是索引访问。返回 -1（触顶语义：未扫完 → 不落缓存，调用方允许重投），smart 恢复后
+        // 重新投递即可，不改分片扫描结构与冷却窗口。
+        if (DumbService.isDumb(project)) return -1;
         long startedMs = sweepNow();
         long startedAt = projectStructureVersion();
         GlobalSearchScope scope = libraryScope();

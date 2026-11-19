@@ -8,6 +8,7 @@ import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.module.Module;
 import com.intellij.openapi.module.ModuleUtilCore;
 import com.intellij.openapi.progress.ProgressManager;
+import com.intellij.openapi.project.DumbService;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.roots.ProjectFileIndex;
 import com.intellij.openapi.util.Key;
@@ -62,6 +63,10 @@ public final class EntityClassResolver {
     public static @NotNull Resolution resolveWithAliasCandidates(@NotNull Project project, @NotNull String entityName,
             @Nullable PsiElement context, @NotNull Collection<PsiClass> aliasCandidates) {
         if (entityName.isBlank()) return new Resolution(null, List.of());
+        // T-PerfSweep30 券02（02c）：dumb 态入口早退——下方 findClasses / PsiShortNamesCache 均为
+        // 索引查询，索引构建期不可信（异常被 previewAsync 吞成 null）。返回空 Resolution 即既有
+        // 「实体不可解析」降级语义（调用方回落 task.* 形态），不改扫描结构与缓存。
+        if (DumbService.isDumb(project)) return new Resolution(null, List.of());
         ProgressManager.checkCanceled();
         Module module = contextModule(project, context);
         GlobalSearchScope scope = searchScope(project, context);
