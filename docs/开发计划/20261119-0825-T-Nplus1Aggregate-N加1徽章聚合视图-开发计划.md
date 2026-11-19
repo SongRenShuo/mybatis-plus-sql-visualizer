@@ -60,3 +60,4 @@
 - **定向读数**：`NplusOneAggregateSummaryTest` 8/0/0/0；`SqlLogPanelNplusOneAggregateTest` 6/0/0/0（全量未跑＝not run）。
 - **反向验证**：摘掉 `tryEnterNplusOneAggregate` 内 `addFocusTab` 接线 → 点击进入/返回全部/Esc 三条恰红，回退开关/非徽章区/接线守卫三条保持绿（探针精度良好）；探针已还原，树干净。
 - 待办：真机 GUI 验收（用户）；`SqlLogPanel` 已 2900+ 行，本批新增逻辑已尽量外置到 `NplusOneAggregate.kt`/`NplusOneBadgeClick.kt` 两个小文件。
+- **20261119 11:05 CI 红 → 修复（`846c66f3f`）**：合流推 master 后 run 44447731812 分片 1/2 各 1 红——`SqlLogPanelRequestFocusTest`（expected 10 was 12）与 `SqlLogPanelFocusTabTest`（expected 4 was 6）。根因：摘要 label 与「返回全部」按钮被无条件挂进 `focusTabBar`，而既有守卫按「前缀标签 + N chips + 计数标签」断言组件数。修法不改期望：新增 `nplusOneSummaryBar` 独立一行挂在页签栏之下，页签栏恢复原构成。复验 FocusTab 4/0/0/0 + RequestFocus 3/0/0/0 + Nplus1Panel 6/0/0/0 + Summary 8/0/0/0。教训入 `docs/LESSONS.md` L85（改共享容器必跑该容器既有守卫类）。
