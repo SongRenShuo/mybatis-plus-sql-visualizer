@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.model;
 
+import cn.song.mybatisplus.visualizer.sql.PreQuotedLiteral;
+
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -31,11 +33,15 @@ public final class FieldFillSimulation {
         if (value == null || value.isBlank() || hasForbiddenChar(value)) {
             return null;
         }
+        String trimmed = value.trim();
+        // T-PreQuotedLiteral：用户已手工加引号的值原样（放在安全闸门之后——分号/反斜杠拒绝语义不变）
+        if (!Boolean.FALSE.equals(quote) && PreQuotedLiteral.isComplete(trimmed)) {
+            return trimmed;
+        }
         if (Boolean.FALSE.equals(quote)) {
-            String trimmed = value.trim();
             return NUMBER.matcher(trimmed).matches() ? trimmed : null;
         }
-        return "'" + value.replace("'", "''") + "'";
+        return "'" + trimmed.replace("'", "''") + "'";
     }
 
     private static boolean hasForbiddenChar(String value) {

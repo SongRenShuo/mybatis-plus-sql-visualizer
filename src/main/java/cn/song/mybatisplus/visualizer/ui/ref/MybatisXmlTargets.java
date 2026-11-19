@@ -199,6 +199,10 @@ public final class MybatisXmlTargets {
         int lb = name.indexOf('[');
         if (lb >= 0) name = name.substring(0, lb);
         if (project == null || name.isEmpty()) return null;
+        // T-PerfSweep30 券02（02b）：dumb 闸**前移到方法入口**——原先闸在全部 findClass 之后，
+        // 索引构建期的前置 findClass（全限定名/import 表/同包）都在闸外裸跑。dumb 态返回 null
+        // （KDoc 语义「dumb 不报红」——引用本身是 soft）。
+        if (DumbService.isDumb(project)) return null;
         classResolveCount.incrementAndGet();
         JavaPsiFacade facade = JavaPsiFacade.getInstance(project);
         GlobalSearchScope scope = GlobalSearchScope.allScope(project);
@@ -240,10 +244,11 @@ public final class MybatisXmlTargets {
                 }
             }
         }
-        if (DumbService.isDumb(project)) return null;
         PsiClass[] classes = PsiShortNamesCache.getInstance(project).getClassesByName(shortName, scope);
         return classes.length > 0 ? classes[0] : null;
     }
+
+    /** 短名索引兜底（dumb 闸已前移到 {@link #resolveClass} 方法入口，此处直接查询）。 */
 
     /** {@code jdbcType="VARCHAR"} → {@code org.apache.ibatis.type.JdbcType} 的枚举常量字段。 */
     @Nullable
@@ -261,6 +266,9 @@ public final class MybatisXmlTargets {
     public static PsiMethod resolveInterfaceMethod(@Nullable Project project, @Nullable String namespace, String methodName) {
         String name = methodName.trim();
         if (project == null || namespace == null || namespace.isEmpty() || name.isEmpty()) return null;
+        // T-PerfSweep30 券02（02b）：裸 findClass 补 dumb 闸——消费点 MapperXmlToJava 的
+        // collectSlow/navigate 都在用户点击链上，dumb 态返回 null 走既有回退，不裸跑索引查询。
+        if (DumbService.isDumb(project)) return null;
         PsiClass iface = JavaPsiFacade.getInstance(project)
                 .findClass(namespace, GlobalSearchScope.allScope(project));
         if (iface == null) return null;
