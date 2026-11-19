@@ -239,6 +239,13 @@
              只认根标签 sqlMap（与上面 MyBatis 侧 mapper 索引互斥、不扩面）；正确性闸门在 PSI 侧精确匹配。 -->
         <fileBasedIndex
                 implementation="cn.song.mybatisplus.visualizer.xml.ibatis.SqlMapNamespaceIndex"/>
+        <!-- T-PerfSweep31 券01（2026-11-17）：iBatis <sqlMapConfig> 的 <typeAlias> 自定义标量索引——
+             旧链 IbatisTypeAliasResolver 首次调用对语句所在模块内容根做 VFS 全走查 + 逐 XML 建 PSI
+             （性能分析第八期 §4.3 P2），且 config 改动要重启会话才生效；本索引在索引期摊平两类键
+             （cfg / ta:<alias>），运行时一次 getContainingFiles 出候选文件，失效交平台增量。
+             只认根标签 sqlMapConfig（与 sqlMap/mapper 两索引互斥）；正确性闸门在 PSI 侧精确匹配。 -->
+        <fileBasedIndex
+                implementation="cn.song.mybatisplus.visualizer.xml.ibatis.SqlMapConfigAliasIndex"/>
         <!-- M10 gutter 预览图标：Wrapper 锚点行显示预览 SQL 图标（快速路径单元素 O(1) 判定，见 M10 开发计划 §2.4） -->
         <codeInsight.lineMarkerProvider language="JAVA"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.SqlGutterLineMarkerProvider"/>
@@ -517,6 +524,17 @@
              数据源时由执行链准备。置 true 回到"打开即准备"的旧行为。 -->
         <registryKey key="sqlvis.preview.eagerConsole" defaultValue="false"
                      description="Prepare the execution console eagerly when the preview opens (writes the mapped exec SQL file, which can put the project into dumb mode briefly). Disable to prepare the console on first execution instead."/>
+        <!-- T-SqlPreviewStandalone：主侧边栏是否挂载「SQL 预览」独立工作台 tab（粘贴 SQL/mapper XML
+             片段 → 识别 → 格式化/填值/复制/弹框）。关闭后 tab 不再挂载（重启后生效），预览弹窗与
+             语句入口不受影响。代码读取：log/SqlLogPanel.kt（STANDALONE_TAB_REGISTRY_KEY 文件级常量）。 -->
+        <registryKey key="sqlvis.preview.standaloneTab" defaultValue="true"
+                     description="Show the standalone SQL preview workbench tab in the main sidebar tool window (paste SQL or mapper XML fragments, then format / fill values / copy / open in dialog). Disable to remove the tab after a restart; statement-entry previews are unaffected."/>
+        <!-- T-StandaloneExecPhase2 D234：独立工作台「粘贴即体检」。默认开＝解析产物补填
+             perfWarnings（SqlPerfAnalyzer 同一规则引擎），内嵌面板既有性能建议行直接呈现；
+             关掉即回到不带体检的旧行为（回退通道）。代码读取：
+             ui/standalone/StandaloneSqlSourceResolver.PERF_CHECK_REGISTRY_KEY。 -->
+        <registryKey key="sqlvis.preview.standalonePerfCheck" defaultValue="true"
+                     description="Run static SQL perf checks on standalone-workbench paste input and show the advice via the existing perf-warning row. Disable to skip the check (legacy behavior)."/>
         <!-- T-IbatisXmlArrowCallerGate：iBatis `<sqlMap>` 语句行的跳转箭头是否要求「Java 侧真的存在
              调用点」。默认 true＝只有存在调用点才出箭头（改名/删调用后箭头消失，不制造点开必空的假图标）；
              false＝回到旧行为（无条件出箭头，目标留到点击时查）。回退通道，下一版删除。
@@ -529,6 +547,30 @@
              代码读取：ui/highlight/XmlSymbolNameIndexCache.REGISTRY_KEY。 -->
         <registryKey key="sqlvis.completion.nameIndexCache" defaultValue="true"
                      description="Cache the project-wide completion name list (cross-file sql-id refs and mybatis-config properties keys) in a per-project service invalidated by index state. Disable to rescan all XML files on every completion (legacy behavior)."/>
+        <!-- T-HdAbsorb D216：N+1 嫌疑判定（第一刀）。同模板计数达 minCount 判嫌疑并显示红色
+             「疑似 N+1」徽章；总开关关掉即回到只有「×N 同模板」计数徽章的旧行为（回退通道）。
+             代码读取：log/NplusOneSuspect.REGISTRY_KEY / THRESHOLD_KEY。 -->
+        <registryKey key="sqlvis.log.nplusOneSuspect" defaultValue="true"
+                     description="Show a red 'suspected N+1' badge on SQL-log entries whose parameterized template repeats at least minCount times in the current buffer. Disable to keep only the amber same-shape count badge (legacy behavior)."/>
+        <registryKey key="sqlvis.log.nplusOneSuspect.minCount" defaultValue="5"
+                     description="Minimum same-template count that marks an entry as a suspected N+1 (D216)."/>
+        <!-- T-Nplus1Aggregate D235：N+1 嫌疑徽章聚合视图（点开看全）。默认开：点击红色徽章进入
+             同结构过滤态（复用聚焦页签形态）+ 顶部聚合摘要行（条数/首末时间/线程，跨线程如实标注）；
+             关掉＝徽章纯行级（点击无过滤态，右键「只看同结构」不受影响）。
+             代码读取：log/NplusOneAggregate.REGISTRY_KEY。 -->
+        <registryKey key="sqlvis.log.nplusOneSuspect.aggregate" defaultValue="true"
+                     description="Enable the N+1 suspect badge aggregate view: clicking the red 'suspected N+1' badge filters the log list to that template's entries and shows a top summary line (count, first/last time, threads). Disable to keep badges row-level only (clicking does nothing; the right-click 'same shape' focus is unaffected)."/>
+        <!-- T-HdAbsorb D215：agent 耗时的调试器挂起补偿（吸收 Hibernate Debugger SuspensionLedger
+             思路）。默认开：断点挂起时段从 agent 耗时测量窗中扣减；关掉即原样墙钟（回退通道）。
+             代码读取：log/agent/DebuggerSuspendTracker.REGISTRY_KEY。 -->
+        <registryKey key="sqlvis.log.durationSuspendCompensation" defaultValue="true"
+                     description="Subtract debugger-suspend wall-clock overlaps from agent-measured SQL durations (breakpoint pauses inflate the wall clock). Disable to keep raw wall-clock durations."/>
+        <!-- T-McpGlobalBreakHardening：MCP 外部会话门控的过滤 EP 逃生开关。默认开＝按平台契约注册
+             过滤 provider；关掉即完全不注册（门控不生效，平台内置 MCP Server 不受影响）。
+             用途：万一平台再改过滤器契约，用户可只关这一项而不用卸载插件。
+             代码读取：mcp/McpGateFilterRegistrar.kt（McpGateFilterEpRegistrar.ESCAPE_REGISTRY_KEY）。 -->
+        <registryKey key="sqlvis.mcp.gateFilterEp" defaultValue="true"
+                     description="Register the MCP tool-filter extension that hides disabled SQL Visualizer tools from external MCP sessions. Disable to skip registration entirely (the gate stops working; the IDE's built-in MCP server is unaffected)."/>
     </extensions>
 
     <!-- T-M53：Kotlin plugin mode 声明——本插件只用 Kotlin PSI（gutter 标记），不涉及 Analysis API，
@@ -568,6 +610,19 @@
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
             <keyboard-shortcut keymap="$default" first-keystroke="alt shift J"/>
             <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta shift J"/>
+        </action>
+
+        <!-- T-SqlPreviewStandalone：打开 SQL 预览工作台（主侧边栏新 tab；粘贴 SQL/mapper XML 片段
+             → 识别 → 格式化/填值/复制/在弹框中打开）。Tools 菜单全局入口 + Alt+Shift+P
+             （Alt+Shift+Q/J 已被正反向转换占用；与既有动作同款双 keymap 登记，冲突可在 Keymap 改绑） -->
+        <action id="cn.song.mybatisplus.visualizer.OpenSqlPreview"
+                class="cn.song.mybatisplus.visualizer.actions.OpenSqlPreviewAction"
+                text="action.cn.song.mybatisplus.visualizer.OpenSqlPreview.text"
+                description="action.cn.song.mybatisplus.visualizer.OpenSqlPreview.description"
+                icon="/icons/sqlGutter.svg">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="alt shift P"/>
+            <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta shift P"/>
         </action>
 
         <!-- T-CrudSql：实体类右键生成 CRUD SQL（编辑器 + 项目视图；update 判定 MP 实体注解；
