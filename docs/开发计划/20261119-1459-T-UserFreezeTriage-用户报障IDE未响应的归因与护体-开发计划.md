@@ -223,3 +223,21 @@ waiting on EventQueue$1AWTInvocationLock
   平台型定向必须用 `./gradlew test --tests "<FQCN>"`；对平台类用 `testFast --tests` 会**静默不跑**
   （首轮只跑出守卫的 3 例，差点当成「定向就这么点」）。
 - **提交**：代码与测试 `7e470a9e4`；本计划 §八、P1 文档、索引与 CHANGELOG 随文档批提交。
+
+**CI 两轮（2026-11-19）**
+
+- **首轮 `44480349798`（head `a03fdf62d`）：两片 `fast` 各红 2 例，`test` 五片全绿。**
+  四条全是既有形态守卫对新代码的要求，不是功能回归：
+  1. `BannedApiScanRuleTest.update包派发平台卸载装载禁用any模态` —— `// write-safe:` 豁免只认
+     **调用行上方连续的注释块**；我把标注留在函数上方、`ModalityState.any()` 挪进了实参行，
+     标注不再覆盖该行；
+  2. `BannedApiScanRuleTest.catch_Throwable块必须判fatal` —— 新派发器里的 `catch (t: Throwable)`
+     缺 `FatalErrors.isFatal(t)` 原样上抛；
+  3. `GuardSelfTestCoverageMetaGuardTest` 两例 —— 新守卫类必须登记进 `GUARD_CLASSES`
+     （`decisionFns` + 自证语料）。
+  修法见 `7a8f8f26b`；本地补跑 `convention` 全包（`BannedApiScanRuleTest` 12/0、
+  `GuardSelfTestCoverageMetaGuardTest` 8/0、`EdtBoundedWaitGuardTest` 3/0）。
+- **二轮 `44482615053`（head `7a8f8f26b`）被并行车道取消**：同工作树里的 D238 提交
+  （`7fda9697f`）后推，GitHub 的并发组把在跑的一轮直接 cancel。
+- **权威读数 `44483331061`（head `7fda9697f`，含本批全部提交）：8/8 success**
+  （`fast` ×2、`test` ×5、`nightly-nudge`）。

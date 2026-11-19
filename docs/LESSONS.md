@@ -984,6 +984,28 @@ expected 10 was 12）与分片 2（`SqlLogPanelFocusTabTest` expected 4 was 6）
 
 **Seen 1× (2026-11-19)**
 
+### L87 新写「catch(Throwable) + 守卫类」会同时踩三条元守卫——定向清单必须带 convention 全包
+
+**规则**：往 `src/main` 新增这些形态时，改完先跑一次
+`./gradlew testFast --tests "cn.song.mybatisplus.visualizer.convention.*"`（秒级）再跑自建类：
+
+1. 任何 `catch (…: Throwable)` → 块内要么 `FatalErrors.isFatal(t)` 原样上抛，要么在
+   `BannedApiScanRuleTest.throwableCatchExemptions` 登记理由；
+2. 新增 `*Offenders`/`*Sites` 形状的守卫类 → 同时登记 `GuardSelfTestCoverageMetaGuardTest.GUARD_CLASSES`
+   （`decisionFns` + 自证语料说明），否则「未登记守卫类」与「未逐条登记的判定函数」两例同红；
+3. 往 `update` 包塞 `ModalityState.any()` → `// write-safe: <理由>` 必须紧贴那行上方
+   （豁免只认**调用行向上连续的注释块**，标注写在函数头上、`any()` 在实参行里等于没写）。
+
+**证据**：T-UserFreezeTriage（2026-11-19）本地定向 13/0/0/0 全绿，推 master 后 CI run **44480349798**
+两片 `fast` 各红 2 例，正是上面三条（`BannedApiScanRuleTest` 2 例 + `GuardSelfTestCoverageMetaGuardTest`
+2 例），`test` 五片全绿——功能没坏，全是形态口径。修法 `7a8f8f26b` 后 run **44483331061** 8/8 绿。
+
+**正例**：新类落地前先把 convention 全包跑一遍（43 类、秒级）；把「新增文件类型」和「会触发哪条元守卫」
+当成清单项写进实施步骤。
+**反例**：只跑自己新写的三个测试类就推 master——本地全绿与 CI 全红可以同时成立。
+
+**Seen 1× (2026-11-19)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
