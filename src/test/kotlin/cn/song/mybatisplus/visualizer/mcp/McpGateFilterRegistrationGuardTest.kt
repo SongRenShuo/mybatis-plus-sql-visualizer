@@ -77,12 +77,50 @@ class McpGateFilterRegistrationGuardTest {
         assertTrue("形态 A 入口在册（Java 等价：case \"applyFilters\":）", src.contains("case \"applyFilters\":"))
         assertTrue("形态 B 入口在册（261，Java 等价：case \"getFilters\":）", src.contains("case \"getFilters\":"))
         assertTrue(
+            "未知方法必须通知熔断层（只兜底不摘除会留下后续调用；Java 等价：onUnknown.accept(signatureOf(method))）",
+            src.contains("onUnknown.accept(signatureOf(method))"),
+        )
+        assertTrue(
             "未知方法必须按返回类型兜底（Java 等价：getReturnType()）",
             src.contains("defaultValueFor(method.getReturnType())"),
         )
         assertTrue(
             "形态 B 两段接口必须以字符串出现（类型引用会重新触发审核拒绝）",
             src.contains("McpToolFilterProvider\$McpToolFilter"),
+        )
+    }
+
+    // ---- T-McpGlobalBreakHardening（20261118）：白名单 / 熔断 / 总开关联动 ---------------
+    // k2j 适配：生产源为 Java 且 EpRegistrar/Controller 拆为独立文件——锚点按 Java 文本逐条改写，
+    // 三文件分读（Registrar 入口 / EpRegistrar 注册面 / RegistrationController 同步面）。
+
+    @Test
+    fun `白名单否决未知契约在册`() {
+        val src = File("src/main/java/cn/song/mybatisplus/visualizer/mcp/McpGateFilterEpBridge.java").readText()
+        assertTrue("探测必须先枚举白名单外方法", src.contains("unknownContractMethods"))
+        assertTrue("未知方法必须否决（非空即 UNKNOWN）", src.contains("unknownContractMethods(iface).isEmpty()"))
+        assertTrue("suspend 必须否决", src.contains("isSuspendLike"))
+        assertTrue("熔断必须真的从 EP 摘除", src.contains("unregisterExtension"))
+    }
+
+    @Test
+    fun `总开关与逃生开关联动在册`() {
+        val controllerSrc =
+            File("src/main/java/cn/song/mybatisplus/visualizer/mcp/McpGateRegistrationController.java").readText()
+        assertTrue("总开关关闭不得注册过滤 EP（controller.sync 面）", controllerSrc.contains("McpToolGate.isMasterEnabled()"))
+        assertTrue("总开关关闭必须摘除 toolset", controllerSrc.contains("McpToolsetDynamicRegistrar.unregisterAll()"))
+        assertTrue("设置变更后必须重新同步", controllerSrc.contains("SETTINGS_CHANGE_TOPIC"))
+        val epRegistrarSrc =
+            File("src/main/java/cn/song/mybatisplus/visualizer/mcp/McpGateFilterEpRegistrar.java").readText()
+        assertTrue(
+            "过滤 EP 注册面自己也要判总开关（只靠 controller 判＝拆掉这里后仍会注册，20261118 反向验证实测 0 红）",
+            epRegistrarSrc.contains("McpToolGate.isMasterEnabled()"),
+        )
+        assertTrue("逃生开关在册", epRegistrarSrc.contains(McpGateFilterEpRegistrar.ESCAPE_REGISTRY_KEY))
+        val pluginXml = File("src/main/resources/META-INF/plugin.xml").readText()
+        assertTrue(
+            "逃生开关必须在 plugin.xml 声明默认值（未声明时 Registry.get 取不到，逃生通道静默失效）",
+            pluginXml.contains(McpGateFilterEpRegistrar.ESCAPE_REGISTRY_KEY),
         )
     }
 }
