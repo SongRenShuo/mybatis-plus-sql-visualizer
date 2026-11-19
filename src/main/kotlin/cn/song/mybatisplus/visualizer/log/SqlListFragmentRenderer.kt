@@ -67,8 +67,17 @@ internal fun displaySqlForList(entry: LogSqlEntry, mode: SqlListDisplayMode, mas
 /** 不包含任何主题属性的词法片段，可安全存于条目缓存；空白 token 同样保留。 */
 data class SqlSemanticFragment(val text: String, val tokenType: IElementType)
 
-/** 列表组件可直接 append 的当前 scheme 着色片段；仅为一次渲染的临时投影。 */
-data class SqlTextFragment(val text: String, val attributes: SimpleTextAttributes)
+/**
+ * 列表组件可直接 append 的当前 scheme 着色片段；仅为一次渲染的临时投影。
+ *
+ * [tag]：D235 透传给 `SimpleColoredComponent.append(text, attributes, tag)` 的片段标记
+ * （当前仅 N+1 嫌疑徽章点击命中判定使用，[NPLUS_ONE_BADGE_TAG]；null = 无标记）。
+ */
+data class SqlTextFragment(
+    val text: String,
+    val attributes: SimpleTextAttributes,
+    val tag: Any? = null,
+)
 
 /** 分词/分行只做一次；每次绘制用当前 scheme 将语义缓存投影为组件属性。 */
 object SqlListFragmentRenderer {
