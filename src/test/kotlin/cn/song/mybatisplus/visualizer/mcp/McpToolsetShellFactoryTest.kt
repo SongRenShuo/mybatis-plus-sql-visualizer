@@ -12,6 +12,7 @@ import java.util.jar.JarEntry
 import java.util.jar.JarOutputStream
 import java.util.jar.JarFile
 import org.junit.Assume.assumeTrue
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
@@ -162,6 +163,33 @@ class McpToolsetShellFactoryTest {
     /** 模拟平台 McpToolset 接口（空标记接口即可，壳 implements 的类型解析只要求可达）。 */
     interface FakeToolset
 
+    /**
+     * D239：真实工具类（带 `@McpTool` 方法）作为委托源时，壳类必须
+     * ①自己声明同名方法 ②复制方法注解 ③复制 class 级 `kotlin.Metadata`。
+     *
+     * 这是真机「只列前 1~3 个工具」的修复点：旧零成员壳类在 kotlin-reflect 眼里
+     * `declared=0 / kotlinMeta=false`，平台扫不到工具方法 → 展开失败 → 遍历中断。
+     */
+    @Test
+    fun `带注解的工具方法生成委托并复制注解与元数据`() {
+        val shellName = "cn.song.mybatisplus.visualizer.mcp.gen.Probe" + System.nanoTime()
+        val bytes = McpToolsetDynamicRegistrar.shellBytes(
+            SqlVisualizerCheckSqlTool::class.java,
+            FakeToolset::class.java,
+            shellName,
+        )
+        val shell = McpToolsetDynamicRegistrar.ShellClassLoader.define(shellName, bytes)
+        val declared = shell.declaredMethods.map { it.name }
+        assertTrue("壳类应声明 sqlv_check_sql，实际：$declared", "sqlv_check_sql" in declared)
+        val m = shell.declaredMethods.first { it.name == "sqlv_check_sql" }
+        val ann = m.getAnnotation(com.intellij.mcpserver.annotations.McpTool::class.java)
+        assertNotNull("委托方法应复制 @McpTool", ann)
+        assertEquals("sqlv_check_sql", ann!!.name)
+        assertNotNull("class 应复制 kotlin.Metadata", shell.getAnnotation(Metadata::class.java))
+        // 委托目标可达：new 实例 + 调用转发方法（suspend 形态直接传 null Continuation 会 NPE，
+        // 故只断言方法存在与注解正确，不做真实调用）
+    }
+
     /** 模拟工具基类：三钩子与业务方法全在此层（壳继承、不生成）。 */
     open class FakeTool {
         fun isEnabled(): Boolean = true
@@ -184,19 +212,21 @@ class McpToolsetShellFactoryTest {
         assertEquals("壳类字节码版本应为 major 61（Java 17）", 61, major)
 
         val shell = McpToolsetDynamicRegistrar.ShellClassLoader.define(shellName, bytes)
-        assertEquals("壳 extends 业务类（工具方法/三钩子全继承）", FakeTool::class.java, shell.superclass)
+        // D239：壳类父类改为 McpToolsetSupport（三钩子来源）；工具类只作委托目标，不再被继承
+        assertEquals("壳 extends McpToolsetSupport（D239 形态）", McpToolsetSupport::class.java, shell.superclass)
         assertTrue(
             "壳 implements 指定接口",
             shell.interfaces.any { it.name == FakeToolset::class.java.name },
         )
         assertTrue("simpleName 应以业务类名开头（唯一后缀为防重 define），实际 ${shell.simpleName}", shell.simpleName.startsWith("FakeTool"))
 
-        val instance = shell.getDeclaredConstructor().newInstance()
-        val tool = instance as FakeTool
-        assertTrue("三钩子继承可调（接口实现由继承满足）", tool.isEnabled())
+        val instance = shell.getDeclaredConstructor(String::class.java).newInstance("fake_tool")
+        val tool = instance as McpToolsetSupport
+        assertTrue("三钩子继承可调（McpToolsetSupport 提供）", tool.isEnabled())
         assertTrue(!tool.isExperimental())
         assertTrue(!tool.alwaysIncluded())
-        assertEquals("业务方法继承可调", "ok", tool.business())
+        // FakeTool 无 @McpTool 方法 → 不生成委托方法（壳类 declaredMethods 为 0）
+        assertEquals("无 @McpTool 方法时不生成委托", 0, shell.declaredMethods.size)
     }
 
     /** F29 反向验证探针：同 FQN 二次 define 必 LinkageError（ShellClassLoader 单例、define 不可逆）——

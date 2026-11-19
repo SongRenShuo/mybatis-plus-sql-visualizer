@@ -1,0 +1,137 @@
+package cn.song.mybatisplus.visualizer.mcp
+
+import com.intellij.mcpserver.annotations.McpTool
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * D239：壳类字节码生成器扩「方法 + 注解」的原语单测（无平台 EP 依赖，纯类加载验证）。
+ *
+ * 钉住三件事（真机 2026-11-19 定案：旧壳类 `declared=0 / kotlinMeta=false` 导致平台扫描不到
+ * `@McpTool` 方法、`requireAnyTool` 抛异常打断 toolset 遍历，工具清单只列前 1~3 个）：
+ *  1. 委托方法真的出现在壳类 `declaredMethods` 里（`declared` 不再为 0）；
+ *  2. 方法级注解能被反射读到（`@McpTool` 的 name 逐字一致）；
+ *  3. class 级注解（`kotlin.Metadata`）能被读到（kotlin-reflect 才肯把它当 Kotlin 类解析）。
+ *
+ * 壳形态与生产一致：`final class X extends McpToolsetSupport implements McpToolset`，
+ * 唯一差异是 iface 用 mcpStub 源集里的桩接口（测试环境无平台 mcpserver jar）。
+ */
+/**
+ * D239 测试用假 toolset 接口。
+ *
+ * 为什么不用真 `com.intellij.mcpserver.McpToolset`：桩源集（src/mcpStub）只提供注解与少数类型，
+ * **没有 McpToolset 接口**（生产运行期由平台 mcpserver 插件提供，测试运行期不存在）→ 壳类
+ * defineClass 解析接口即 `NoClassDefFoundError`。既有 `McpToolsetShellFactoryTest` 同样用假接口。
+ */
+interface D239FakeToolset
+
+class TinyClassFileWriterD239Test {
+
+    // ShellClassLoader 是单例 object：同一 FQN 二次 define 会抛 duplicate class definition，
+    // 故每个用例用独立壳名（define 不可撤销）。
+    private val shellFqn = "cn.song.mybatisplus.visualizer.mcp.gen.D239ProbeShell" + System.nanoTime()
+
+    private fun buildShell(
+        withDelegate: Boolean = true,
+        withClassAnnotation: Boolean = true,
+    ): Class<*> {
+        val delegates = if (!withDelegate) emptyList() else listOf(
+            TinyClassFileWriter.DelegateMethod(
+                name = "sqlv_check_sql",
+                // suspend fun sqlv_check_sql(sql: String): String 的 JVM 形态
+                descriptor = "(Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;",
+                targetClassFqn = SqlVisualizerCheckSqlTool::class.java.name,
+                annotations = listOf(
+                    TinyClassFileWriter.AnnotationValue(
+                        "Lcom/intellij/mcpserver/annotations/McpTool;",
+                        listOf("name" to "sqlv_check_sql", "title" to "probe title"),
+                    ),
+                ),
+            ),
+        )
+        val classAnnotations = if (!withClassAnnotation) emptyList() else listOf(
+            TinyClassFileWriter.AnnotationValue(
+                "Lkotlin/Metadata;",
+                listOf("k" to 1, "mv" to listOf(1, 9, 0), "d1" to listOf(""), "d2" to listOf("")),
+            ),
+        )
+        val bytes = TinyClassFileWriter.shellBytes(
+            shellName = shellFqn,
+            superName = McpToolsetSupport::class.java.name,
+            ifaceName = D239FakeToolset::class.java.name,
+            superCtorArg = "sqlv_check_sql",
+            delegates = delegates,
+            classAnnotations = classAnnotations,
+        )
+        return McpToolsetDynamicRegistrar.ShellClassLoader.define(shellFqn, bytes)
+    }
+
+    /** 1：委托方法出现在 declaredMethods（D239 的核心诉求——declared 必须非 0）。 */
+    @Test
+    fun `委托方法出现在壳类 declaredMethods`() {
+        val shell = buildShell()
+        val declared = shell.declaredMethods.map { it.name }
+        assertTrue("壳类应自己声明 sqlv_check_sql，实际：$declared", "sqlv_check_sql" in declared)
+        val m = shell.declaredMethods.first { it.name == "sqlv_check_sql" }
+        assertEquals(
+            "描述符应与父类 suspend 形态一致",
+            "(Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;",
+            jvmDescriptorOf(m),
+        )
+    }
+
+    /** 2：方法级注解可读且参数一致。 */
+    @Test
+    fun `方法注解可被反射读取`() {
+        val shell = buildShell()
+        val m = shell.declaredMethods.first { it.name == "sqlv_check_sql" }
+        val ann = m.getAnnotation(McpTool::class.java)
+        assertNotNull("方法应带 @McpTool，实际注解：${m.annotations.toList()}", ann)
+        assertEquals("sqlv_check_sql", ann!!.name)
+        assertEquals("probe title", ann.title)
+    }
+
+    /** 3：class 级 kotlin.Metadata 可读（kotlin-reflect 认它是 Kotlin 类的前提）。 */
+    @Test
+    fun `class 级 Metadata 注解可被读取`() {
+        val shell = buildShell()
+        val meta = shell.getAnnotation(Metadata::class.java)
+        assertNotNull("壳类应带 kotlin.Metadata", meta)
+        assertEquals(1, meta!!.kind)
+    }
+
+    /** 4：旧签名（无委托、无注解）仍可加载——回归保护，生产回退路径依赖它。 */
+    @Test
+    fun `旧签名无参壳仍可加载`() {
+        val legacyFqn = "cn.song.mybatisplus.visualizer.mcp.gen.D239LegacyShell" + System.nanoTime()
+        val bytes = TinyClassFileWriter.shellBytes(
+            legacyFqn,
+            SqlVisualizerCheckSqlTool::class.java.name,
+            D239FakeToolset::class.java.name,
+        )
+        val shell = McpToolsetDynamicRegistrar.ShellClassLoader.define(legacyFqn, bytes)
+        assertEquals(SqlVisualizerCheckSqlTool::class.java, shell.superclass)
+        assertEquals(0, shell.declaredMethods.size)
+    }
+
+    private fun jvmDescriptorOf(m: java.lang.reflect.Method): String {
+        val params = m.parameterTypes.joinToString("") { t -> descriptorOf(t) }
+        return "($params)${descriptorOf(m.returnType)}"
+    }
+
+    private fun descriptorOf(t: Class<*>): String = when {
+        t == Void.TYPE -> "V"
+        t == java.lang.Boolean.TYPE -> "Z"
+        t == java.lang.Byte.TYPE -> "B"
+        t == Character.TYPE -> "C"
+        t == java.lang.Short.TYPE -> "S"
+        t == Integer.TYPE -> "I"
+        t == java.lang.Long.TYPE -> "J"
+        t == java.lang.Float.TYPE -> "F"
+        t == java.lang.Double.TYPE -> "D"
+        t.isArray -> "[" + descriptorOf(t.componentType)
+        else -> "L" + t.name.replace('.', '/') + ";"
+    }
+}

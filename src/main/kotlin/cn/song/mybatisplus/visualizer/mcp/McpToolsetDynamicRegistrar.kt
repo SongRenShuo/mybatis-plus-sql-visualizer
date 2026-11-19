@@ -51,6 +51,9 @@ object McpToolsetDynamicRegistrar {
 
     private const val TOOLSET_EP_NAME = "com.intellij.mcpServer.mcpToolset"
 
+    /** D239：平台工具方法注解 FQN（字符串比对，避免编译期硬绑平台 API）。 */
+    private const val MCP_TOOL_ANNOTATION_FQN = "com.intellij.mcpserver.annotations.McpTool"
+
     /** 壳类包前缀（T-McpToolNaming：simpleName 与业务类一致、落 gen 子包避免 classloader 歧义）。 */
     private const val SHELL_PACKAGE_PREFIX = "cn.song.mybatisplus.visualizer.mcp.gen."
 
@@ -200,6 +203,17 @@ object McpToolsetDynamicRegistrar {
     internal fun registerToolsetForTest(toolClass: Class<*>, toolsetIface: Class<*>, shellName: String) =
         registerToolset(toolClass, toolsetIface, shellName)
 
+    /**
+     * D239：壳类形态改造——`final class <Shell> extends McpToolsetSupport implements McpToolset`，
+     * **自己声明工具方法**（委托体转发到原工具类）+ 复制方法注解 + 复制 class 级 `kotlin.Metadata`。
+     *
+     * 为什么不再「extends 工具类、零成员」：真机 2026-11-19 定案，零成员壳类在 kotlin-reflect 眼里
+     * `declared=0 / kotlinMeta=false`，平台扫不到 `@McpTool` 方法 → `requireAnyTool` 抛异常打断
+     * toolset 遍历 → 工具清单只列前 1~3 个（详见 D238/D239 册）。
+     *
+     * 委托而非 override：工具方法是 Kotlin `suspend fun`（默认 final）不可覆写；壳类与工具类分属
+     * 两条继承链，壳类声明同名同描述符方法、方法体 `new 工具类()` + `invokevirtual` 转发即可。
+     */
     private fun registerToolset(toolClass: Class<*>, toolsetIface: Class<*>, shellName: String) {
         require(toolClass.constructors.any { it.parameterTypes.isEmpty() }) {
             "toolset 类必须有无参构造（壳生成依赖）：${toolClass.name}"
@@ -208,20 +222,100 @@ object McpToolsetDynamicRegistrar {
         val shellClass = definedShells.getOrPut(shellName) {
             ShellClassLoader.define(shellName, shellBytes(toolClass, toolsetIface, shellName))
         }
-        val instance = shellClass.getDeclaredConstructor().newInstance()
+        // D239：带参构造器形态（extends McpToolsetSupport，传入工具名做门控比对）
+        val instance = shellClass.getDeclaredConstructor(String::class.java)
+            .newInstance(toolsetCtorArg(toolClass))
         ExtensionPointName.create<Any>(TOOLSET_EP_NAME).getPoint(null).registerExtension(instance)
         epRegistered.add(shellName)
         registeredInstances[shellName] = instance
         LOG.info("T-McpDynamicToolset: registered ${shellClass.simpleName} (gen shell of ${toolClass.name})")
     }
 
-    /** 壳类字节码：`final class <ShellName> extends <工具类> implements McpToolset`——
-     *  仅一个无参构造器（invokespecial 父类构造）。工具方法/三钩子全部继承，壳零额外成员。
-     *  V17（major 61）：243 JBR 21 可加载，且与插件常规编译目标一致。
-     *  生成器为 [TinyClassFileWriter] 手写字节码（真机 ASM 不可达修复，见其 KDoc），零外部依赖。
-     *  internal 供壳生成器单测直接触达。 */
-    internal fun shellBytes(superClass: Class<*>, iface: Class<*>, shellName: String): ByteArray =
-        TinyClassFileWriter.shellBytes(shellName, superClass.name, iface.name)
+    /** 工具名（McpToolsetSupport 的构造参数）：取该 toolset 里带 @McpTool 的方法名，兜底用类名。 */
+    private fun toolsetCtorArg(toolClass: Class<*>): String =
+        toolMethods(toolClass).firstOrNull()?.name ?: toolClass.simpleName
+
+    /** toolset 里带 `@McpTool` 注解的方法（注解类用字符串比对，避免编译期硬绑平台 API）。 */
+    private fun toolMethods(toolClass: Class<*>): List<java.lang.reflect.Method> =
+        toolClass.declaredMethods.filter { m ->
+            m.annotations.any { it.annotationClass.java.name == MCP_TOOL_ANNOTATION_FQN }
+        }
+
+    /** 注解实例 → 可编码的注解描述（元素全部按反射读实值，避免手写参数表）。 */
+    private fun toAnnotationValue(ann: Annotation): TinyClassFileWriter.AnnotationValue {
+        val type = ann.annotationClass.java
+        val elements = type.declaredMethods.mapNotNull { m ->
+            runCatching {
+                m.isAccessible = true
+                m.name to encodeAnnotationValue(m.invoke(ann))
+            }.getOrNull()
+        }
+        return TinyClassFileWriter.AnnotationValue(
+            typeDescriptor = "L" + type.name.replace('.', '/') + ";",
+            elements = elements,
+        )
+    }
+
+    private fun encodeAnnotationValue(value: Any?): Any = when (value) {
+        null -> ""
+        is String, is Int, is Boolean -> value
+        is Enum<*> -> value
+        is Class<*> -> value
+        is Array<*> -> value.map { encodeAnnotationValue(it) }
+        is List<*> -> value.map { encodeAnnotationValue(it) }
+        else -> value.toString()
+    }
+
+    private fun descriptorOf(t: Class<*>): String = when {
+        t == Void.TYPE -> "V"
+        t == java.lang.Boolean.TYPE -> "Z"
+        t == java.lang.Byte.TYPE -> "B"
+        t == Character.TYPE -> "C"
+        t == java.lang.Short.TYPE -> "S"
+        t == Integer.TYPE -> "I"
+        t == java.lang.Long.TYPE -> "J"
+        t == java.lang.Float.TYPE -> "F"
+        t == java.lang.Double.TYPE -> "D"
+        t.isArray -> "[" + descriptorOf(t.componentType)
+        else -> "L" + t.name.replace('.', '/') + ";"
+    }
+
+    private fun methodDescriptor(m: java.lang.reflect.Method): String =
+        "(" + m.parameterTypes.joinToString("") { descriptorOf(it) } + ")" + descriptorOf(m.returnType)
+
+    /**
+     * 壳类字节码（D239 形态）：`final class <Shell> extends McpToolsetSupport implements McpToolset`，
+     * 构造器为 `(String toolName)`；每个带 `@McpTool` 的工具方法在壳类里声明为同描述符的委托方法，
+     * 并复制该方法上的全部注解；class 上复制工具类的 `kotlin.Metadata`。
+     *
+     * 版本 V17（major 61）：243 JBR 21 可加载，且与插件常规编译目标一致。
+     * 生成器为 [TinyClassFileWriter] 手写字节码（真机 ASM 不可达修复，见其 KDoc），零外部依赖。
+     * internal 供壳生成器单测直接触达。
+     */
+    internal fun shellBytes(superClass: Class<*>, iface: Class<*>, shellName: String): ByteArray {
+        val methods = toolMethods(superClass)
+        val delegates = methods.map { m ->
+            TinyClassFileWriter.DelegateMethod(
+                name = m.name,
+                descriptor = methodDescriptor(m),
+                targetClassFqn = superClass.name,
+                annotations = m.annotations.map(::toAnnotationValue),
+            )
+        }
+        val classAnnotations = listOfNotNull(
+            runCatching { superClass.getAnnotation(Metadata::class.java) }.getOrNull()
+                ?.let(::toAnnotationValue),
+        )
+        return TinyClassFileWriter.shellBytes(
+            shellName = shellName,
+            // D239：父类改为 McpToolsetSupport（三钩子来源），工具类只作委托目标
+            superName = McpToolsetSupport::class.java.name,
+            ifaceName = iface.name,
+            superCtorArg = toolsetCtorArg(superClass),
+            delegates = delegates,
+            classAnnotations = classAnnotations,
+        )
+    }
 
     /** 壳类装载器：插件 classloader 的直系子加载器，defineClass 仅此一处（protected 合法调用点）。 */
     internal object ShellClassLoader : ClassLoader(McpToolsetDynamicRegistrar::class.java.classLoader) {
