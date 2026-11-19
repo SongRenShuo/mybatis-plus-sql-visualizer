@@ -966,6 +966,24 @@ expected 10 was 12）与分片 2（`SqlLogPanelFocusTabTest` expected 4 was 6）
 
 **Seen 1× (2026-11-19)**
 
+### L86 `testFast --tests` 对平台型测试类会静默不跑——定向读数必须用 `test`
+
+**规则**：`testFast` 的划桶规则是「测试源码零 `com.intellij` 引用」才进快桶
+（`buildSrc/src/main/kotlin/mpv-testing.gradle.kts:411`），而 `--tests` 过滤与该桶规则取**交集**——
+拿 `./gradlew testFast --tests "<平台型 FQCN>"` 跑定向，类被桶规则先排除，Gradle 不报错、不改退出码，
+只静默剩下几条纯逻辑用例。凡 `extends BasePlatformTestCase` 或 import `com.intellij.testFramework`
+的用例，定向一律用 `./gradlew test --tests "<FQCN>"`。
+
+**证据**：T-UserFreezeTriage（2026-11-19）：首次定向 `testFast --tests` 同时点名三个类，日志只有
+「3 tests completed」——那 3 例全是守卫类，`EdtDispatchTest`（4 例）与 `DynamicUnloadWriteSafeTest`
+（6 例）一条没跑，`build/test-results/testFast/` 下也只有守卫的 XML。换 `./gradlew test --tests` 后
+同一批拿到 4/0 + 6/0 + 3/0。
+
+**正例**：跑定向前先看该类有没有 `com.intellij` 引用；跑完数 `TEST-*.xml` 的 `tests=` 对不对得上预期例数。
+**反例**：看到 `BUILD SUCCESSFUL` + 少量用例就收工——静默跳过不改变退出码。
+
+**Seen 1× (2026-11-19)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |

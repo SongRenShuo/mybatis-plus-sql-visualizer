@@ -192,4 +192,34 @@ waiting on EventQueue$1AWTInvocationLock
 
 ## §八 实施记录
 
-（待实施后回填）
+**2026-11-19 15:00～15:30，分支 `t-userfreeze-triage`（自 master `00aaa05c6` 起；本仓工作树与他人车道共用，
+分支上另叠了一笔他车道的 `97f6bde35` 验收文档提交，非本任务产物）**
+
+- **§五.4 前提证伪（平台源码实证，非耗时实测）**：`DocumentImpl.setText` 的实现就是
+  `replaceString(0, getTextLength(), 0, text, …)` + `clearLineModificationFlags()`
+  （243 sources jar，`com/intellij/openapi/editor/impl/DocumentImpl.java:1108-1118`）——
+  **不存在更便宜的「整文档增量写」路径**，原 P0-2 的「大文本改 `replaceString`」项取消；
+  真正有收益的只剩「内容相同就不开写命令」（不开写命令＝不必抢写锁）。
+- **P0-2 现场复核（比计划预期乐观）**：热路径写点里 5 处**已有**内容判等短路——
+  `SqlPreviewPanelSqlView:872`、`SqlPreviewPanelExecution:500/1367`、`DataSourceSelector:2072`、
+  `DataSourceSelectorResults:1047`（前几轮 T-PerfSweep30 / T-ExecDocSync2 已落同规）。本次只补两处缺口：
+  `DataSourceSelectorResults:855`（复用控制台写文档）与 `DataSourceSelector:1112`
+  （预览切换清 history：空文档不再开写命令）。
+- **P0-1**：新增 `util.EdtDispatch.invokeLaterAndWaitBounded`（`invokeLater` + 有界 `await` +
+  EDT 自等保护 + owner 已销毁即丢弃 + 超时 WARN/计数 + 测试缝 `invokeLaterOverride`）；
+  接线 `SqlPreviewPanel`（设置变更刷新，原 `invokeAndWait` 无超时）与
+  `DynamicInstallSupport.dispatchModalityForUnload`（模态跳板，超时退 `nonModal`）。
+  `update/DynamicInstallSupport.kt` 的 `edtDispatcher` **保留**同步语义（一次性安装流程的 EDT 串行卸载/装载，
+  用户点安装时的单次阻塞），在守卫白名单里带理由登记。
+- **P0-3**：`convention.EdtBoundedWaitGuardTest`——`src/main` 除白名单外禁 `invokeAndWait`，
+  外加一条**防空绿**用例钉住「有界派发器必须真被接线」（接线被撤或派发器被删时不会静默恒绿）。
+- **P1**：`docs/支持/线程转储自查-怎么看是不是本插件.md`（三步判定 + 回复用户的取证口径）。
+- **定向读数**：`EdtDispatchTest` 4/0/0/0、`EdtBoundedWaitGuardTest` 3/0/0/0、
+  `DynamicUnloadWriteSafeTest` 6/0/0/0（合计 13/0/0/0）；全量未跑＝not run（按纪律交 CI）。
+- **反向验证（真代码，两次读数）**：把 `SqlPreviewPanel` 调用点改回 `app.invokeAndWait(update)`、
+  把派发器超时分支改成「超时也返回 true」→ **3 红**（守卫「禁裸 invokeAndWait」1 + `EdtDispatchTest`
+  的超时分支与 owner 已销毁分支各 1）；恢复后 13/0/0/0 复绿。
+- **测试桶教训（已补 LESSONS L86）**：`testFast` 只收「源码零 `com.intellij` 引用」的测试类，
+  平台型定向必须用 `./gradlew test --tests "<FQCN>"`；对平台类用 `testFast --tests` 会**静默不跑**
+  （首轮只跑出守卫的 3 例，差点当成「定向就这么点」）。
+- **提交**：代码与测试 `7e470a9e4`；本计划 §八、P1 文档、索引与 CHANGELOG 随文档批提交。
