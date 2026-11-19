@@ -862,7 +862,219 @@ unit-test 模式）会让延迟体跑在**已持读动作的测试线程**里，
 
 **Seen 1× (2026-11-16)**
 
-### L80 分片任务的**步骤级超时**会把该分片的失败一起吞掉——红读数只剩 timeout，日志零输出
+### L80 反向验证的夹具要先算清「修复点之前还有几道闸门」
+
+**规则**：给某个判据做反向验证（撤掉修复看是否变红）时，夹具的**每一个参数**都要过一遍它沿途的
+其它闸门——缺陷所在那道门之前若还有更早的短路（家族排除、名字启发、类型推断、开关），夹具参数
+恰好命中那个短路，撤掉修复也不会红，读数看着「红得不够」或干脆全绿。判定办法：加临时探针打印
+被测链的实际产出，先证明夹具真的走到了目标那一层，再谈反向。
+
+**证据**：T-IbatisAtShapeGate（2026-11-17，`164e6a884`）：给 iBatis 语句 id 形状门（正则不含 `@`）
+做反向验证，gutter 级用例第一次**没红**——夹具接收者叫 `baseDao`，命中
+`PreviewReceiverResolver.DAO_NAME_SUFFIXES` 里的 `BaseDao`，JDBC 通道在形状门**之前**就按家族排除
+让位（探针实测 `jdbcMarkers=[]`，即使撤掉 `@` 放行也不产图标）。把接收者改成 `client` 后同一轮反向
+3 红（形状门单测 / gutter 级 `实际 [queryForObject]` / action 级认领为 null），恢复后 36 用例全绿。
+同族旧账见 [[pitfall-reverse-probe-fixture-layer-mismatch]]（夹具放错缓冲层）——本条是它的「放错闸门」
+变体：不是数据形态不对，而是**夹具先被另一道合法闸门截走**。
+
+**正例**：反向前先加探针读被测链的实际产出，确认夹具抵达目标层；夹具命名/类型避开沿途启发式。
+**反例**：看到「撤掉修复也没红」就去加固断言，而不去查夹具是不是被更早的门拦掉。
+
+**Seen 1× (2026-11-17)**
+
+### L81 `Registry.is` 的 `is` 是 Kotlin 关键字——读 Registry 必须反引号
+
+**规则**：Kotlin 里调平台 `Registry.is(key, default)` 一律写 `` Registry.`is`(...) ``。漏反引号的报错
+不像样地指向调用行，而是 `Cannot infer type for type parameter 'R'` / `Syntax error: Call has no
+callee` 三条叠在同一表达式上，看着像类型推断问题。
+
+**证据**：T-Nplus1Aggregate（2026-11-19，`cc8b2d960`）：子代理写的 `NplusOneAggregate.kt` 漏反引号，
+`compileKotlin` 直接失败（37s 白跑）。同仓既有 Registry 读取全带反引号（`NplusOneSuspect.kt`、
+`StandaloneSqlSourceResolver`）——照抄邻居即可避免。
+
+**正例**：新增 Registry 读取时从相邻同类文件复制写法；编译失败先怀疑 `is`/`in`/`object` 这类软关键字调用。
+**反例**：把 `Cannot infer type for type parameter 'R'` 当类型标注问题去补泛型。
+
+**Seen 1× (2026-11-19)**
+
+### L82 JList 渲染类测试的三个陷阱：wrapper 包裹 / model 实例 / 引用相等
+
+**规则**：给「按渲染几何命中」的交互写平台测试时，三条任一不满足就会得到看似「逻辑错」其实是
+「夹具错」的红：
+1. **`list.cellRenderer` 不是你的渲染器**——平台用 `ExpandedItemListCellRendererWrapper` 包裹真实
+   renderer，`as RailCellRendererBase` 抛 CCE。生产路径直接用面板字段（`entryCellRenderer`），测试
+   必须走面板暴露的缝。
+2. **渲染要用 model 里的实例，不是喂进去的原始对象**——buffer 入队会分发 `#N` 序号，原始对象的
+   header 少一段内容，宽度差几个像素，算出的徽章 x 就偏移。
+3. **条目匹配不能用引用相等**——刷新拍重建模型后是新实例，`===` 恒找不到，要用业务键
+   （restoredSql + timestamp）比。
+
+**证据**：T-Nplus1Aggregate（2026-11-19，`cc8b2d960`）：5 条面板用例连红三轮——第一轮 CCE（wrapper），
+第二轮「被点条目应在列表中」（`===`），第三轮「点击徽章应进入过滤态」（用原始 entry 渲染，2px 偏移
+让 `getFragmentTagAt` 落在片段外）。三处修完后 6/6 绿。
+
+**正例**：几何类测试先打印「实际渲染出的片段 tag 分布 + 命中点 x」，证明夹具与生产同源。
+**反例**：看到点击不命中就去改生产判定逻辑。
+
+**Seen 1× (2026-11-19)**
+
+### L83 平台列表/面板测试断言前必须泵 EDT——重建链是分批 `invokeLater` 追加的
+
+**规则**：`SqlLogPanel` 一类面板的刷新拍会把条目分批 `invokeLater { appendRebuildChunk() }` 追加
+（防长冻结的既有设计）。测试里调一次同步刷新方法**不等于**模型已填充：`list.model.size` 仍可能是
+0 或部分值。断言前要 `UIUtil.dispatchAllInvocationEvents()` 轮询到期望状态（带超时，超时消息里打出
+实际 size）；过滤态进出（页签增删 → 重建）同样要走一遍。
+
+**证据**：T-Nplus1Aggregate（2026-11-19，`cc8b2d960`）：5 条面板用例全红在「用可见条数做断言」，
+加 `pumpEdtUntil { model.size >= N }` 后通过。同仓 `SqlStandalonePreviewPanelDialogTest.awaitDialog`
+早就在用同款轮询，是对的既有先例。
+
+**正例**：任何「面板 → 模型 → 断言」链路，断言前泵 EDT 并轮询目标状态。
+**反例**：刷新方法返回后立刻断言条数；或为了过测试把断言放宽成 `>= 0`。
+
+**Seen 1× (2026-11-19)**
+
+### L84 测试断言 UI 文案要用 bundle 同源构造期望，别硬编码某一种语言
+
+**规则**：断言「摘要行含某某文案」时，期望值必须由 `MpSqlVisualizerBundle.message(key, args…)` 现算，
+或退到语言无关的结构判据（参数个数、结尾省略号、「参数前那段」前缀）。测试 JVM 的 locale 未必与
+开发机 IDE 一致，硬编码英文在中文环境必红、反之亦然——这类红与被测逻辑无关。
+
+**证据**：T-Nplus1Aggregate（2026-11-19，`cc8b2d960`）：`NplusOneAggregateSummaryTest` 两条用例把
+`"thread http-nio"` / `"spread across 4 threads"` 写死，运行环境取到中文 bundle 后全红；改成 bundle
+同源期望 + 跨线程段「参数前导前缀」判据后 8/8 绿。
+
+**正例**：文案类断言一律 bundle 同源；需要「不出现某段」的负例复用同一份前缀常量。
+**反例**：看到中文失败就把断言区改成中文——下个英文环境再红一次。
+
+**Seen 1× (2026-11-19)**
+
+### L85 改共享 UI 容器的组件构成，定向清单必须带上该容器的既有守卫类
+
+**规则**：往 `focusTabBar`/工具栏/列表宿主这类**共享容器**里加常驻组件前，先 grep 该容器名的既有
+测试类——它们常以「组件数 = 前缀 + N 项 + 尾项」或子件顺序做断言，加一个组件就恒红。本地只跑
+自己新写的测试类永远发现不了：跑一遍 `--tests "<该容器>Test"` 只要几十秒，比等 CI 分片红一遍
+（6 分钟 ×2 片）便宜得多。
+
+**证据**：T-Nplus1Aggregate（2026-11-19）：D235 把摘要 label + 返回按钮 `focusTabBar.add(...)`，
+本地 14/14 绿、反向也绿；推 master 后 CI run **44447731812** 分片 1（`SqlLogPanelRequestFocusTest`
+expected 10 was 12）与分片 2（`SqlLogPanelFocusTabTest` expected 4 was 6）各 1 红。修法不是改期望，
+而是把摘要挪到独立一行（`nplusOneSummaryBar`），页签栏恢复原构成——`846c66f3f` 后 4+3+6+8 全绿。
+
+**正例**：动共享容器前 grep 容器名找既有断言；改完先跑那几个类再跑自己的。
+**反例**：看到守卫红就把期望值改大——那等于把「页签栏只装页签」的语义契约拆掉。
+
+**Seen 1× (2026-11-19)**
+
+### L86 `testFast --tests` 对平台型测试类会静默不跑——定向读数必须用 `test`
+
+**规则**：`testFast` 的划桶规则是「测试源码零 `com.intellij` 引用」才进快桶
+（`buildSrc/src/main/kotlin/mpv-testing.gradle.kts:411`），而 `--tests` 过滤与该桶规则取**交集**——
+拿 `./gradlew testFast --tests "<平台型 FQCN>"` 跑定向，类被桶规则先排除，Gradle 不报错、不改退出码，
+只静默剩下几条纯逻辑用例。凡 `extends BasePlatformTestCase` 或 import `com.intellij.testFramework`
+的用例，定向一律用 `./gradlew test --tests "<FQCN>"`。
+
+**证据**：T-UserFreezeTriage（2026-11-19）：首次定向 `testFast --tests` 同时点名三个类，日志只有
+「3 tests completed」——那 3 例全是守卫类，`EdtDispatchTest`（4 例）与 `DynamicUnloadWriteSafeTest`
+（6 例）一条没跑，`build/test-results/testFast/` 下也只有守卫的 XML。换 `./gradlew test --tests` 后
+同一批拿到 4/0 + 6/0 + 3/0。
+
+**正例**：跑定向前先看该类有没有 `com.intellij` 引用；跑完数 `TEST-*.xml` 的 `tests=` 对不对得上预期例数。
+**反例**：看到 `BUILD SUCCESSFUL` + 少量用例就收工——静默跳过不改变退出码。
+
+**Seen 1× (2026-11-19)**
+
+### L87 新写「catch(Throwable) + 守卫类」会同时踩三条元守卫——定向清单必须带 convention 全包
+
+**规则**：往 `src/main` 新增这些形态时，改完先跑一次
+`./gradlew testFast --tests "cn.song.mybatisplus.visualizer.convention.*"`（秒级）再跑自建类：
+
+1. 任何 `catch (…: Throwable)` → 块内要么 `FatalErrors.isFatal(t)` 原样上抛，要么在
+   `BannedApiScanRuleTest.throwableCatchExemptions` 登记理由；
+2. 新增 `*Offenders`/`*Sites` 形状的守卫类 → 同时登记 `GuardSelfTestCoverageMetaGuardTest.GUARD_CLASSES`
+   （`decisionFns` + 自证语料说明），否则「未登记守卫类」与「未逐条登记的判定函数」两例同红；
+3. 往 `update` 包塞 `ModalityState.any()` → `// write-safe: <理由>` 必须紧贴那行上方
+   （豁免只认**调用行向上连续的注释块**，标注写在函数头上、`any()` 在实参行里等于没写）。
+
+**证据**：T-UserFreezeTriage（2026-11-19）本地定向 13/0/0/0 全绿，推 master 后 CI run **44480349798**
+两片 `fast` 各红 2 例，正是上面三条（`BannedApiScanRuleTest` 2 例 + `GuardSelfTestCoverageMetaGuardTest`
+2 例），`test` 五片全绿——功能没坏，全是形态口径。修法 `7a8f8f26b` 后 run **44483331061** 8/8 绿。
+
+**正例**：新类落地前先把 convention 全包跑一遍（43 类、秒级）；把「新增文件类型」和「会触发哪条元守卫」
+当成清单项写进实施步骤。
+**反例**：只跑自己新写的三个测试类就推 master——本地全绿与 CI 全红可以同时成立。
+
+**Seen 1× (2026-11-19)**
+
+### L88 运行期手写字节码给平台反射用：复制 metadata 就要把它的**全部成员**补齐，注解元素严格按声明类型编码
+
+**规则**：凡是给平台反射扫描（kotlin-reflect / 注解读取）手写 class 文件，三件事必须同时成立：
+
+1. **复制 `kotlin.Metadata` 时，metadata 描述到的每一个成员都要在类里按签名存在**。业务类的
+   metadata 会带上它的私有/内部辅助函数；壳类只声明工具方法时，kotlin-reflect 展开函数表抛
+   `KotlinReflectionInternalError: Could not compute caller for function: private final suspend fun …`
+   → 该 toolset 一个工具都出不来。做法：给其余方法生成同签名占位（方法体
+   `throw UnsupportedOperationException` 即可，平台不会调用它们），并跳过与基类同签名的
+   （否则 `IncompatibleClassChangeError: overrides final method`）。
+2. **枚举 `element_value` 的 `type_name` 必须与注解元素声明类型逐字相等**。
+   `javaClass.enclosingClass ?: superclass` 对无类体常量会退化成 `java.lang.Enum`，JDK
+   `AnnotationParser.parseEnumValue` 直接抛 `AnnotationTypeMismatchException … (Found data of type
+   java.lang.Enum.TRUE)`。用 `if (javaClass.isEnum) javaClass else superclass`。
+3. **Kotlin 的 `IntArray` 等不是 `Array<*>`**。`when (v) { is Array<*> -> … }` 匹配不到原始数组，
+   掉进 `else → toString()` 写出 `"[I@2b40ff9c"`，读回时同样抛类型不匹配（`Metadata.mv()` 必踩）。
+
+**证据**：D239 四层缺陷叠加（2026-11-19 真机 17:30→18:17 逐层读数），修复 `756011136`；
+单测 `TinyClassFileWriterD239Test` 5/0（枚举+原始数组读回探针）、`McpToolsetShellFactoryTest` 11/0
+（「工具方法保留 suspend 语义」「壳类覆盖业务类全部方法签名」两条守卫）。
+**正例**：真机诊断先打印「平台自己的 asTools 对每个壳类展开出哪个工具」，一轮就能定位到具体类与具体异常。
+**反例**：只看 `declaredMethods.size` 与 `getAnnotation(Metadata) != null` 就判「反射可见」——
+两者都真时 kotlin-reflect 仍可能在展开函数表时炸。
+
+**Seen 1× (2026-11-19)**
+
+### L89 平台「重算」类 API 往往复用旧结果：`requestUpdate` 之外还要摘 provider 缓存
+
+**规则**：调平台的重算入口前先确认它是否带 `previous` 参数复用缓存。
+`McpToolsListProvider.requestUpdate(reason)` 走 `computeAllMcpTools(previous)`，**只在 previous 里
+缺失时才真正计算**，所以注册初期那份「只含前 1 个工具」的结果会被永久沿用——连发三次重算请求
+读数仍只有 1 个。正路：先调平台私有 `invalidateReflectionProviders()`（走合成访问器
+`access$invalidateReflectionProviders`）摘掉反射 provider 的缓存条目，再 `requestUpdate`。
+另注：各版本清单形态不同（253 无 `McpToolsListProvider`、262 有类但无缓存/无 `requestUpdate`、
+263 带缓存），调用前按「方法在不在」分流——缺失属版本差异不是故障，记 INFO 别记 WARN。
+
+**证据**：D239（2026-11-19 18:20 真机）：11 个壳类各自 `asTools` 都出 1 个工具、自检全绿，
+但 `tools/list` 恒为 1 个；补 `invalidateReflectionProviders` 后连续三轮冷启稳定 165/11。
+**正例**：判「重算有没有生效」看聚合清单读数，不看自己发出的请求条数。
+**反例**：以为「多发几次重算总能收敛」，靠延迟重算兜底——实测 3 次（0s/3s/12s）全部无效。
+
+**Seen 1× (2026-11-19)**
+
+### L90 弹窗类测试打开后立即断言「异步填充的面板状态」会偶发空——断言前先轮询等条件成立
+
+**规则**：`awaitDialog()` 拿到弹窗 ≠ 弹窗内异步链路（警告横幅、摘要行、异步识别回填）已经跑完。
+`SqlStandalonePreviewPanelDialogTest.test在弹框中打开_未识别文本也弹窗` 在 `assertNotNull(dialog)` 之后
+**立即** `assertTrue(warning.isNotBlank())`，CI windows runner 上偶发 warning 尚未填充 → 假红
+（961 例只红这 1 例，同 src 在另一轮 run 44562342176 全绿）。判据：断言的是「最终会成立的状态」时，
+用带超时的轮询/await 断言，不用瞬时断言；判「打开动作本身」才允许 assertNotNull 后直读。
+**证据**：CI run 44567164326 首轮 `testShard4` 961 tests 1 failed（`AssertionFailedError` 于
+`SqlStandalonePreviewPanelDialogTest.kt:116`，warning 为空串）；`git diff 9dd35bb66 4596fa90b -- src/`
+为空（同代码在 run 44562342176 同分片全绿）→ 瞬态定性成立；`gh run rerun --failed` 后同 run 全绿。
+**正例**：失败先做同 src 跨 run 对照（前一轮全绿 ⇒ 瞬态），再 rerun-failed-jobs，不改代码不前移 tag。
+**反例**：看到红就怀疑新改动引入回归，去动生产代码或重排队列——本轮 src 与上一轮完全相同。
+
+**Seen 1× (2026-11-19)**
+
+## 升级记录
+
+| 日期 | 条目 | 去向 |
+|---|---|---|
+| 2026-10-23 | S1~S7（建账时把本仓已多日复发的既有纪律直接按机制升级入册） | `规范/编码与验收标准-规范.md` |
+| 2026-10-24 | L3 改 State/守卫类必须跑 testFast 整桶（Seen 3×；当日证据 4bccd331 漏登→06fe3953 补登揭潜伏红灯） | 并入 `规范/编码与验收标准-规范.md` S3（建账时正文已在），账本活跃区改指针 |
+| 2026-11-09 | L25 changeNotes 新块机器判据（评分句只留最新块 3×、本版块禁全角标点 1×） | 评分句半边升级 `规范/编码与验收标准-规范.md` **S11**；全角标点半边留活跃区继续累计 |
+
+<!-- k2j 侧教训（原 L80/L81，master 同号已被占用，T-SyncK2JMaster180 合并时顺延改号追加） -->
+
+### L91 分片任务的**步骤级超时**会把该分片的失败一起吞掉——红读数只剩 timeout，日志零输出
 
 **规则**：某个分片腿「红」但日志里没有 `failure`/`tests completed` 行、只有
 `The action '分片 N' has timed out after 30 minutes` 时，不能当「只是慢/环境问题」，更不能拿
@@ -886,7 +1098,7 @@ iBatis 单字符定界符四态 `69a132e56`；`XmlPreviewService` 缺多文本�
 
 **Seen 1× (2026-11-17)**
 
-### L81 插件自己登记 `<standardResource>`（或任何资源型索引根）后，测试 JVM 必须关 `NO_FS_ROOTS_ACCESS_CHECK`——否则冷沙盒建索引必挂死
+### L92 插件自己登记 `<standardResource>`（或任何资源型索引根）后，测试 JVM 必须关 `NO_FS_ROOTS_ACCESS_CHECK`——否则冷沙盒建索引必挂死
 
 **规则**：只要插件 `plugin.xml` 通过平台 `com.intellij.standardResource`（或等价机制）把资源打进**插件 jar**，
 平台就会把该 jar 当「外部资源索引根」去解析（`ExternalResourcesRootsProvider → IndexableSetContributorDescriptor
@@ -911,11 +1123,3 @@ iBatis 单字符定界符四态 `69a132e56`；`XmlPreviewService` 缺多文本�
 
 **Seen 1× (2026-11-17)**
 
-
-## 升级记录
-
-| 日期 | 条目 | 去向 |
-|---|---|---|
-| 2026-10-23 | S1~S7（建账时把本仓已多日复发的既有纪律直接按机制升级入册） | `规范/编码与验收标准-规范.md` |
-| 2026-10-24 | L3 改 State/守卫类必须跑 testFast 整桶（Seen 3×；当日证据 4bccd331 漏登→06fe3953 补登揭潜伏红灯） | 并入 `规范/编码与验收标准-规范.md` S3（建账时正文已在），账本活跃区改指针 |
-| 2026-11-09 | L25 changeNotes 新块机器判据（评分句只留最新块 3×、本版块禁全角标点 1×） | 评分句半边升级 `规范/编码与验收标准-规范.md` **S11**；全角标点半边留活跃区继续累计 |
