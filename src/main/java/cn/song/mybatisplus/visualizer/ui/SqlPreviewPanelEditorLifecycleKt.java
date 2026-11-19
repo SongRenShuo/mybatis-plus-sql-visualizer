@@ -216,6 +216,8 @@ public final class SqlPreviewPanelEditorLifecycleKt {
             return;
         }
         p.prewarmedTempFile = product;
+        // T-FirstOpenDegradedLabel 二轮：新产物到位 → 允许下一轮「已消费」再自动补预热
+        p.prewarmAutoRetried = false;
         // T-PrewarmLateRecover F1：`complete` 返回 false = 消费侧已放弃（超时以 null 完成 / 失败），
         // 此时产物走迟到通道换装。
         if (!await.complete(product)) {
@@ -636,6 +638,13 @@ public final class SqlPreviewPanelEditorLifecycleKt {
      */
     public static void assemblePreviewEditor(@NotNull SqlPreviewPanel p, @NotNull String sql,
                                              @Nullable Pair<VirtualFile, PsiFile> prewarmed) {
+        assemblePreviewEditor(p, sql, prewarmed, null);
+    }
+
+    /** 全参形态（master 默认参展开：{@code reason} 显式原因优先于预热终态分型）。 */
+    public static void assemblePreviewEditor(@NotNull SqlPreviewPanel p, @NotNull String sql,
+                                             @Nullable Pair<VirtualFile, PsiFile> prewarmed,
+                                             @Nullable PreviewDegradationReason reason) {
         Project proj = p.project;
         FileType sqlFileType = FileTypeManager.getInstance().getStdFileType("SQL");
         Document doc;
@@ -679,16 +688,19 @@ public final class SqlPreviewPanelEditorLifecycleKt {
                             t.getMessage() != null ? t.getMessage() : t.getClass().getSimpleName());
                 }
             } else {
-                // T-DegradedPreviewUx P1：产物不在位——超时取 TIMEOUT（走宽限期，横幅延迟披露），
-                // 否则按 await 终态分型（硬失败/已消费）。
-                PreviewDegradationReason reason = p.prewarmAwait != null
-                        ? PreviewDegradationReasonKt.degradationReasonOrNull(p.prewarmAwait) : null;
-                // master 默认 PRODUCT_CONSUMED（产物已消费）：此处 await 多已成功、非超时非失败，
-                // degradationReasonOrNull 返回 null。若默认成 TIMEOUT 会走宽限期、横幅被 clear →
-                // 稳定降级态永远不挂 DEGRADED 横幅（PrewarmLateRecover 的 degradePanel 前置必红）。
-                if (reason == null) reason = PreviewDegradationReason.PRODUCT_CONSUMED;
-                doc = fallbackPreviewDocument(p, sql, reason,
-                        "prewarmed product unavailable (timeout/failed/consumed)");
+                // T-FirstOpenDegradedLabel 二轮：产物不可用且**已消费/从未预热**（典型：编辑器因标签切换
+                // 走 removeNotify 释放后重建）→ 自动重新预热一轮，语义回到「在途」，而不是把「需要重来一次」
+                // 报成「完整编辑器尚未就绪」的硬失败横幅。只自动补一次（防失败循环），仍失败交用户「重试」。
+                PrewarmAwait<Pair<VirtualFile, PsiFile>> await = p.prewarmAwait;
+                if ((await == null || await.isDone()) && !p.prewarmAutoRetried) {
+                    p.prewarmAutoRetried = true;
+                    retryPrewarm(p);
+                }
+                // T-DegradedPreviewUx P1 + FirstOpenDegradedLabel：显式原因 > await 终态（失败/超时）>
+                // 仍在途 → TIMEOUT（走宽限期，横幅延迟披露）> 已消费（硬失败档）。
+                doc = fallbackPreviewDocument(p, sql,
+                        PreviewDegradationReasonKt.fallbackDegradationReason(reason, p.prewarmAwait),
+                        "prewarmed product unavailable (pending/timeout/failed/consumed)");
             }
         } else {
             doc = null;
