@@ -284,9 +284,9 @@ public final class ConvertToSqlAction extends AnAction {
                         if (jdbc != null) return jdbc;
                         // T-IbatisAtShapeGate S4：JDBC 渲染失败（非 SQL 形态）→ iBatis 解析兜底
                         cn.song.mybatisplus.visualizer.ui.gutter.IbatisCallTarget target =
-                                cn.song.mybatisplus.visualizer.ui.gutter.IbatisCallTargets.INSTANCE.resolveIgnoringShape(element);
+                                cn.song.mybatisplus.visualizer.ui.gutter.IbatisCallTargets.resolveIgnoringShape(element);
                         if (target == null) return null;
-                        return cn.song.mybatisplus.visualizer.ui.gutter.IbatisStatementPreview.INSTANCE
+                        return cn.song.mybatisplus.visualizer.ui.gutter.IbatisStatementPreview
                                 .previewResolvedOrNull(project, target.statementId(), target.ownerNamespace());
                     },
                     (PreviewResult result) -> { SqlPreviewService.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
