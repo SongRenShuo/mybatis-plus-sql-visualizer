@@ -476,18 +476,19 @@ public record LogSqlEntry(
      * K2J 互操作：master 新增 {@code durationKind}（T-HdAbsorb D215，追加在 captureProvenance 之后，
      * 默认 null）的历史 23 参形态（Kotlin 默认参的 Java 等价），委托 24 参规范构造器——
      * 历史读回/解析链的既有全参构造点（SqlLogFileReader 等）档位 null=未知，展示零回归。
+     * 参数序与旧 23 参规范构造器逐位一致（threadName 居 stackDigest 与 sequenceNumber 之间）。
      */
     public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params, long timestamp,
                        Long logTimestamp, String summary, SqlSource source, Long executionTimeMs,
                        String sourceFile, int sourceLine, List<kotlin.Pair<String, Integer>> sourceCandidates,
-                       List<String> candidateClasses, String stackDigest, long sequenceNumber,
-                       String mapperStatement, String errorText, String requestTag, Long updateCount,
-                       String databaseName, String dialectName, String actualSql,
+                       List<String> candidateClasses, String stackDigest, String threadName,
+                       long sequenceNumber, String mapperStatement, String errorText, String requestTag,
+                       Long updateCount, String databaseName, String dialectName, String actualSql,
                        CaptureProvenance captureProvenance) {
         this(rawSql, restoredSql, params, timestamp, logTimestamp, summary, source, executionTimeMs,
-            sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, null, sequenceNumber,
-            mapperStatement, errorText, requestTag, updateCount, databaseName, dialectName, actualSql,
-            captureProvenance, null);
+            sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, threadName,
+            sequenceNumber, mapperStatement, errorText, requestTag, updateCount, databaseName,
+            dialectName, actualSql, captureProvenance, null);
     }
 
     /** 仅原始/还原 SQL + 参数（其余取默认）。 */
