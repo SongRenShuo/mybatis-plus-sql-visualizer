@@ -130,8 +130,12 @@ class SqlLogPanelNplusOneAggregateTest : BasePlatformTestCase() {
             panel.visibleEntryCount,
         )
         assertTrue("聚合摘要行可见", panel.nplusOneSummaryLabelForTest.isVisible)
-        assertTrue("摘要行带 N+1 标签", panel.nplusOneSummaryLabelForTest.text.contains("N+1"))
-        assertTrue("「返回全部」按钮在场", panel.nplusOneBackButtonForTest.isVisible)
+        // 样式重排后 badge 与详情分色分 label：N+1 标识在红色 badge 上、详情在灰 label 上
+        assertTrue("摘要行带 N+1 标签", panel.nplusOneSummaryBadgeForTest.text.contains("N+1"))
+        assertTrue("详情不含 N+1 标签（避免整行红字）", !panel.nplusOneSummaryLabelForTest.text.contains("N+1"))
+        assertTrue("详情不给「同结构 N 条」（与聚焦 chip 重复）",
+            !panel.nplusOneSummaryLabelForTest.text.contains("同结构"))
+        assertTrue("「返回全部」链接在场", panel.nplusOneBackLinkForTest.isVisible)
     }
 
     /** A5：进入 → 「返回全部」→ 列表恢复完整（模型条数恢复、过滤态组件退场）。 */
@@ -140,12 +144,12 @@ class SqlLogPanelNplusOneAggregateTest : BasePlatformTestCase() {
         panel.tryEnterNplusOneAggregate(clickAt(badgeClickPoint(entry)))
         pumpVisible(6, "过滤态应显示 6 条")
         assertEquals(6, panel.visibleEntryCount)
-        panel.nplusOneBackButtonForTest.doClick()
+        panel.clickNplusOneBackForTest()
         assertTrue("过滤态退出", panel.focusTabsForTest().isEmpty())
         pumpVisible(manager.entries.snapshot().size, "退出过滤态应恢复完整列表")
         assertEquals("恢复完整列表（6+1）", manager.entries.snapshot().size, panel.visibleEntryCount)
         assertFalse("摘要行退场", panel.nplusOneSummaryLabelForTest.isVisible)
-        assertFalse("返回全部按钮退场", panel.nplusOneBackButtonForTest.isVisible)
+        assertFalse("返回全部链接退场", panel.nplusOneBackLinkForTest.isVisible)
     }
 
     /** A5：Esc 通道同效退出（无过滤态时 no-op，不影响既有 Esc 通道）。 */
@@ -211,8 +215,10 @@ class SqlLogPanelNplusOneAggregateTest : BasePlatformTestCase() {
             src.contains("KeyEvent.VK_ESCAPE) exitNplusOneAggregate()"),
         )
         assertTrue(
-            "返回全部按钮应接线 exitNplusOneAggregate（D235）",
-            src.contains("addActionListener { exitNplusOneAggregate() }"),
+            "「返回全部」链接应接线 exitNplusOneAggregate（样式重排后由 JButton 改链接式 JBLabel）",
+            src.contains("nplusOneBackLink") &&
+                src.contains("addMouseListener") &&
+                src.contains("exitNplusOneAggregate()"),
         )
     }
 }

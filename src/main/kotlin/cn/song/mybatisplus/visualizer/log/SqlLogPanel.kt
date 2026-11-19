@@ -11,6 +11,7 @@ import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
 import cn.song.mybatisplus.visualizer.ui.standalone.SqlStandalonePreviewPanel
 // T-UiCoord F2：下拉按钮文本截尾省略复用 meta 行的同款纯函数（避免第二份省略实现）
 import cn.song.mybatisplus.visualizer.ui.clipTailToWidth
+import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import cn.song.mybatisplus.visualizer.util.DisplayMasker
@@ -830,29 +831,46 @@ class SqlLogPanel(
     // （2026-11-19 run 44447731812 实测）。摘要本就不是页签 chip，语义上也该另起一行。
 
     /**
-     * D235：N+1 聚合摘要行（单行 `｜` 分段——条数/首末时间/线程名单，跨线程如实标注）。
-     * 只做展示，过滤语义在 [FocusTab.Template]（点击徽章进入的过滤态与右键「只看同结构」同体）。
+     * D235：摘要行**标签**（`N+1 聚合`，强调色）。
+     *
+     * 样式重排（2026-11-19 用户反馈「整行全红不协调」）：原实现把 badge 与详情塞进同一个红色 label，
+     * 整行压屏且与上一行聚焦 chip 抢视觉。现拆三段——红色只给这一个短标签，详情走次要灰，
+     * 右侧退出口链接化（平台默认 JButton 与工具栏/页签风格不协调）。
      */
-    private val nplusOneSummaryLabel = JLabel().apply {
+    private val nplusOneSummaryBadge = JLabel().apply {
         foreground = MpvsUiColors.NPLUS_ONE_SUSPECT
         isVisible = false
     }
 
-    /** D235：「返回全部」动作（与页签 ✕ / Esc 同效——退出聚合过滤态恢复完整列表）。 */
-    private val nplusOneBackButton = JButton().apply {
-        isFocusable = false
+    /** D235：摘要行**详情**（命中条数 · 时间 · 线程，次要灰，单行 ` · ` 分段）。 */
+    private val nplusOneSummaryLabel = JLabel().apply {
+        foreground = MpvsUiColors.META_GRAY
         isVisible = false
-        text = MpSqlVisualizerBundle.message("log.nplusOneAggregate.back")
-        toolTipText = MpSqlVisualizerBundle.message("log.nplusOneAggregate.back.tip")
-        addActionListener { exitNplusOneAggregate() }
     }
 
-    /** D235：摘要行宿主（独立一行，挂 [focusArea] 页签栏之下；无过滤态整行不占高度）。 */
+    /**
+     * D235：「返回全部」退出口——链接样式（对齐工作台「缺少片段…点此补上」既有链接先例），
+     * 不再用平台默认 JButton（视觉与页签 chip / 工具栏不同族）。
+     */
+    private val nplusOneBackLink = JBLabel(MpSqlVisualizerBundle.message("log.nplusOneAggregate.back")).apply {
+        foreground = JBUI.CurrentTheme.Link.Foreground.ENABLED
+        cursor = java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
+        isVisible = false
+        toolTipText = MpSqlVisualizerBundle.message("log.nplusOneAggregate.back.tip")
+        addMouseListener(object : java.awt.event.MouseAdapter() {
+            override fun mouseClicked(e: java.awt.event.MouseEvent) {
+                exitNplusOneAggregate()
+            }
+        })
+    }
+
+    /** D235：摘要行宿主（独立一行，挂页签栏之下；无过滤态整行不占高度）。 */
     private val nplusOneSummaryBar = JPanel(WrapLayout()).apply {
         isOpaque = false
         isVisible = false
+        add(nplusOneSummaryBadge)
         add(nplusOneSummaryLabel)
-        add(nplusOneBackButton)
+        add(nplusOneBackLink)
     }
 
     // ---------- T-UiCoord F2：工具栏单行宿主字段（同样须在 init 之前——init 里 buildToolbar 会赋值；
@@ -1005,11 +1023,15 @@ class SqlLogPanel(
     /** D235 测试驱动：同步跑一拍刷新（面板常规刷新走 invokeLater 异步监听，测试需确定性拍）。 */
     internal fun refreshListForTest() = refreshList()
 
-    /** D235 测试断言：聚合摘要行显隐与文案。 */
+    /** D235 测试断言：聚合摘要标签（红）与详情（灰）的显隐与文案。 */
+    internal val nplusOneSummaryBadgeForTest: JLabel get() = nplusOneSummaryBadge
     internal val nplusOneSummaryLabelForTest: JLabel get() = nplusOneSummaryLabel
 
-    /** D235 测试驱动：等价点击「返回全部」按钮。 */
-    internal val nplusOneBackButtonForTest: JButton get() = nplusOneBackButton
+    /** D235 测试驱动：等价点击「返回全部」链接（JBLabel 无 doClick，直连同一退出动作）。 */
+    internal fun clickNplusOneBackForTest() = exitNplusOneAggregate()
+
+    /** D235 测试断言：「返回全部」链接显隐。 */
+    internal val nplusOneBackLinkForTest: JBLabel get() = nplusOneBackLink
 
     /**
      * D235 测试缝：取条目渲染产物。**不能经 `list.cellRenderer`**——平台用
@@ -2055,9 +2077,12 @@ class SqlLogPanel(
         val summary = tab?.let { buildNplusOneAggregateSummary(snapshot, it.structureKey) }
         val shouldShow = summary != null
         val visibilityChanged = nplusOneSummaryBar.isVisible != shouldShow
+        // 三段分色（2026-11-19 样式重排）：红只给短标签，详情走次要灰，退出口链接化
+        nplusOneSummaryBadge.text = if (shouldShow) formatNplusOneAggregateSummaryLabel() else ""
         nplusOneSummaryLabel.text = summary?.let { formatNplusOneAggregateSummary(it) } ?: ""
+        nplusOneSummaryBadge.isVisible = shouldShow
         nplusOneSummaryLabel.isVisible = shouldShow
-        nplusOneBackButton.isVisible = shouldShow
+        nplusOneBackLink.isVisible = shouldShow
         nplusOneSummaryBar.isVisible = shouldShow
         // 显隐翻转才 revalidate（每拍重排会放大流式灌入期的布局成本；文本更新不需要重排）
         if (visibilityChanged) nplusOneSummaryBar.parent?.revalidate()

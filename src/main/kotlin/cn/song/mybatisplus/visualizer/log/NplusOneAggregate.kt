@@ -76,21 +76,22 @@ internal fun buildNplusOneAggregateSummary(
 }
 
 /**
- * 摘要行文案（单行 `｜` 分段纪律——JBLabel `\n` 不渲染，见 AGENTS 平台坑；`…` 截断线程名单）。
- * 线程段：单线程直报名；跨线程如实标注条数＋名单（超出 [NPLUS_ONE_SUMMARY_THREAD_MAX] 截断）；
- * 无线程名（控制台回落通道）缺省该段。
+ * 摘要**详情**文案（badge 由面板单独渲染，见 [formatNplusOneAggregateSummaryLabel]）。
+ *
+ * 排版纪律（2026-11-19 用户反馈「整行全红、与聚焦行重复、同秒时间重复」后重排）：
+ *  - 不再重复「同结构 N 条」（上一行聚焦 chip 已有），改用「命中 N 条」表达 N+1 语义；
+ *  - 分隔符用轻量的 ` · `（原 ` ｜ ` 过重）；
+ *  - 首末同秒时只显示一个时间（原样会渲染成 `12:56:30 ~ 12:56:30`）；
+ *  - 单行纪律不变（JBLabel `\n` 不渲染），线程名单超 [NPLUS_ONE_SUMMARY_THREAD_MAX] 截断。
  */
 internal fun formatNplusOneAggregateSummary(summary: NplusOneAggregateSummary): String {
     val fmt = SimpleDateFormat(SUMMARY_TIME_FORMAT)
     val parts = mutableListOf(
-        MpSqlVisualizerBundle.message("log.nplusOneAggregate.label"),
         MpSqlVisualizerBundle.message("log.nplusOneAggregate.count", summary.count.toString()),
-        MpSqlVisualizerBundle.message(
-            "log.nplusOneAggregate.timeRange",
-            fmt.format(Date(summary.firstTimestampMs)),
-            fmt.format(Date(summary.lastTimestampMs)),
-        ),
     )
+    val first = fmt.format(Date(summary.firstTimestampMs))
+    val last = fmt.format(Date(summary.lastTimestampMs))
+    parts.add(if (first == last) first else MpSqlVisualizerBundle.message("log.nplusOneAggregate.timeRange", first, last))
     val shown = summary.threadNames.take(NPLUS_ONE_SUMMARY_THREAD_MAX)
     val suffix = if (summary.threadNames.size > NPLUS_ONE_SUMMARY_THREAD_MAX) "…" else ""
     when {
@@ -104,5 +105,9 @@ internal fun formatNplusOneAggregateSummary(summary: NplusOneAggregateSummary): 
         )
         else -> parts.add(MpSqlVisualizerBundle.message("log.nplusOneAggregate.thread", shown.first()))
     }
-    return parts.joinToString(" ｜ ")
+    return parts.joinToString(" · ")
 }
+
+/** 摘要**标签**文案（面板用强调色单独渲染，与详情分色——避免整行红字压屏）。 */
+internal fun formatNplusOneAggregateSummaryLabel(): String =
+    MpSqlVisualizerBundle.message("log.nplusOneAggregate.label")
