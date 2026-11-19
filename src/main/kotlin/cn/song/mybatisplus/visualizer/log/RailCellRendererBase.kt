@@ -297,7 +297,8 @@ internal abstract class RailCellRendererBase : JPanel(BorderLayout()), ListCellR
         headerLine.foreground = fg
         headerLine.clear()
         clipSqlFragmentsToWidth(fragments, list, width).forEach {
-            headerLine.append(it.text, if (isSelected) selectedAttributes(it.attributes, fg) else it.attributes)
+            // D235：片段 tag 透传（N+1 徽章命中判定靠 getFragmentTagAt 定位；其余片段 tag 为 null 等价原样）
+            headerLine.append(it.text, if (isSelected) selectedAttributes(it.attributes, fg) else it.attributes, it.tag)
         }
         list?.let { SpeedSearchUtil.applySpeedSearchHighlighting(it, headerLine, false, useSelectionFill) }
     }

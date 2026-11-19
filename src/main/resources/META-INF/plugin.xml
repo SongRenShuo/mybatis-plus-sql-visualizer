@@ -548,6 +548,12 @@
                      description="Show a red 'suspected N+1' badge on SQL-log entries whose parameterized template repeats at least minCount times in the current buffer. Disable to keep only the amber same-shape count badge (legacy behavior)."/>
         <registryKey key="sqlvis.log.nplusOneSuspect.minCount" defaultValue="5"
                      description="Minimum same-template count that marks an entry as a suspected N+1 (D216)."/>
+        <!-- T-Nplus1Aggregate D235：N+1 嫌疑徽章聚合视图（点开看全）。默认开：点击红色徽章进入
+             同结构过滤态（复用聚焦页签形态）+ 顶部聚合摘要行（条数/首末时间/线程，跨线程如实标注）；
+             关掉＝徽章纯行级（点击无过滤态，右键「只看同结构」不受影响）。
+             代码读取：log/NplusOneAggregate.REGISTRY_KEY。 -->
+        <registryKey key="sqlvis.log.nplusOneSuspect.aggregate" defaultValue="true"
+                     description="Enable the N+1 suspect badge aggregate view: clicking the red 'suspected N+1' badge filters the log list to that template's entries and shows a top summary line (count, first/last time, threads). Disable to keep badges row-level only (clicking does nothing; the right-click 'same shape' focus is unaffected)."/>
         <!-- T-HdAbsorb D215：agent 耗时的调试器挂起补偿（吸收 Hibernate Debugger SuspensionLedger
              思路）。默认开：断点挂起时段从 agent 耗时测量窗中扣减；关掉即原样墙钟（回退通道）。
              代码读取：log/agent/DebuggerSuspendTracker.REGISTRY_KEY。 -->

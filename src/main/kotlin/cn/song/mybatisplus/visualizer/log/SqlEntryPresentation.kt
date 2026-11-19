@@ -125,9 +125,10 @@ internal object SqlEntryPresentation {
         formatTemplateCountFragment(entry, templateCounts, false)?.let {
             add(SqlTextFragment(it.first, it.second))
         }
-        // T-HdAbsorb D216：N+1 嫌疑徽章（阈值 ≥5 Registry 可调；与同模板计数徽章分层）
+        // T-HdAbsorb D216：N+1 嫌疑徽章（阈值 ≥5 Registry 可调；与同模板计数徽章分层）。
+        // T-Nplus1Aggregate D235：挂 NPLUS_ONE_BADGE_TAG——点击命中判定靠片段 tag 定位徽章矩形。
         formatNplusOneSuspectFragment(entry, templateCounts, false, nplusOneSuspects)?.let {
-            add(SqlTextFragment(it.first, it.second))
+            add(SqlTextFragment(it.first, it.second, NPLUS_ONE_BADGE_TAG))
         }
     }
 
@@ -285,7 +286,8 @@ internal fun clipSqlFragments(
             val prefix = text.substring(0, text.offsetByCodePoints(0, mid))
             if (measure(prefix, fragment.attributes) <= available) low = mid else high = mid - 1
         }
-        if (low > 0) clipped.add(SqlTextFragment(text.substring(0, text.offsetByCodePoints(0, low)), fragment.attributes))
+        // D235：裁剪保留 tag（被裁徽章片段仍可命中——tag 是片段身份，与文本长度无关）
+        if (low > 0) clipped.add(SqlTextFragment(text.substring(0, text.offsetByCodePoints(0, low)), fragment.attributes, fragment.tag))
         used += if (low > 0) measure(clipped.last().text, fragment.attributes) else 0
         break
     }

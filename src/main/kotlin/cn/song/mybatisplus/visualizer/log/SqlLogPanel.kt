@@ -822,6 +822,26 @@ class SqlLogPanel(
         isVisible = false
     }
 
+    // ---------- T-Nplus1Aggregate D235：N+1 聚合过滤态摘要行（复用聚焦页签栏行，不过滤态隐藏） ----------
+    // 字段声明在 init 块之前（文本序初始化纪律，rebuildFocusTabBar 会读）
+
+    /**
+     * D235：N+1 聚合摘要行（单行 `｜` 分段——条数/首末时间/线程名单，跨线程如实标注）。
+     * 只做展示，过滤语义在 [FocusTab.Template]（点击徽章进入的过滤态与右键「只看同结构」同体）。
+     */
+    private val nplusOneSummaryLabel = JLabel().apply {
+        foreground = MpvsUiColors.NPLUS_ONE_SUSPECT
+        isVisible = false
+    }
+
+    /** D235：「返回全部」动作（与页签 ✕ / Esc 同效——退出聚合过滤态恢复完整列表）。 */
+    private val nplusOneBackButton = JButton().apply {
+        isFocusable = false
+        isVisible = false
+        toolTipText = MpSqlVisualizerBundle.message("log.nplusOneAggregate.back.tip")
+        addActionListener { exitNplusOneAggregate() }
+    }
+
     // ---------- T-UiCoord F2：工具栏单行宿主字段（同样须在 init 之前——init 里 buildToolbar 会赋值；
     // 声明晚于 init 会让赋值被随后的 `= null` 初始化器覆盖回 null） ----------
 
@@ -967,6 +987,26 @@ class SqlLogPanel(
     /** 测试驱动：等价页签 ✕ 关闭。 */
     internal fun removeFocusTabForTest(tab: FocusTab) = removeFocusTab(tab)
 
+    // ---------- T-Nplus1Aggregate D235 测试缝 ----------
+
+    /** D235 测试驱动：同步跑一拍刷新（面板常规刷新走 invokeLater 异步监听，测试需确定性拍）。 */
+    internal fun refreshListForTest() = refreshList()
+
+    /** D235 测试断言：聚合摘要行显隐与文案。 */
+    internal val nplusOneSummaryLabelForTest: JLabel get() = nplusOneSummaryLabel
+
+    /** D235 测试驱动：等价点击「返回全部」按钮。 */
+    internal val nplusOneBackButtonForTest: JButton get() = nplusOneBackButton
+
+    /**
+     * D235 测试缝：取条目渲染产物。**不能经 `list.cellRenderer`**——平台用
+     * `ExpandedItemListCellRendererWrapper` 包裹真实 renderer，cast 到 [RailCellRendererBase]
+     * 会抛 ClassCastException（实测 2026-11-19）。生产路径的命中判定传的是 [entryCellRenderer]，
+     * 不受这层包裹影响。
+     */
+    internal fun renderEntryForTest(entry: LogSqlEntry, index: Int, selected: Boolean = false): RailCellRendererBase =
+        entryCellRenderer.getListCellRendererComponent(list, entry, index, selected, false) as RailCellRendererBase
+
     private fun addFocusTab(tab: FocusTab) {
         val next = when (tab) {
             is FocusTab.Request -> addRequestTab(focusTabs, tab.requestTag)
@@ -986,11 +1026,16 @@ class SqlLogPanel(
         }
     }
 
-    /** 重建页签栏 chips（页签数 = 前缀标签 + N×chip + 计数标签）。 */
+    /** 重建页签栏 chips（页签数 = 前缀标签 + N×chip + D235 摘要行/返回全部 + 计数标签）。 */
     private fun rebuildFocusTabBar() {
         focusTabBar.removeAll()
         focusTabBar.add(JLabel(MpSqlVisualizerBundle.message("log.focus.label")))
         focusTabs.forEach { focusTabBar.add(buildFocusChip(it)) }
+        // T-Nplus1Aggregate D235：聚合摘要行 + 返回全部（组件常驻挂载，显隐由每拍
+        // updateNplusOneAggregateSummary 控制——过滤态进出只在页签增删时发生，随本重建 revalidate）
+        nplusOneBackButton.text = MpSqlVisualizerBundle.message("log.nplusOneAggregate.back")
+        focusTabBar.add(nplusOneSummaryLabel)
+        focusTabBar.add(nplusOneBackButton)
         focusTabBar.add(focusHiddenLabel)
         focusTabBar.isVisible = focusTabs.isNotEmpty()
         focusTabBar.parent?.revalidate()
@@ -1849,6 +1894,9 @@ class SqlLogPanel(
         ListSpeedSearch.installOn(list) { element -> withTerminator(element.restoredSql) }
         list.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
+                // T-Nplus1Aggregate D235：N+1 嫌疑徽章点击进入聚合过滤态（命中才拦截——
+                // 徽章外的点击仍走既有单击预览/双击弹窗通道）
+                if (tryEnterNplusOneAggregate(e)) return
                 previewHost.onRowClick(e)
                 if (javax.swing.SwingUtilities.isLeftMouseButton(e) && e.clickCount >= 2) {
                     previewHost.hideHint()
@@ -1901,6 +1949,9 @@ class SqlLogPanel(
         val navigationListener = object : KeyAdapter() {
             override fun keyPressed(e: KeyEvent) {
                 if (e.keyCode in navigationKeys) tailFollow.onUserScroll()
+                // T-Nplus1Aggregate D235：Esc 退出 N+1 聚合过滤态（无过滤态 no-op——
+                // 不吃速度搜索等既有 Esc 通道的按键语义）
+                else if (e.keyCode == KeyEvent.VK_ESCAPE) exitNplusOneAggregate()
             }
         }
         list.addKeyListener(navigationListener)
@@ -1963,11 +2014,68 @@ class SqlLogPanel(
         entryCellRenderer.templateCounts = templateCounts
         // T-HdAbsorb D216 第二刀：窗口嫌疑键集每拍产出（buffer 侧修剪+分桶 O(窗内戳数)，有界）；
         // 总开关/阈值语义仍在徽章层（NplusOneSuspect），buffer 只产数据。
-        entryCellRenderer.nplusOneSuspects = manager.entries.windowSuspectKeys(
+        val nplusOneSuspects = manager.entries.windowSuspectKeys(
             nowMs = System.currentTimeMillis(),
             windowMs = NplusOneSuspect.DEFAULT_WINDOW_MS,
             threshold = NplusOneSuspect.thresholdProvider(),
         )
+        entryCellRenderer.nplusOneSuspects = nplusOneSuspects
+        // T-Nplus1Aggregate D235：聚合摘要行随拍更新（条数源=完整快照该键条目数——口径生命线）
+        updateNplusOneAggregateSummary(snapshot, nplusOneSuspects)
+    }
+
+    /**
+     * T-Nplus1Aggregate D235：聚合摘要行随刷新拍更新。过滤态判定＝聚焦页签里有同结构页签
+     * 且其 structureKey 在当前嫌疑集（与徽章判定同一数据源，构造上同值）；摘要条数取
+     * **完整快照**该键条目数（不随过滤/搜索波动——计划册「组内条目数==完整列表该键条目数」
+     * 的断言口径）。回退开关关 / 无过滤态 / 键不在嫌疑集（页签可残留嫌疑过期的键）→ 隐藏。
+     */
+    private fun updateNplusOneAggregateSummary(snapshot: List<LogSqlEntry>, suspects: Set<String>) {
+        val tab = if (NplusOneAggregate.enabledProvider()) {
+            focusTabs.filterIsInstance<FocusTab.Template>().firstOrNull { it.structureKey in suspects }
+        } else {
+            null
+        }
+        val summary = tab?.let { buildNplusOneAggregateSummary(snapshot, it.structureKey) }
+        val shouldShow = summary != null
+        val visibilityChanged = nplusOneSummaryLabel.isVisible != shouldShow
+        nplusOneSummaryLabel.text = summary?.let { formatNplusOneAggregateSummary(it) } ?: ""
+        nplusOneSummaryLabel.isVisible = shouldShow
+        nplusOneBackButton.isVisible = shouldShow
+        // 显隐翻转才 revalidate（每拍重排会放大流式灌入期的布局成本；文本更新不需要重排）
+        if (visibilityChanged) focusTabBar.parent?.revalidate()
+    }
+
+    /**
+     * T-Nplus1Aggregate D235：点击红色 N+1 嫌疑徽章 → 进入聚合过滤态。过滤形态复用既有
+     * [FocusTab.Template]（O-90「只看同结构」——与右键入口同一过滤器，AND 叠加 / 页签 ✕
+     * 关闭恢复全部 / 与类型搜索过滤并存全部免费获得，计划册 §二.3「跟既有形态走」）。
+     * 回退开关关＝点击无效（徽章纯行级）。命中并进入返回 true（调用方让过单击预览）；
+     * 未命中返回 false。
+     *
+     * 反向验证锚点：摘掉 [tryEnterNplusOneAggregate] 内的 addFocusTab 接线（或 buildListPane
+     * mouseClicked 的调用行），SqlLogPanelNplusOneAggregateTest 点击用例必红。
+     */
+    internal fun tryEnterNplusOneAggregate(e: java.awt.event.MouseEvent): Boolean {
+        if (!NplusOneAggregate.enabledProvider()) return false
+        val suspects = entryCellRenderer.nplusOneSuspects ?: return false
+        if (suspects.isEmpty()) return false
+        val entry = nplusOneBadgeEntryAt(list, entryCellRenderer, e.point, suspects) ?: return false
+        val n = templateCounts[entry.structureKey] ?: return false
+        addFocusTab(FocusTab.Template(entry.structureKey, n))
+        return true
+    }
+
+    /**
+     * T-Nplus1Aggregate D235：退出聚合过滤态（「返回全部」按钮 / Esc 同效）——关闭全部同结构
+     * 聚焦页签，列表恢复原状（方法/请求页签不受影响）。无过滤态时 no-op（Esc 不吃既有通道）。
+     */
+    internal fun exitNplusOneAggregate() {
+        val hadTemplateTabs = focusTabs.removeAll { it is FocusTab.Template }
+        if (hadTemplateTabs) {
+            rebuildFocusTabBar()
+            refreshList()
+        }
     }
 
     private fun refreshList() {
