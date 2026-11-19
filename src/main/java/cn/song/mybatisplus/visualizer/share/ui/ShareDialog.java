@@ -12,6 +12,8 @@ import com.intellij.openapi.fileChooser.FileSaverDescriptor;
 import com.intellij.openapi.fileChooser.FileSaverDialog;
 import com.intellij.openapi.fileEditor.FileDocumentManager;
 import com.intellij.openapi.fileEditor.FileEditorManager;
+import com.intellij.openapi.progress.ProgressManager;
+import com.intellij.openapi.progress.Task;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.DialogWrapper;
 import com.intellij.ui.components.JBLabel;
@@ -234,9 +236,7 @@ public class ShareDialog extends DialogWrapper {
         com.intellij.openapi.vfs.VirtualFileWrapper saved =
                 dialog.save((com.intellij.openapi.vfs.VirtualFile) null, "sql-diagnostic-report.html");
         if (saved != null) {
-            File file = saved.getFile();
-            shareManager.saveHtmlReport(html, file.getAbsolutePath());
-            BrowserUtil.open(file.toURI().toString());
+            saveHtmlInBackground(html, saved.getFile());
         }
     }
 
@@ -260,9 +260,33 @@ public class ShareDialog extends DialogWrapper {
         FileSaverDialog dialog = FileChooserFactory.getInstance().createSaveFileDialog(descriptor, project);
         com.intellij.openapi.vfs.VirtualFileWrapper saved = dialog.save((com.intellij.openapi.vfs.VirtualFile) null, "sql-report.html");
         if (saved != null) {
-            File file = saved.getFile();
-            shareManager.saveHtmlReport(html, file.getAbsolutePath());
-            BrowserUtil.open(file.toURI().toString());
+            saveHtmlInBackground(html, saved.getFile());
         }
+    }
+
+    /**
+     * T-PerfSweep30 04a：HTML 落盘移出 EDT（性能分析 §4.6 登记的唯一 EDT 直写盘面）。
+     *
+     * <p>原形态在按钮回调（EDT）里直接 {@code shareManager.saveHtmlReport} → {@code File.writeText}，属 File IO
+     * 红线面；量级小（单文件、用户显式点击）但红线就是红线。形态对照既有先例
+     * {@code ScanBannedApiUsagesAction}（Task.Backgroundable + 完成回调），落盘在后台、打开浏览器回 EDT。</p>
+     *
+     * <p>只移<b>落盘</b>：HTML 组装（{@code HtmlReportFormatter.format} / {@code DiagnosticReportFormatter.formatHtml}）
+     * 与面板状态读取留在 EDT——前者是纯字符串拼接，后者必须 EDT 读 Swing 状态，一并下移会把
+     * 组件访问带进后台线程。组装成本另立观察项（性能分析 §八），不在本券扩面。</p>
+     */
+    private void saveHtmlInBackground(String html, File file) {
+        String title = MpSqlVisualizerBundle.message("share.dialog.exportTitle");
+        ProgressManager.getInstance().run(new Task.Backgroundable(project, title, false) {
+            @Override
+            public void run(@NotNull com.intellij.openapi.progress.ProgressIndicator indicator) {
+                shareManager.saveHtmlReport(html, file.getAbsolutePath());
+            }
+
+            @Override
+            public void onSuccess() {
+                BrowserUtil.open(file.toURI().toString());
+            }
+        });
     }
 }
