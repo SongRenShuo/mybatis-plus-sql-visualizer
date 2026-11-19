@@ -104,45 +104,16 @@ object McpToolsetDynamicRegistrar {
                         "names=${ext.map { it.javaClass.simpleName }}",
                 )
             }.onFailure { LOG.warn("T-McpDynamicToolset: EP self-check failed (diagnostic only)", it) }
-            // D238：注册完成后再触发一拍 EP 变更，逼平台在**完整态**重算工具列表。
-            // 真机 2026-11-19 实证：关一次总开关再开，EP 里 11 个（自检 total=48 shells=11），
-            // 平台 tools/list 却只出前 3 个（上一次更极端只出 1 个）。平台 McpToolsListProvider
-            // 每次 EP 变更 launch 一个重算协程、结果 `putAll` 进 toolsByProvider 缓存；11 次注册
-            // 连续触发时靠前的重算会快照到「只注册了前几个」的 EP，后续重算未必覆盖回来。
-            // 重放在全部实例就位后产生两次新变更通知，让最后一次重算读到 11 个。
-            scheduleReplayToForcePlatformRecompute()
+            // D238：**重放补丁已撤回**（2026-11-19 真机实证：加重放后连冷启动都只列 1 个，
+            // 而不带重放的上一版冷启动正常 11 个）。原因：平台 McpToolsListProvider 收到 EP
+            // 变更即启动重算（无 debounce），「先摘 11 个再重挂 11 个」必然制造一个 EP 半空的
+            // 瞬间，平台在那一刻快照并缓存残集。重放不是解，反而扩大污染窗口。
+            // 剩余问题（关一次开关后只列前 1~3 个）另寻修法，见 D238 册 §四。
         }.onFailure {
             // registered 不置位：下个项目启动重试（动态 EP 未就绪等瞬态失败可自愈）——
             // 已 define/已注册的 FQN 由两本台账跳过，重试只补未完成项
             LOG.warn("T-McpDynamicToolset: mcpToolset EP 注册失败（MCP 工具不可用，其余功能不受影响）", it)
         }
-    }
-
-    /**
-     * D238：注册完成后延迟一拍做一次「全摘除 + 全重注册」重放，逼平台重算工具列表。
-     *
-     * 为什么需要：平台的 `McpToolsListProvider` 对每次 EP 变更 `launch` 一个重算协程（Mutex 串行），
-     * 结果 `putAll` 进 provider→tools 缓存。我们连续注册 11 个时，靠前的重算会读到「只注册了几个」
-     * 的 EP 快照并写缓存，后续重算在某些时序下没能把完整集合覆盖回来——真机表现为「EP 自检 11 个、
-     * 平台只列前 1~3 个」，且关一次总开关就触发（首次冷启动恰好时序正确，所以之前没暴露）。
-     *
-     * 重放发生在 EDT 空闲一拍之后（注册全部就位），产生 12 次新变更通知，最后一次重算读到的必然是
-     * 完整 EP。重放幂等：实例同一批对象，摘除后立刻重注册，门控与过滤链不受影响。
-     */
-    private fun scheduleReplayToForcePlatformRecompute() {
-        com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater({
-            if (!registered.get()) return@invokeLater
-            val snapshot = registeredInstances.values.toList()
-            if (snapshot.isEmpty()) return@invokeLater
-            runCatching {
-                val ep = ExtensionPointName.create<Any>(TOOLSET_EP_NAME).getPoint(null)
-                snapshot.forEach { runCatching { ep.unregisterExtension(it) } }
-                snapshot.forEach { runCatching { ep.registerExtension(it) } }
-                LOG.info("T-McpDynamicToolset: replayed ${snapshot.size} toolset registrations to force platform recompute")
-            }.onFailure {
-                LOG.warn("T-McpDynamicToolset: replay failed（工具清单可能只列出部分，MCP 服务不受影响）", it)
-            }
-        }, com.intellij.openapi.application.ModalityState.nonModal())
     }
 
     /**
@@ -153,18 +124,24 @@ object McpToolsetDynamicRegistrar {
      */
     @Synchronized
     fun unregisterAll() {
-        if (registeredInstances.isEmpty() && !registered.get()) return
-        val ep = runCatching { ExtensionPointName.create<Any>(TOOLSET_EP_NAME).getPoint(null) }.getOrNull()
-        if (ep != null) {
-            registeredInstances.forEach { (fqn, instance) ->
-                runCatching { ep.unregisterExtension(instance) }
-                    .onFailure { LOG.warn("T-McpDynamicToolset: 摘除 $fqn 失败（该工具仍可见）", it) }
-            }
-        }
-        registeredInstances.clear()
-        epRegistered.clear()
-        registered.set(false)
-        LOG.info("T-McpDynamicToolset: toolsets unregistered (master switch off)")
+        // D238（2026-11-19 真机实证后改写）：**不再从 EP 摘除 toolset**。
+        //
+        // 原实现关闭时 ep.unregisterExtension × 11、重开时再 × 11——而平台 `McpToolsListProvider`
+        // 收到 EP 变更立即重算（无 debounce）、结果 `putAll` 进 toolsByProvider 缓存。这条「摘 11 →
+        // 挂 11」的路径会制造 EP 半空瞬间，平台在那一刻快照并长期缓存残集：真机表现为关一次总开关
+        // 后 tools/list 只列注册顺序前 1~3 个（重启不恢复，重装插件才回 11）。
+        //
+        // 现语义：toolset 常驻 EP；关闭总开关时 [McpToolGate.isEnabled] 返回 false，
+        // 平台 `getEnabledToolsets()`（= EP.getExtensionList().filter { it.isEnabled() }）
+        // 自动滤掉全部工具——**零 EP 变更**，缓存不会污染。重开时同样零变更即恢复。
+        //
+        // 结构性免疫不受影响：会拖垮平台 MCP Server 的是 `mcpToolFilterProvider` 那条，
+        // 它的摘除仍由 [McpGateFilterEpRegistrar.sync] 负责（总开关关闭时不挂过滤链）。
+        if (!registered.get() && registeredInstances.isEmpty()) return
+        LOG.info(
+            "T-McpDynamicToolset: master switch off — toolsets keep EP registration " +
+                "(${registeredInstances.size}); visibility gated by isEnabled() (no unregister)",
+        )
     }
 
     private fun registerToolset(toolClass: Class<*>, toolsetIface: Class<*>) {
