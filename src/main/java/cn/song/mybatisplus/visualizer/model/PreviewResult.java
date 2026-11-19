@@ -835,6 +835,23 @@ public final class PreviewResult {
     }
 
     /**
+     * Kotlin data class {@code copy(perfWarnings = …)} 的全量保留等价（T-SqlPreviewStandalone：
+     * 独立工作台「粘贴即体检」把静态性能检查结果并进预览产物）。
+     */
+    public PreviewResult withPerfWarnings(java.util.List<PerfWarning> newPerfWarnings) {
+        return new PreviewResult(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning,
+                columns, columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel,
+                xmlModel, initialParamValues, newPerfWarnings, fillClauses, previousSql, pagesColumns,
+                namedParamHints, stackDigest, threadName, hasDollarRawSegments, countSql, paginationLimitLine,
+                placeholderParamNames, duplicateParamNames, diagramStatement, historyFingerprintSeed,
+                paginationParamSources, renderedDialect, dialectDecision, historyEntryId, actualSql,
+                sourceLanguage, originalSql, degradations, runtimeSlots,
+                retryWhenIndexReady, m2AwaitKey, informationalWarning,
+                ibatisParamModel, rerender, decidingConsumption, otherConsumptions,
+                statementTypeOptions, statementTypeSwitch);
+    }
+
+    /**
      * Kotlin data class {@code copy(renderedDialect = …, dialectDecision = …)} 的全量保留等价——
      * 其余字段（含后加的 rerender/ibatisParamModel/informationalWarning/判型字段/源语言字段等）逐项保留。
      * 方言解析入口 ({@code PreviewDialectResolver.copyWith}) 必须走本方法，否则短参构造会丢掉这些尾字段。
