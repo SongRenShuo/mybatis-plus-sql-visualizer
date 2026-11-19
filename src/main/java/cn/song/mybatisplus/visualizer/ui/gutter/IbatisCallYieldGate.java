@@ -52,9 +52,17 @@ public enum IbatisCallYieldGate {
     /** 单例实例（Kotlin object 语义兼容）。 */
     INSTANCE;
 
-    /** {@code id} / {@code ns.id} / {@code a.b.c} 形态（iBatis statementId 的语法字符集：标识符段 + 点）。 */
+    /**
+     * {@code id} / {@code ns.id} / {@code a.b.c} 形态（iBatis statementId 的语法字符集：标识符段 + 点）。
+     *
+     * <p>T-IbatisAtShapeGate：段内<b>放行 {@code @}</b>——站点自研封装的语句名是 {@code 组名@命名空间.语句id}
+     * 形态（真机报障 {@code baseDao.queryForObject("cQAccountTypeByAccountType@custmg.qAccountTypeByAccountType", …)}，
+     * {@code @} 是 namespace 段的一部分；gutter 解析链 namespace 本就是任意字符串键，天然支持）。
+     * 段首仍必须字母/{@code _}/{@code $}：SQL 文本（含空格）、{@code fn(x)}、{@code 1abc} 等负例照旧不命中，
+     * 让位门的「SQL 拼接调用 vs 语句 id 调用」分辨职责不收窄。</p>
+     */
     private static final Pattern STATEMENT_ID_SHAPE =
-            Pattern.compile("[A-Za-z_$][A-Za-z0-9_$]*(?:\\.[A-Za-z_$][A-Za-z0-9_$]*)*");
+            Pattern.compile("[A-Za-z_$][A-Za-z0-9_$@]*(?:\\.[A-Za-z_$][A-Za-z0-9_$@]*)*");
 
     /**
      * 该调用是否是「iBatis {@code SqlMapExecutor} 入口形态」（判定即让位）。

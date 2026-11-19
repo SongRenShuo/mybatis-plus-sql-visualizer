@@ -79,7 +79,11 @@ public final class GutterWarmScheduler {
     /** 已排定待踢的文件（按 VirtualFile.url；踢出/放弃即移除，防延迟窗内重复排）。 */
     private static final Set<String> SCHEDULED_FILES = ConcurrentHashMap.newKeySet();
 
-    /** 每项目的 smart 锚点（project.locationHash → 最近一次观察到 smart 的时刻）。 */
+    /**
+     * 每项目的 smart 锚点（project.locationHash → 最近一次观察到 smart 的时刻）。
+     * T-PerfSweep31 券04 登记：应用级会话容器，项目关闭不清理——残留每项目一条 Long map entry
+     * （量级可忽略）；键含 locationHash，无跨项目撞键面。
+     */
     private static final Map<String, Long> SMART_SINCE_PER_PROJECT = new ConcurrentHashMap<>();
 
     /** Kotlin object 语义兼容实例。 */

@@ -17,7 +17,7 @@ import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiMethodCallExpression;
 import com.intellij.psi.PsiPolyadicExpression;
 import com.intellij.psi.PsiReferenceExpression;
-import com.intellij.psi.PsiVariable;
+import com.intellij.psi.PsiType;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import kotlin.Unit;
@@ -108,12 +108,17 @@ public class HqlGutterLineMarkerProvider implements LineMarkerProvider {
         }
         if (firstArg instanceof PsiReferenceExpression) {
             // 变量引用：仅 String 类型视为有效 HQL 参数（排除 cq 等 CriteriaQuery 变量）
-            com.intellij.psi.PsiElement resolved = ((PsiReferenceExpression) firstArg).resolve();
-            if (resolved instanceof PsiVariable) {
-                String typeName = ((PsiVariable) resolved).getType().getCanonicalText();
-                return "java.lang.String".equals(typeName) || "String".equals(typeName);
+            // T-PerfSweep31 券05（M36.5.79 残留收口）：改按表达式类型直判——旧形态
+            // resolve() 拿 PsiVariable 再取 canonicalText，引用解析 + 字符串分配在慢趟
+            // per-element 重复付费；PsiReferenceExpression.type 走类型推断引擎直取，
+            // equalsToText 无 String 分配。判空回落 false（既有语义不变）。
+            try {
+                PsiType type = ((PsiReferenceExpression) firstArg).getType();
+                if (type == null) return false;
+                return type.equalsToText("java.lang.String") || type.equalsToText("String");
+            } catch (Throwable ignored) {
+                return false;
             }
-            return false;
         }
         return false; // Class 字面量等
     }

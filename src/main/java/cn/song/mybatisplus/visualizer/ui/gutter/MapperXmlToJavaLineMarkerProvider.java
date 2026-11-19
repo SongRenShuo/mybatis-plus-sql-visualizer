@@ -38,8 +38,18 @@ import java.util.function.Function;
 public class MapperXmlToJavaLineMarkerProvider implements LineMarkerProvider {
 
     // T-SyncK2JMaster179 生产补漏：master companion 的会话级正缓存与测试缝。
-    /** F1-a 会话级正缓存：本会话解析成功过的 {@code namespace#id}。 */
+    /** F1-a 会话级正缓存：本会话解析成功过的语句键（形态见 {@link #cacheKey}）。无失效，取舍见类头注释。 */
     public static final Set<String> resolvedStatementKeys = ConcurrentHashMap.newKeySet();
+
+    /**
+     * T-PerfSweep32 券02：缓存键带 {@code project.locationHash} 前缀——resolvedStatementKeys 是
+     * 应用级容器、项目关闭不清理，键不含项目身份时两工程同名 namespace+statement 会跨项目串号
+     * （A 工程确认过，B 工程直接信）。与 {@link IbatisJavaToXmlLineMarkerProvider#cacheKey}
+     * （T-PerfSweep31 券04）同口径；locationHash 会话内稳定，作键仅限会话级去重语义。
+     */
+    static String cacheKey(@NotNull Project project, @NotNull String namespace, @NotNull String statementId) {
+        return project.getLocationHash() + "|" + namespace + "|" + statementId;
+    }
 
     /** 测试缝：dumb 判定（生产＝DumbService.isDumb）。双侧共用。 */
     public static volatile Function<Project, Boolean> isDumbProvider = project -> {
@@ -110,8 +120,8 @@ public class MapperXmlToJavaLineMarkerProvider implements LineMarkerProvider {
         if (id == null || id.isBlank()) return null;
         // T-MapperGutterEvict P2.1：dumb 门前置 → 三态定位 → Found 入缓存 / Unknown 留缓存命中 /
         // Absent 收回缓存。禁吞 ProcessCanceledException。
-        String key = namespace + "#" + id;
         Project project = element.getProject();
+        String key = cacheKey(project, namespace, id);
         if (isDumbProvider.apply(project)) return buildStatementMarker(element);
         MybatisXmlTargets.MethodLookup lookup = MybatisXmlTargets.lookupInterfaceMethod(project, namespace, id);
         if (lookup instanceof MybatisXmlTargets.Found) {

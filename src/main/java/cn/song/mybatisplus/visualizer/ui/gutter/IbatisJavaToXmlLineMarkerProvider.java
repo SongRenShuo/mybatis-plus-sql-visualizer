@@ -138,14 +138,20 @@ public class IbatisJavaToXmlLineMarkerProvider implements LineMarkerProvider {
      * 正缓存键：{@code ns.id} 形态直接用语句 id；裸 id 带上所属类限定名——同一个裸 id 在不同 DAO
      * 上可能偏好不同的 sqlMap 文件，键必须把命名空间带进去，否则一个 DAO 的成功会替另一个
      * 造出「点了可能落到别家文件」的图标。
+     *
+     * <p>T-PerfSweep31 券04：键再带 {@code project.locationHash} 前缀——RESOLVED_IBATIS_KEYS 是应用级
+     * 静态容器、项目关闭不清理，裸 {@code ns.id} 作键会让两个工程对同一条语句互踩正缓存
+     * （A 工程确认过调用点，B 工程直接信 → Absent 也照样画）。跨项目撞键面消除；
+     * 会话内增长仍以语句数为上界。</p>
      */
-    private static String cacheKey(@NotNull String statementId, @Nullable String ownerNamespace) {
-        return statementId.indexOf('.') >= 0 ? statementId : statementId + "@" + (ownerNamespace != null ? ownerNamespace : "");
+    static String cacheKey(@NotNull Project project, @NotNull String statementId, @Nullable String ownerNamespace) {
+        return project.getLocationHash() + "|"
+            + (statementId.indexOf('.') >= 0 ? statementId : statementId + "@" + (ownerNamespace != null ? ownerNamespace : ""));
     }
 
     /** P2 兜底链路日志锚点：{@code [gutter-perf] ibatis resolve: source=optimistic …}（每条一次）。 */
-    private static void logOptimisticOnce(@NotNull String statementId) {
-        if (!OPTIMISTIC_LOGGED_KEYS.add(statementId)) {
+    private static void logOptimisticOnce(@NotNull Project project, @NotNull String statementId) {
+        if (!OPTIMISTIC_LOGGED_KEYS.add(project.getLocationHash() + "|" + statementId)) {
             return;
         }
         LOG.info("[gutter-perf] ibatis resolve: source=optimistic statementId=" + statementId + " dumb=true");
@@ -225,11 +231,11 @@ public class IbatisJavaToXmlLineMarkerProvider implements LineMarkerProvider {
         // 正缓存键都靠它，测试 testF1i_裸id缓存键带所属类限定名 钉住）
         String ownerNamespace = IbatisCallTargets.ownerNamespace(call);
         Project project = identifier.getProject();
-        String key = cacheKey(statementId, ownerNamespace);
+        String key = cacheKey(project, statementId, ownerNamespace);
 
         // ① dumb 窗（工程打开头几秒 / 重建索引）：索引不可查，按「未知」乐观产出两枚、不入缓存。
         if (isDumbProvider.apply(project)) {
-            logOptimisticOnce(statementId);
+            logOptimisticOnce(project, statementId);
             return buildMarkers(identifier, first, previewEnabled);
         }
         IbatisXmlStatementTargets.Lookup lookup =

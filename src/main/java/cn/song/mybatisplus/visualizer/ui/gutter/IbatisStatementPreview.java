@@ -83,6 +83,22 @@ public final class IbatisStatementPreview {
     }
 
     /**
+     * 同 {@link #previewResolved}，但<b>目标缺失返回 null</b>——供「错源兜底」使用（T-IbatisAtShapeGate S4）。
+     *
+     * <p>语义差别是刻意留的：兜底链的调用方（ConvertToSqlAction.tryJdbcTemplateFallback）在 JDBC
+     * 通道已认领并渲染失败后试一次本档，<b>命中才接管、未命中保持原「未找到」提示</b>——若这里也返回
+     * 「语句未找到」可见失败，非 iBatis 工程里的 {@code cache.update("refreshCache")} 这类调用会被改成
+     * 指向 iBatis 语句的误导文案。</p>
+     */
+    @Nullable
+    public static PreviewResult previewResolvedOrNull(@NotNull Project project,
+                                                      @NotNull String statementId,
+                                                      @Nullable String ownerNamespace) {
+        XmlTag tag = resolveStatementTag(project, statementId, ownerNamespace);
+        return tag != null ? previewTag(tag) : null;
+    }
+
+    /**
      * 同标签名兄弟中的序号（0 起）——语句缺 {@code id} 属性（非法文件）时的定位回落。
      * 纯 PSI 兄弟遍历，O(兄弟数)，不进 gutter 热路径（只在无 id 的小概率分支调用）。
      */

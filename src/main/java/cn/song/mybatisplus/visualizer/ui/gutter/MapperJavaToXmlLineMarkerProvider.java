@@ -80,8 +80,8 @@ public class MapperJavaToXmlLineMarkerProvider implements LineMarkerProvider {
         // F1' 同构（T-GutterFirstOpenDelay Java 侧）/ P2.1 五段式：与 XML 侧同不变式——图标只在
         // 「确认真没有」时缺席，不在「还没查到」时缺席。复用 XML 侧共享的正缓存与 dumb 测试缝。
         // 不 catch ProcessCanceledException（平台契约禁吞 PCE）。
-        String key = namespace + "#" + method.getName();
         Project project = element.getProject();
+        String key = MapperXmlToJavaLineMarkerProvider.cacheKey(project, namespace, method.getName());
         // ① dumb 窗乐观产出（不查索引、不入缓存）
         if (MapperXmlToJavaLineMarkerProvider.isDumbProvider.apply(project)) {
             return buildMethodMarker(element);
