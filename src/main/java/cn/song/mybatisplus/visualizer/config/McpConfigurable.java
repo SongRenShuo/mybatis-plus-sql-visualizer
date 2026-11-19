@@ -380,7 +380,7 @@ public class McpConfigurable implements Configurable {
                 app.getMessageBus().syncPublisher(PluginSettings.SETTINGS_CHANGE_TOPIC).settingsChanged();
             }
         } catch (Throwable t) {
-            Logger.getInstance(McpConfigurable.class)
+            com.intellij.openapi.diagnostic.Logger.getInstance(McpConfigurable.class)
                 .warn("MCP 设置变更广播失败（热同步退化为重启生效）", t);
         }
     }
