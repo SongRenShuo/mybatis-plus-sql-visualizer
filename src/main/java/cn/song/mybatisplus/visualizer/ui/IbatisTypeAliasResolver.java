@@ -1,11 +1,9 @@
 package cn.song.mybatisplus.visualizer.ui;
 
+import cn.song.mybatisplus.visualizer.xml.ibatis.SqlMapConfigAliasIndex;
 import com.intellij.openapi.application.ReadAction;
-import com.intellij.openapi.module.Module;
-import com.intellij.openapi.module.ModuleManager;
+import com.intellij.openapi.module.ModuleUtilCore;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.roots.ModuleRootManager;
-import com.intellij.openapi.vfs.VfsUtilCore;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiManager;
@@ -14,10 +12,6 @@ import com.intellij.psi.xml.XmlTag;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-
 /**
  * T-MbgPreviewParityAndOpenPerf P6：iBatis {@code <typeAlias>} 别名表。
  *
@@ -25,16 +19,25 @@ import java.util.concurrent.ConcurrentHashMap;
  * （{@code <typeAlias alias="User" type="cn.x.model.User"/>}）。先拿到 FQN 再直查，比
  * 「全项目短名索引 + 模块收窄」（L34）更准（零歧义）也更快（不遍历候选、不做模块过滤）。</p>
  *
- * <p>定位策略（v1）：扫<b>语句所在模块</b>内容根下的 .xml，只认根标签为 sqlMapConfig 的文件，
- * 读其中的 {@code <typeAlias>}；结果按模块缓存。</p>
+ * <h2>定位策略（v2，T-PerfSweep31 券01）</h2>
  *
- * <p>v1 取舍：缓存是<b>会话级</b>（config 改了要重启会话才生效）、只扫模块内（跨模块共用的 config
- * 不覆盖）——两处都在计划 §五 V5 登记为待真机确认项；命中不到时调用方回落短名索引，行为不变。</p>
+ * <p>走自定义标量索引 {@link SqlMapConfigAliasIndex}：别名在<b>索引期</b>摊平，运行时一次
+ * {@code getContainingFiles} 出候选文件，再按「语句所在模块」收窄 + PSI 侧精确匹配
+ * （根标签 {@code sqlMapConfig} + {@code <typeAlias alias>} 精确相等——索引键偶有偏差只影响查得到
+ * 查不到，不会给出错的 FQN）。失效全交平台增量——<b>config 改动保存后即生效</b>
+ * （v1 的会话级缓存与本限制一并退役）。</p>
+ *
+ * <p>历史（v1，性能分析第八期 §4.3 定性为 P2）：扫语句所在模块内容根下的 {@code .xml}
+ * （{@code iterateChildrenRecursively} 全走查 + 逐文件建 PSI），跑在预览点击链的
+ * {@code ReadAction.compute}（池线程持读锁）内——大模块首次点击付整模块 PSI 代价、持读锁推迟
+ * 平台写动作。守卫 {@code IbatisTypeAliasResolverHotPathTest} 钉住「本文件不得再出现全走查 API」。</p>
+ *
+ * <h2>模块收窄语义（与 v1 一致）</h2>
+ *
+ * <p>只认<b>语句所在模块</b>内的 config 文件（候选按文件的归属模块过滤）；跨模块共用的 config
+ * 不覆盖（v1 已登记的限制，行为不扩面）。命中不到时调用方回落短名索引，行为不变。</p>
  */
 public final class IbatisTypeAliasResolver {
-
-    /** 模块名 → 别名表（会话级缓存）。 */
-    private static final Map<String, Map<String, String>> CACHE = new ConcurrentHashMap<>();
 
     /** Kotlin object 语义兼容实例。 */
     public static final IbatisTypeAliasResolver INSTANCE = new IbatisTypeAliasResolver();
@@ -48,62 +51,45 @@ public final class IbatisTypeAliasResolver {
         if (project == null || moduleName == null || moduleName.isBlank() || alias.isBlank()) {
             return null;
         }
-        Map<String, String> table = CACHE.computeIfAbsent(moduleName, name -> {
-            try {
-                return ReadAction.compute(() -> scan(project, name));
-            } catch (RuntimeException e) {
-                return Map.<String, String>of();
-            }
-        });
-        return table.get(alias);
-    }
-
-    /** 测试缝：清空会话缓存（Heavy 用例之间不串）。 */
-    public static void clearCache() {
-        CACHE.clear();
-    }
-
-    @NotNull
-    private static Map<String, String> scan(@NotNull Project project, @NotNull String moduleName) {
-        Module module = ModuleManager.getInstance(project).findModuleByName(moduleName);
-        if (module == null) {
-            return Map.of();
+        // 索引查询 + PSI 读都在本读动作内完成；调用方（预览链）已持读锁，重入合法
+        java.util.List<VirtualFile> candidates;
+        try {
+            candidates = SqlMapConfigAliasIndex.getConfigFilesByAlias(project, alias);
+        } catch (Throwable t) {
+            return null; // dumb / 索引未就绪：按「本次没有」回落，不抛穿预览链
+        }
+        if (candidates.isEmpty()) {
+            return null;
         }
         PsiManager psiManager = PsiManager.getInstance(project);
-        Map<String, String> table = new LinkedHashMap<>();
-        for (VirtualFile root : ModuleRootManager.getInstance(module).getContentRoots()) {
-            VfsUtilCore.iterateChildrenRecursively(
-                    root,
-                    vf -> vf.isDirectory() || "xml".equals(vf.getExtension()),
-                    vf -> {
-                        if (!vf.isDirectory() && "xml".equals(vf.getExtension())) {
-                            var psiFile = psiManager.findFile(vf);
-                            collectFrom(psiFile instanceof XmlFile xmlFile ? xmlFile : null, table);
+        try {
+            return ReadAction.compute(() -> {
+                String trimmedAlias = alias.trim();
+                for (VirtualFile vf : candidates) {
+                    if (!vf.isValid()) continue;
+                    // 模块收窄（与 v1「只扫本模块」语义一致）：文件的归属模块必须等于语句所在模块
+                    com.intellij.openapi.module.Module module = ModuleUtilCore.findModuleForFile(vf, project);
+                    if (module == null || !module.getName().equals(moduleName)) continue;
+                    var file = psiManager.findFile(vf);
+                    if (!(file instanceof XmlFile xmlFile)) continue;
+                    XmlTag root = xmlFile.getRootTag();
+                    if (root == null || !"sqlMapConfig".equals(root.getName())) continue;
+                    for (PsiElement child : root.getChildren()) {
+                        if (child instanceof XmlTag tag
+                                && "typeAlias".equals(tag.getName())
+                                && trimmedAlias.equals(tag.getAttributeValue("alias") != null
+                                        ? tag.getAttributeValue("alias").trim() : null)) {
+                            String type = tag.getAttributeValue("type");
+                            if (type != null && !type.trim().isEmpty()) {
+                                return type.trim();
+                            }
                         }
-                        return true;
-                    });
-        }
-        return Map.copyOf(table);
-    }
-
-    /** 只认 {@code sqlMapConfig} 根（iBatis 配置文件的 DTD 根标签），避免误读业务 XML。 */
-    private static void collectFrom(@Nullable XmlFile file, @NotNull Map<String, String> table) {
-        if (file == null || file.getRootTag() == null) {
-            return;
-        }
-        XmlTag root = file.getRootTag();
-        if (!"sqlMapConfig".equals(root.getName())) {
-            return;
-        }
-        for (PsiElement child : root.getChildren()) {
-            if (!(child instanceof XmlTag tag) || !"typeAlias".equals(tag.getName())) {
-                continue;
-            }
-            String alias = tag.getAttributeValue("alias");
-            String type = tag.getAttributeValue("type");
-            if (alias != null && !alias.isBlank() && type != null && !type.isBlank()) {
-                table.put(alias, type);
-            }
+                    }
+                }
+                return null;
+            });
+        } catch (Throwable t) {
+            return null;
         }
     }
 }
