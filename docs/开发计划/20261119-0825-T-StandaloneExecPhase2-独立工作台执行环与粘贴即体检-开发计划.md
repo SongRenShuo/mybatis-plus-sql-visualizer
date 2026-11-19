@@ -53,4 +53,10 @@
 
 ## §六 实施记录
 
-（随提交回填：每完成一件可提交的就立即提交）
+- **20261119 08:25～09:40（主控车道，分支 `t-standalone-exec-ii`）**：
+  - 锚点实测带来一处范围收敛：`SqlPreviewPanel.executeSql(forceChoose)` internal 扩展（SqlPreviewPanelExecution.kt:1262）已承载完整执行链（Schema 校验/DML 确认/`${}` raw 门/未知参数门/占位对账/快照登记/方言闸/控制台内嵌），D233 实现为薄入口（工具栏 ExecuteAction → `ensurePreviewPanel().executeSql()`），§二-1 的「内嵌形态嵌入失效」前提**无需降级方案**——嵌入机制是面板自己的 resultPanel 链，未新增路径。
+  - §二-2 去重前提实测收敛：`PreviewResult.perfWarnings` 字段已存在（F-2 落地），`SqlPreviewPanelResultView.buildPerfSegments` 是既有渲染面；resolver 补填即无双报。D234 落在 resolver 单点（`withPerfCheck`，XML 与纯 SQL 两条出口各一处），§二-3 占位误报由负例用例钉住（`SELECT 1` 零建议、等值 WHERE 不报 missing_where）。
+  - 里程碑提交 `2b6467f9e`（7 文件 293 行：面板+resolver+plugin.xml+bundle 双语+两个测试类）。
+  - **定向读数**：`SqlStandaloneExecuteActionTest` 3/0/0/0、`StandalonePerfCheckTest` 5/0/0/0（全量未跑＝not run）。
+  - **反向验证**：①摘 enable 判定（恒 true）→ ExecuteActionTest 恰 2 红（初始禁用断言+清空禁用断言）；②摘两处 withPerfCheck → PerfCheckTest 恰 2 红（两条 select_star 正例），负例/回退用例保持绿。探针已还原（`git checkout --` 至已提交态），树干净。
+  - 待办：真机 GUI 验收（C2，用户）；BundleParityGuard 随下次构建校验腿自证（本车道未跑构建校验＝not run）。
