@@ -84,9 +84,8 @@ class SqlLogEntryBuffer(
      * D216 第二刀（吸收 Hibernate Debugger `RepeatedParameterizedSelectCriterion` 事务分组思路，
      * 本仓退化口径＝线程+滑动窗）：structureKey → 窗内 (timestamp, threadName) 戳队列（FIFO，
      * 读取时按窗修剪）。与 presence 计数链**独立**维护：
-     *  - 入队埋戳只在「去重开启 + 可去重」成功路径（与 presence 同条件），structureKey 经
-     *    [structureKeyByDedupe] 每 dedupeKey 只算一次（热路径零指纹重付——presence 链的
-     *    structureKey 惰性缓存挂在保留实例上，逐实例加戳不能直接复用）；
+     *  - 入队埋戳**不受去重开关影响**（D237 解耦：N+1 是诊断能力，去重只是展示偏好），
+     *    structureKey 直接取条目自己的 `by lazy`（同实例一次，随条目淘汰回收）；
      *  - **逐条出队不做摘戳**：头部淘汰/融合换实例留下的陈旧戳靠窗龄自愈（窗 60s 上限），
      *    「刚被淘汰的条目让键多嫌疑 ≤ 一个窗」为如实登记的近似；[clear] 全量复位；
      *  - 读取见 [windowSuspectKeys]（修剪 + 同线程分桶 + 阈值判定，null 线程单桶参与——
@@ -95,9 +94,6 @@ class SqlLogEntryBuffer(
     private class WindowStamp(val tsMs: Long, val thread: String?)
 
     private val windowStamps = HashMap<String, ArrayDeque<WindowStamp>>()
-
-    /** dedupeKey → structureKey（每键一次指纹计算；与窗口戳同生命周期，[clear] 一并清）。 */
-    private val structureKeyByDedupe = HashMap<String, String>()
 
     @Volatile
     var paused: Boolean = false
@@ -600,14 +596,16 @@ class SqlLogEntryBuffer(
                         // 券B：在队计数 +1，登记变更键供面板按 presence 净差增量（同键入队与后续淘汰的
                         // 增减在 drain 间折叠为一次净变化，无悬挂余量）。
                         markCountKeyLocked(added.dedupeKey)
-                        // T-HdAbsorb D216 第二刀：窗口嫌疑戳（与 presence 同条件维护；O(1) 追加，
-                        // structureKey 经 byDedupe 缓存每键只算一次——热路径零指纹重付）。
-                        markWindowStampLocked(added)
                     } else {
                         // 券B：去重关闭期间 presence 不维护 / 不可去重条目（ShardingSphere）不在
                         // presence 口径内——增量键集无法表达，面板回退全量重算（与全量重算的现状同价）。
                         countFullRebuildPending.set(true)
                     }
+                    // D237：窗口嫌疑戳**与去重开关解耦**——N+1 是诊断能力，去重只是展示偏好。
+                    // 此前该调用藏在上面 `if (dedupeEnabled && canDedupe)` 内，关掉去重即让 N+1 徽标
+                    // 与 D235 聚合全链静默失效（2026-11-19 用户真机验收发现）。成本实测：structureKey
+                    // 单条 3.8µs（10000 条 38ms）且条目上本就 lazy；ShardingSphere（canDedupe=false）同纳。
+                    markWindowStampLocked(added)
                     // T-DedupeDecouple：跨通道索引与去重开关**解耦**——去重关闭时它照样维护，
                     // 否则兜底查不到候选（真机：关掉「SQL 去重」后同一次执行又出现两条）。
                     // 券F1：不再做 5s 时间窗惰性清除——超窗键是越窗兜底的候选源（见 crossChannelIndex KDoc）。
@@ -882,12 +880,16 @@ class SqlLogEntryBuffer(
     }
 
     /**
-     * T-HdAbsorb D216 第二刀：窗口嫌疑戳登记（调用方须已持 `synchronized(entries)`，与 presence
-     * 维护同条件同锁）。structureKey 经 [structureKeyByDedupe] 每 dedupeKey 只算一次。
+     * T-HdAbsorb D216 第二刀：窗口嫌疑戳登记（调用方须已持 `synchronized(entries)`）。
+     *
+     * D237：**不再经 `structureKeyByDedupe` 跨条目缓存**——该 map 只在 `clear()` 时清空、没有随
+     * 条目淘汰回收，是既有的无界累积点。改用条目自己的 `structureKey`：它本就在 [LogSqlEntry]
+     * 上 `by lazy`（同实例只算一次），成本实测单条 3.8µs；且随条目淘汰自动回收。
+     * 代价仅是同 dedupeKey 的多实例各算一次（收益本来也只有几 µs/条）。
      */
     private fun markWindowStampLocked(entry: LogSqlEntry) {
-        val sk = structureKeyByDedupe.getOrPut(entry.dedupeKey) { entry.structureKey }
-        windowStamps.getOrPut(sk) { ArrayDeque() }.addLast(WindowStamp(entry.timestamp, entry.threadName))
+        windowStamps.getOrPut(entry.structureKey) { ArrayDeque() }
+            .addLast(WindowStamp(entry.timestamp, entry.threadName))
     }
 
     /**
@@ -938,7 +940,6 @@ class SqlLogEntryBuffer(
             dedupeKeyPresence.clear() // F83：键级在队计数随队清空
             crossChannelIndex.clear() // T-CrossChannelDedupe：跨通道索引同生命周期清空
             windowStamps.clear() // T-HdAbsorb D216 第二刀：窗口嫌疑戳同生命周期清空
-            structureKeyByDedupe.clear()
             // 券B：清空后悬挂的变更键作废（面板全量重建不消费键集），集合一并清空保持有界口径。
             synchronized(changedCountKeys) { changedCountKeys.clear() }
         }

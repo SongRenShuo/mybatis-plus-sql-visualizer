@@ -12,8 +12,14 @@ import org.junit.Test
  * 戳登记只走「去重开启 + 可去重」成功路径——同模板不同字面量（N+1 形态）dedupeKey 互异、
  * structureKey 相同，恰是嫌疑面；完全同文重复走去重丢弃不重复埋戳（⨉N 徽章职责）。
  *
- * 反向验证锚点：**摘掉 addEntryInternal 成功路径的 markWindowStampLocked(added) 一行，
- * [test同线程窗内重复_判嫌疑] 与 [testnull线程回落口径] 必红**（windowSuspectKeys 恒空集）。
+ * **D237（2026-11-19）**：戳登记已与去重开关**解耦**——此前只在「去重开启 + 可去重」路径，
+ * 关掉去重即让 N+1 徽标与 D235 聚合全链静默失效（用户真机验收发现）。现无条件登记，
+ * [test去重关闭_同线程窗内重复仍判嫌疑] 与 [test不可去重来源_仍判嫌疑] 钉住这条。
+ *
+ * 反向验证锚点：**把 addEntryInternal 的 markWindowStampLocked(added) 移回
+ * `if (dedupeEnabled && canDedupe(added))` 分支内**，上面两条新用例必红（去重关闭与
+ * ShardingSphere 两条路径戳为空 → windowSuspectKeys 恒空集），而原有同线程用例仍绿
+ * （它走去重开启路径）——探针精度可据此判读。
  */
 class NplusOneWindowBufferTest {
 
@@ -95,5 +101,42 @@ class NplusOneWindowBufferTest {
         ))
         val keys = b.windowSuspectKeys(nowMs = 2_000L, windowMs = 60_000L, threshold = 5)
         assertFalse("同文重复不应灌爆窗口桶（去重丢弃路径不埋戳）：$keys", keys.isNotEmpty())
+    }
+
+    /** D237 U1：去重**关闭**时窗口戳照常登记——N+1 是诊断能力，不该被展示偏好关掉。 */
+    @Test
+    fun `去重关闭_同线程窗内重复仍判嫌疑`() {
+        val b = SqlLogEntryBuffer(maxEntries = 100)
+        b.disableDedupe()
+        assertFalse("前置：去重应已关闭", b.dedupeEnabled)
+        for (i in 1..5) b.addEntry(entryAt(TEMPLATE, i, 1_000L + i, "http-nio"))
+        val keys = b.windowSuspectKeys(nowMs = 2_000L, windowMs = 60_000L, threshold = 5)
+        assertTrue(
+            "去重关闭后同线程窗内 5 条同模板仍应判嫌疑（D237 解耦）：$keys",
+            keys.contains(entryAt(TEMPLATE, 1, 1_000L, "http-nio").structureKey),
+        )
+    }
+
+    /** D237 U4：ShardingSphere 来源（canDedupe=false）同样纳入 N+1 判定。 */
+    @Test
+    fun `不可去重来源_仍判嫌疑`() {
+        val b = SqlLogEntryBuffer(maxEntries = 100)
+        for (i in 1..5) {
+            b.addEntry(
+                LogSqlEntry(
+                    rawSql = TEMPLATE.replace("?", "$i"),
+                    restoredSql = TEMPLATE.replace("?", "$i"),
+                    params = emptyList(),
+                    timestamp = 1_000L + i,
+                    threadName = "http-nio",
+                    source = SqlSource.SHARDINGSPHERE,
+                ),
+            )
+        }
+        val keys = b.windowSuspectKeys(nowMs = 2_000L, windowMs = 60_000L, threshold = 5)
+        assertTrue(
+            "ShardingSphere 来源条目也应参与 N+1 判定（判定与去重能力无关）：$keys",
+            keys.contains(entryAt(TEMPLATE, 1, 1_000L, "http-nio").structureKey),
+        )
     }
 }
