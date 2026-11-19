@@ -69,7 +69,13 @@ public class SqlVisualizerRenderLogsTool extends McpToolsetSupport {
             + "hibernateSqlPrefix/hibernateParamPrefix) and 'mixedPrefixMatching' are optional and default to "
             + "the plugin's log-capture settings. Each restored statement is prefixed with a '-- SQL #N' "
             + "comment line carrying its source format. Deterministic restoration, not validation — pair with "
-            + "sqlv_check_sql to assess write risk before executing. Read-only: never executes SQL."
+            + "sqlv_check_sql to assess write risk before executing. Read-only: never executes SQL. "
+            + "Output tier (D219): 'detail' defaults to true (full restored SQL per statement, the historical "
+            + "contract); pass detail=false to get a bounded summary — one header line plus a 160-char SQL "
+            + "preview per statement — when only counts/shapes are needed and the AI context budget is tight. "
+            + "Masking (R60): when the plugin's 'MCP output masking' setting is enabled, sensitive literals "
+            + "(password-like columns, ID-card/mobile shapes) are masked as '***' in the restored statements "
+            + "to keep real production values out of the AI context; disabled by default for diagnosability."
     )
     @McpToolHints(
         readOnlyHint = McpToolHintValue.TRUE,
@@ -82,11 +88,12 @@ public class SqlVisualizerRenderLogsTool extends McpToolsetSupport {
         String paramPrefix,
         String hibernateSqlPrefix,
         String hibernateParamPrefix,
-        Boolean mixedPrefixMatching
+        Boolean mixedPrefixMatching,
+        Boolean detail
     ) {
         return audit("sqlv_render_logs",
             () -> renderLogs(logText, sqlPrefix, paramPrefix, hibernateSqlPrefix, hibernateParamPrefix,
-                mixedPrefixMatching));
+                mixedPrefixMatching, detail));
     }
 
     /** 纯函数核心：defaults 传 null 时从插件设置装配（服务未注册兜底内置默认）。 */
@@ -99,10 +106,24 @@ public class SqlVisualizerRenderLogsTool extends McpToolsetSupport {
         Boolean mixedPrefixMatching
     ) {
         return renderLogs(logText, sqlPrefix, paramPrefix, hibernateSqlPrefix, hibernateParamPrefix,
-            mixedPrefixMatching, null);
+            mixedPrefixMatching, null, null, null);
     }
 
-    /** Kotlin 默认参数 {@code maskLiterals = null} 的显式重载。 */
+    /** D219（T-HdAbsorb）：输出分档参重载——detail=null/true=明细（历史契约不变）；false=摘要档。 */
+    public String renderLogs(
+        String logText,
+        String sqlPrefix,
+        String paramPrefix,
+        String hibernateSqlPrefix,
+        String hibernateParamPrefix,
+        Boolean mixedPrefixMatching,
+        Boolean detail
+    ) {
+        return renderLogs(logText, sqlPrefix, paramPrefix, hibernateSqlPrefix, hibernateParamPrefix,
+            mixedPrefixMatching, null, null, detail);
+    }
+
+    /** Kotlin 默认参数显式重载（defaults 前置形态）。 */
     public String renderLogs(
         String logText,
         String sqlPrefix,
@@ -113,14 +134,10 @@ public class SqlVisualizerRenderLogsTool extends McpToolsetSupport {
         LogPrefixDefaults defaults
     ) {
         return renderLogs(logText, sqlPrefix, paramPrefix, hibernateSqlPrefix, hibernateParamPrefix,
-            mixedPrefixMatching, defaults, null);
+            mixedPrefixMatching, defaults, null, null);
     }
 
-    /**
-     * 全参形态（Kotlin defaults 参数显式入口；测试直调）。
-     *
-     * @param maskLiterals R60（T-LaneB D96/D97）：MCP 面脱敏——null 读设置 mcpMaskEnabled（默认关，审计册口径）
-     */
+    /** Kotlin 默认参数显式重载（defaults + maskLiterals 形态）。 */
     public String renderLogs(
         String logText,
         String sqlPrefix,
@@ -130,6 +147,27 @@ public class SqlVisualizerRenderLogsTool extends McpToolsetSupport {
         Boolean mixedPrefixMatching,
         LogPrefixDefaults defaults,
         Boolean maskLiterals
+    ) {
+        return renderLogs(logText, sqlPrefix, paramPrefix, hibernateSqlPrefix, hibernateParamPrefix,
+            mixedPrefixMatching, defaults, maskLiterals, null);
+    }
+
+    /**
+     * 全参形态（Kotlin defaults 参数显式入口；测试直调）。
+     *
+     * @param maskLiterals R60（T-LaneB D96/D97）：MCP 面脱敏——null 读设置 mcpMaskEnabled（默认关，审计册口径）
+     * @param detail D219：输出分档——null/true=明细（历史契约不变）；false=摘要档（每条一行头 + 160 字预览）
+     */
+    public String renderLogs(
+        String logText,
+        String sqlPrefix,
+        String paramPrefix,
+        String hibernateSqlPrefix,
+        String hibernateParamPrefix,
+        Boolean mixedPrefixMatching,
+        LogPrefixDefaults defaults,
+        Boolean maskLiterals,
+        Boolean detail
     ) {
         if (logText.isBlank()) {
             throwExpected(McpToolErrors.code(McpToolErrors.INVALID_ARGUMENT, "logText is empty."));
@@ -176,6 +214,31 @@ public class SqlVisualizerRenderLogsTool extends McpToolsetSupport {
             maskOn = resolved;
         }
         StringBuilder out = new StringBuilder();
+        // D219：输出分档——null/true=明细（历史契约逐字不变）；false=摘要档
+        if (detail == Boolean.FALSE) {
+            out.append("Restored ").append(entries.size()).append(" statement(s) (summary — pass detail=true for full SQL):\n\n");
+            for (int index = 0; index < entries.size(); index++) {
+                LogSqlEntry entry = entries.get(index);
+                out.append("-- SQL #").append(index + 1);
+                out.append(" [").append(entry.source().name().toLowerCase(java.util.Locale.ROOT)).append("]");
+                if (entry.sourceLine() > 0) {
+                    out.append(" log line ").append(entry.sourceLine());
+                }
+                if (entry.executionTimeMs() != null) {
+                    out.append(" (").append(entry.executionTimeMs()).append("ms)");
+                }
+                String statementName = cn.song.mybatisplus.visualizer.util.SqlStatementNamer.nameOf(entry.restoredSql());
+                if (statementName != null) {
+                    out.append(" [").append(statementName).append("]");
+                }
+                out.append("\n").append(cn.song.mybatisplus.visualizer.util.DisplayMasker.maskDisplay(
+                        previewHead(entry.restoredSql()), maskOn));
+                if (index < entries.size() - 1) {
+                    out.append("\n\n");
+                }
+            }
+            return out.toString();
+        }
         out.append("Restored ").append(entries.size()).append(" statement(s):\n\n");
         for (int index = 0; index < entries.size(); index++) {
             LogSqlEntry entry = entries.get(index);
@@ -199,6 +262,14 @@ public class SqlVisualizerRenderLogsTool extends McpToolsetSupport {
             }
         }
         return out.toString();
+    }
+
+    /** D219 摘要档单条 SQL 预览长度上限（非行为契约，明细档不受影响）。 */
+    private static final int SUMMARY_PREVIEW_CHARS = 160;
+
+    /** Kotlin {@code String.previewHead()} 扩展函数的 Java 等价（摘要档专用）。 */
+    private static String previewHead(String s) {
+        return s.length() <= SUMMARY_PREVIEW_CHARS ? s : s.substring(0, SUMMARY_PREVIEW_CHARS) + "…";
     }
 
     /**

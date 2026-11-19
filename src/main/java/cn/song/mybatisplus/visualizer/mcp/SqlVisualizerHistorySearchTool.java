@@ -51,6 +51,9 @@ public class SqlVisualizerHistorySearchTool extends McpToolsetSupport {
             + "are searched; pass allDates=true to search the whole history directory. Returns match summaries "
             + "(timestamp, SQL preview, source location, duration, mapper statement id) with hit counts, "
             + "newest first, bounded by maxResults (default 20, hard cap 100) — never full dumps. "
+            + "Output tier (D219): 'detail' defaults to true (one summary block per hit including the SQL "
+            + "preview, the historical contract); pass detail=false for a compact listing — header fields "
+            + "only, no SQL preview body — when scanning many hits with a tight AI context budget. "
             + "Read-only: reads history files only; never executes SQL and never writes anything."
     )
     @McpToolHints(
@@ -65,7 +68,8 @@ public class SqlVisualizerHistorySearchTool extends McpToolsetSupport {
         Long toMs,
         String sourceFile,
         boolean allDates,
-        Integer maxResults
+        Integer maxResults,
+        Boolean detail
     ) {
         String kw = keyword != null ? keyword : "";
         String rx = regex != null ? regex : "";
@@ -83,7 +87,7 @@ public class SqlVisualizerHistorySearchTool extends McpToolsetSupport {
                     allDates,
                     maxResults != null ? maxResults : HistorySearchService.DEFAULT_MAX_RESULTS
                 );
-                return formatResult(searchHistory(resolveHistoryDir(project), query));
+                return formatResult(searchHistory(resolveHistoryDir(project), query), detail);
             });
     }
 
@@ -104,6 +108,14 @@ public class SqlVisualizerHistorySearchTool extends McpToolsetSupport {
      * 0 命中是合法结果：正常返回 + 指引，不走错误通道（sqlv_render_logs 同款）。
      */
     public String formatResult(HistorySearchService.Result result) {
+        return formatResult(result, null);
+    }
+
+    /**
+     * 结果格式化（D219 全参形态）：detail=false 走紧凑清单——每命中一行头字段（时间/来源/位置/耗时/库/mapper/错误），
+     * 不输出 SQL 预览正文；null/true 保持历史契约（摘要块 + 预览正文）。
+     */
+    public String formatResult(HistorySearchService.Result result, Boolean detail) {
         if (result.totalHits() == 0) {
             return "No history entries matched."
                 + " SQL history is persisted only when the plugin's log auto-save is enabled;"
@@ -127,6 +139,10 @@ public class SqlVisualizerHistorySearchTool extends McpToolsetSupport {
             out.append(", scope from ").append(TIMESTAMP_FMT.format(instantOf(result.scopeStartMs())));
         }
         out.append(".\n");
+        boolean compact = detail == Boolean.FALSE;
+        if (compact) {
+            out.append("(compact listing — pass detail=true to include SQL previews)\n");
+        }
         for (int index = 0; index < result.hits().size(); index++) {
             HistorySearchService.Hit hit = result.hits().get(index);
             out.append("\n-- #").append(index + 1);
@@ -151,7 +167,9 @@ public class SqlVisualizerHistorySearchTool extends McpToolsetSupport {
                 out.append(" error=").append(hit.errorText());
             }
             out.append(" in ").append(hit.historyFile());
-            out.append('\n').append(hit.sqlPreview());
+            if (!compact) {
+                out.append('\n').append(hit.sqlPreview());
+            }
         }
         return out.toString();
     }

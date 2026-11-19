@@ -100,6 +100,38 @@ public abstract class McpToolsetSupport {
     }
 
     // ------------------------------------------------------------------
+    // T-McpGlobalBreakHardening（20261119）：263（IU-263.7307.200）给 McpToolset 新增的三个钩子。
+    // 动态壳 implements 平台接口、钩子全部继承本类——不在基类补齐这三个方法时，263 真机实测
+    // 11 个 toolset 只暴露出 1 个工具（tools/list 92 个里仅 sqlv_render_sql，恰为注册清单第一个，
+    // 其余被平台丢弃）；262 无这三个方法、多实现的纯方法在 243/262 上是无害的普通方法。
+    // ------------------------------------------------------------------
+
+    /** 263 新增：工具集是否在平台「公开的工具」页可配置。false 的 toolset 不进外部会话清单。 */
+    public boolean isUserConfigurable() {
+        return true;
+    }
+
+    /**
+     * 263 新增：平台工具分组显示名。按 T-McpToolNaming 约定取运行时类 simpleName——动态壳类
+     * simpleName 与业务工具类逐字节一致，分组名与 262 的 category shortName 同源（SqlVisualizer
+     * 前缀 + 字典序相邻）。<b>不许返回 null</b>：263 真机实测 11 个 toolset 撞在同一个默认值上
+     * 只剩第一个（疑似按显示名归并）。
+     */
+    public String displayName() {
+        return getClass().getSimpleName();
+    }
+
+    /** 263 新增：工具集描述（外部清单/设置页展示用）。无独立文案，给空串不参与渲染。 */
+    public String displayDescription() {
+        return "";
+    }
+
+    /** 263 新增重载：带兜底文案的描述——透传平台给的 fallback，不自造文案。 */
+    public String displayDescription(String fallback) {
+        return fallback;
+    }
+
+    // ------------------------------------------------------------------
     // 共用骨架（一期 SqlVisualizerToolset 逐行迁入）
     // ------------------------------------------------------------------
 

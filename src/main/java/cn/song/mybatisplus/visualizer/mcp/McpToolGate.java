@@ -54,19 +54,26 @@ public final class McpToolGate {
         "sqlv_history_search"
     );
 
+    /** 总开关（插件 MCP 功能是否启用）；测试环境服务未注册兜底 true（与设置默认值一致）。 */
+    public static boolean isMasterEnabled() {
+        try {
+            return PluginSettings.getInstance().getState().getMcpToolsEnabled();
+        } catch (Throwable ignored) {
+            return true;
+        }
+    }
+
     /** 工具是否对平台可见：总开关开 且 不在工具级禁用清单（大小写不敏感比对）。 */
     public static boolean isEnabled(String toolName) {
         try {
-            PluginSettings.State state = PluginSettings.getInstance().getState();
-            boolean enabled = state.getMcpToolsEnabled();
             boolean notDisabled = true;
-            for (String disabled : state.getMcpDisabledTools()) {
+            for (String disabled : PluginSettings.getInstance().getState().getMcpDisabledTools()) {
                 if (disabled.equalsIgnoreCase(toolName)) {
                     notDisabled = false;
                     break;
                 }
             }
-            return enabled && notDisabled;
+            return isMasterEnabled() && notDisabled;
         } catch (Throwable ignored) {
             // 测试环境兜底：服务未注册时全启用（与设置默认值一致）
             return true;
