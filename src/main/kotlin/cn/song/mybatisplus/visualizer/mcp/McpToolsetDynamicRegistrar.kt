@@ -230,10 +230,24 @@ object McpToolsetDynamicRegistrar {
                 it.name.startsWith("getToolsStateProvider") && it.parameterCount == 0
             } ?: return@runCatching
             val provider = runCatching { getter.invoke(svc) }.getOrNull() ?: return@runCatching
+            // **版本差异（D239 多版本核对，2026-11-19 字节码实证）**：
+            //  - 263：`McpToolsListProvider` 带 `toolsByProvider` 缓存 + 私有 `requestUpdate(String)`
+            //    + 私有 `invalidateReflectionProviders()`（摘反射 provider 的缓存条目）；
+            //  - 262：同一类但没有缓存，只有 `emitMcpTools(String)`（每次现算），无 requestUpdate；
+            //  - 253：连 `McpToolsListProvider` 都没有，`ReflectionToolsProvider.getTools()` 现算。
+            // 故「主动重算」只对 263 有意义；老版本找不到入口属正常，记 INFO 不记 WARN。
+            val update = runCatching {
+                provider.javaClass.getDeclaredMethod("requestUpdate", String::class.java)
+                    .apply { isAccessible = true }
+            }.getOrNull()
+            if (update == null) {
+                LOG.info("T-McpDynamicToolset: 平台工具清单无缓存入口（253/262 形态），跳过主动重算 ($reason)")
+                return@runCatching
+            }
             // D239 五轮（2026-11-19 18:20 真机定案）：**必须先摘掉 ReflectionToolsProvider 的
-            // 缓存条目再请求重算**。`McpToolsListProvider.requestUpdate` 重算时会把 `toolsByProvider`
-            // 里已有的 provider 结果原样复用（`computeAllMcpTools(previous)` 只在 previous 缺失时
-            // 才算），于是注册初期那份「只含前 1 个工具」的结果被永久沿用——三次重算请求全部无效。
+            // 缓存条目再请求重算**。`requestUpdate` 重算时会把 `toolsByProvider` 里已有的 provider
+            // 结果原样复用（`computeAllMcpTools(previous)` 只在 previous 缺失时才算），于是注册初期
+            // 那份「只含前 1 个工具」的结果被永久沿用——三次重算请求全部无效。
             // 平台自己摘缓存的入口是私有 `invalidateReflectionProviders()`，走合成访问器调用。
             runCatching {
                 val invalidate = provider.javaClass.getMethod(
@@ -242,9 +256,6 @@ object McpToolsetDynamicRegistrar {
                 )
                 invalidate.invoke(null, provider)
             }.onFailure { LOG.warn("T-McpDynamicToolset: invalidateReflectionProviders 不可用", it) }
-            val update = provider.javaClass.getDeclaredMethod("requestUpdate", String::class.java).apply {
-                isAccessible = true
-            }
             update.invoke(provider, reason)
             LOG.info("T-McpDynamicToolset: platform tool-list recompute requested ($reason)")
         }.onFailure {

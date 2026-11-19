@@ -1039,6 +1039,8 @@ expected 10 was 12）与分片 2（`SqlLogPanelFocusTabTest` expected 4 was 6）
 缺失时才真正计算**，所以注册初期那份「只含前 1 个工具」的结果会被永久沿用——连发三次重算请求
 读数仍只有 1 个。正路：先调平台私有 `invalidateReflectionProviders()`（走合成访问器
 `access$invalidateReflectionProviders`）摘掉反射 provider 的缓存条目，再 `requestUpdate`。
+另注：各版本清单形态不同（253 无 `McpToolsListProvider`、262 有类但无缓存/无 `requestUpdate`、
+263 带缓存），调用前按「方法在不在」分流——缺失属版本差异不是故障，记 INFO 别记 WARN。
 
 **证据**：D239（2026-11-19 18:20 真机）：11 个壳类各自 `asTools` 都出 1 个工具、自检全绿，
 但 `tools/list` 恒为 1 个；补 `invalidateReflectionProviders` 后连续三轮冷启稳定 165/11。
