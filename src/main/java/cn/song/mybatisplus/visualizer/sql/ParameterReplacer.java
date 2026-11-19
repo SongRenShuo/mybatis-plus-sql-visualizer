@@ -164,14 +164,16 @@ public final class ParameterReplacer {
             String typed = SqlDateLiteral.renderByShape(value, dialectName);
             if (typed != null) return typed;
         }
-        String escaped = value.replace("'", "''");
+        // T-PreQuotedLiteral：值已是完整引号字面量 → 原样渲染，不再转义包裹（翻倍前科见开发计划 §一）
+        String trimmed = value.trim();
+        if (PreQuotedLiteral.isComplete(trimmed)) return trimmed;
+        String escaped = trimmed.replace("'", "''");
         if (hint != null && Boolean.TRUE.equals(hint.getQuote())) {
             return "'" + escaped + "'";
         }
         if (hint != null && Boolean.FALSE.equals(hint.getQuote())) {
-            return value.trim();
+            return trimmed;
         }
-        String trimmed = value.trim();
         return NUMBER_REGEX.matcher(trimmed).matches() ? trimmed : "'" + escaped + "'";
     }
 
@@ -258,14 +260,16 @@ public final class ParameterReplacer {
             String typed = SqlDateLiteral.renderByShape(value, dialectName);
             if (typed != null) return typed;
         }
-        String escaped = value.replace("'", "''");
+        // T-PreQuotedLiteral：同 renderValue 口径——完整引号字面量原样，不翻倍
+        String trimmed = value.trim();
+        if (PreQuotedLiteral.isComplete(trimmed)) return trimmed;
+        String escaped = trimmed.replace("'", "''");
         if (hint != null && Boolean.TRUE.equals(hint.getQuote())) {
             return "'" + escaped + "'";
         }
         if (hint != null && Boolean.FALSE.equals(hint.getQuote())) {
-            return value.trim();
+            return trimmed;
         }
-        String trimmed = value.trim();
         return NUMBER_REGEX.matcher(trimmed).matches() ? trimmed : "'" + escaped + "'";
     }
 
@@ -800,12 +804,19 @@ public final class ParameterReplacer {
         String notice = (type == ValueType.AUTO && Boolean.FALSE.equals(quoteHint) && !numeric)
                 ? "上下文看起来是数值列，但输入「" + trimmed + "」不是数字，已按字符串渲染"
                 : null;
-        String escaped = trimmed.replace("'", "''");
+        // T-PreQuotedLiteral：值已是完整引号字面量（用户手工 quoting 的 `'abc'`）→
+        // 非 inQuoted 上下文原样渲染（不再转义包裹，否则翻倍 `'''abc'''`，先红读数见开发计划 §一）；
+        // inQuoted（占位落在用户自己的引号串内）剥外引号按内层转义重拼，`'abc'` → `'%abc%'` 同形态。
+        boolean preQuoted = PreQuotedLiteral.isComplete(trimmed);
+        String escaped = preQuoted
+                ? PreQuotedLiteral.stripQuotes(trimmed).replace("'", "''")
+                : trimmed.replace("'", "''");
+        String rendered = inQuoted ? escaped : (preQuoted ? trimmed : "'" + escaped + "'");
         return switch (effective) {
-            case STRING, LIST, AUTO -> new Filled(inQuoted ? escaped : "'" + escaped + "'", null, notice);
+            case STRING, LIST, AUTO -> new Filled(rendered, null, notice);
             case NUMBER -> numeric
                     ? new Filled(trimmed, null, notice)
-                    : new Filled(inQuoted ? escaped : "'" + escaped + "'", null,
+                    : new Filled(rendered, null,
                             "「数字」类型收到非数字输入「" + trimmed + "」，已按字符串渲染");
             case NULL -> inQuoted
                     ? new Filled(null, "占位落在字符串字面量内，NULL 不能填进去", null)
