@@ -89,13 +89,15 @@ object McpToolsetDynamicRegistrar {
         if (registered.get()) return
         val toolsetIface = findMcpToolsetClass() ?: return
         runCatching {
+            // D238 探针已收（2026-11-19 真机定案）：反转顺序实验证明「平台按 EP 顺序展开、
+            // 遇展开失败的 toolset 即中断」（反转后只列出反转后的前 3 个），且 11 个壳类
+            // 全部 declared=0 / kotlinMeta=false——根因是壳类反射可见性，不是注册时序。
+            // 注册顺序恢复原状；修法见 D238 册 §4.4（壳类补 metadata / 单 toolset 聚合）。
             TOOL_CLASSES.forEach { registerToolset(it, toolsetIface) }
             registered.set(true)
             LOG.info("T-McpDynamicToolset: ${TOOL_CLASSES.size} toolsets registered onto mcpToolset EP (dynamic shell form)")
-            // 注册后自检（2026-11-19 真机排障新增）：曾出现「本日志说 11 个、平台「公开的工具」页
-            // 只有 1 个分组、tools/list 只出 1 个」的形态。注释只打本插件视角，无法区分
-            // 「EP 里只有 1 个」与「EP 有 11 个但平台过滤掉 10 个」——这里直接回读 EP
-            // 实例列表，一次读数即定性（每 JVM 一次，成本可忽略）。
+            // 注册后自检（2026-11-19 真机排障新增）：回读 EP 实例列表，区分「EP 只有 N 个」与
+            // 「EP 有 11 个但平台只展开 N 个」——两种形态修法完全不同。
             runCatching {
                 val ext = ExtensionPointName.create<Any>(TOOLSET_EP_NAME).getPoint(null).extensionList
                 val shellHits = ext.count { it.javaClass.name.startsWith(SHELL_PACKAGE_PREFIX) }
@@ -104,9 +106,21 @@ object McpToolsetDynamicRegistrar {
                         "names=${ext.map { it.javaClass.simpleName }}",
                 )
             }.onFailure { LOG.warn("T-McpDynamicToolset: EP self-check failed (diagnostic only)", it) }
+            // D238 长期诊断：壳类反射面（declared/all/metadata）——未来平台再改扫描口径时，
+            // 这行能立刻区分「壳类不可见」与「平台过滤」。
+            runCatching {
+                registeredInstances.values.forEach { inst ->
+                    runCatching {
+                        val c = inst.javaClass
+                        LOG.info(
+                            "T-McpDynamicToolset: refl ${c.simpleName} declared=${c.declaredMethods.size} " +
+                                "all=${c.methods.size} kotlinMeta=${c.getAnnotation(Metadata::class.java) != null}",
+                        )
+                    }
+                }
+            }.onFailure { LOG.warn("T-McpDynamicToolset: refl probe failed", it) }
             // D238：注册完成后**主动请平台重算工具列表**（见 requestPlatformToolsRecompute KDoc）。
-            // 这是唯一能同时满足「关闭能变 0」与「重开能回 11」的路径：平台只在 EP 变更时重算，
-            // 而它自己那次重算可能快照到「只注册了前 1~3 个」的半成品 EP（真机 2026-11-19 实证）。
+            // 真机 2026-11-19 实证：平台只在 EP 变更时重算，而它自己那次重算可能快照到半成品 EP。
             requestPlatformToolsRecompute("toolsets-registered")
         }.onFailure {
             // registered 不置位：下个项目启动重试（动态 EP 未就绪等瞬态失败可自愈）——
