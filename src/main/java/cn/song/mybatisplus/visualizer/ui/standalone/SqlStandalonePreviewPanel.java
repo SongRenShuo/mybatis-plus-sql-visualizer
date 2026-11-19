@@ -443,7 +443,9 @@ public class SqlStandalonePreviewPanel extends JPanel implements Disposable {
         if (project.isDisposed()) {
             return;
         }
-        SqlPreviewService.showResult(project, result, autoReparse);
+        // master 具名实参 showResult(project, result, autoParseOnPaste = autoReparse) 的全参形态展开
+        //（sourceLocation/sourceContext 独立工作台链均空）
+        SqlPreviewService.showResult(project, result, null, null, autoReparse);
     }
 
     /**

@@ -129,9 +129,18 @@ public class SqlPreviewDialog extends DialogWrapper {
     /**
      * 草稿文本来源（测试缝：headless 下弹窗编辑器可能还没建出来，
      * 用例注入固定文本即可驱动同一重识别链）。
+     *
+     * <p>方法引用而非 lambda：字段初始化器先于构造体执行，lambda 捕获构造期才赋值的
+     * {@code panel} 会撞 javac 明确赋值分析；方法引用是延迟解析，无此问题。</p>
      */
     @NotNull
-    public java.util.function.Supplier<String> draftTextProvider = () -> panel.currentDraftText();
+    public java.util.function.Supplier<String> draftTextProvider = this::defaultDraftText;
+
+    /** 默认草稿来源：面板当前草稿文本（native console 文档优先，自建编辑器兜底；空返回 null）。 */
+    @Nullable
+    private String defaultDraftText() {
+        return panel.currentDraftText();
+    }
 
     /**
      * 进入待命：轮询草稿文本，停手后自动重新识别一次。
@@ -223,7 +232,7 @@ public class SqlPreviewDialog extends DialogWrapper {
      * 选文件只是换了个取文本的入口，不存在第二条口径。载入后立即交还手动（不会再被自动重解析改写）。</p>
      */
     private void loadFileIntoPreview() {
-        Project proj = getProject();
+        Project proj = panel.project;
         if (proj == null) return;
         com.intellij.openapi.fileChooser.FileChooserDescriptor descriptor =
                 com.intellij.openapi.fileChooser.FileChooserDescriptorFactory.createSingleFileDescriptor("xml")

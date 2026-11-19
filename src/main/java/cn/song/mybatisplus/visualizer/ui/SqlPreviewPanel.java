@@ -1260,11 +1260,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         SqlPreviewPanelEditorLifecycleKt.showDegradedBanner(this, reason);
     }
 
-    /** 测试缝（master 1349，UI-022）：按序取动态条件 checkbox（该行不可标注时为 null，下标不跳位）。 */
-    @Nullable
-    public javax.swing.JCheckBox conditionCheckboxForTest(int index) {
-        return index >= 0 && index < conditionCheckBoxes.size() ? conditionCheckBoxes.get(index) : null;
-    }
+    // conditionCheckboxForTest 既有缝在参数面板测试缝区（T-PT-02 群），不在此重复登记
 
     /**
      * T-ErrorLocateUsability T-ELU-01（O-49）：错误定位动作的<b>显隐判据</b>缝——

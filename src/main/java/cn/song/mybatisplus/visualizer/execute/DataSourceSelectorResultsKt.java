@@ -692,12 +692,13 @@ public final class DataSourceSelectorResultsKt {
                 // T-HdAbsorb D218：UUID/名字两级全落空（数据源改名 / UUID 重排）时按**连接事实指纹**
                 // （url+user+dbms 归一哈希，DataSourceFingerprint）兜底——指纹唯一命中且该名在 runner
                 // 集合里才静默复用；歧义/零命中/枚举失败一律照旧弹窗，不新增绕过方言闸的路径。
-                String fpName = null;
+                String fpName0 = null;
                 try {
-                    fpName = DataSourceFingerprint.resolveRunnerName(project, moduleKeyForLastUsed);
+                    fpName0 = DataSourceFingerprint.resolveRunnerName(project, moduleKeyForLastUsed);
                 } catch (Throwable ignored) {
                     // 枚举失败照旧弹窗
                 }
+                final String fpName = fpName0; // lambda 捕获需 effectively final（try 内改写后固化副本）
                 Object fpMatched = fpName != null
                         ? runners.stream().filter(r -> getRunnerName(r).equals(fpName)).findFirst().orElse(null)
                         : null;

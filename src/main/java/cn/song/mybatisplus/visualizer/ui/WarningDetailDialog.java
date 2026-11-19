@@ -54,7 +54,7 @@ public class WarningDetailDialog extends DialogWrapper {
     }
 
     @Override
-    protected Action @NotNull [] createActions() {
+    protected Action[] createActions() {
         return new Action[]{
             new DialogWrapperAction(MpSqlVisualizerBundle.message("panel.warningDetail.copy")) {
                 @Override

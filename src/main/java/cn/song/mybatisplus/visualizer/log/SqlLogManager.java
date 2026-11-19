@@ -83,8 +83,10 @@ public final class SqlLogManager implements Disposable {
      * 工具窗未创建，调用方先 show 工具窗触发工厂建面板，再于一拍后重试）。
      * 参数 = 剪贴板预填候选文本（D-4，null = 不预填）；registry 开关关闭时 tab 不存在，
      * 回调内部按「未就绪」轻通知降级，不静默。</p>
+     *
+     * <p>public：消费点在 actions 包（OpenSqlPreviewAction，master 侧 internal var 模块可见语义）。</p>
      */
-    volatile java.util.function.Consumer<String> onOpenStandalonePreview = null;
+    public volatile java.util.function.Consumer<String> onOpenStandalonePreview = null;
 
     private final Project project;
 

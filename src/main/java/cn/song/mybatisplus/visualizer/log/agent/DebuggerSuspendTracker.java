@@ -108,8 +108,10 @@ public final class DebuggerSuspendTracker {
                                     LOG.debug("DebuggerSuspendTracker attach failed", t);
                                 }
                             }
-                            case "sessionRemoved" -> synchronized (LOCK) {
-                                attached.clear();
+                            case "sessionRemoved" -> {
+                                synchronized (LOCK) {
+                                    attached.clear();
+                                }
                             }
                         }
                         return null;

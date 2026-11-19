@@ -1370,8 +1370,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
                     "cn.song.mybatisplus.visualizer.preview",
                     MpSqlVisualizerBundle.message("standalone.status.disabled.title"),
                     MpSqlVisualizerBundle.message("standalone.status.disabled.message"),
-                    NotificationType.INFORMATION,
-            ).notify(project);
+                    NotificationType.INFORMATION)
+                    .notify(project);
             return;
         }
         standalonePanel().focusAndMaybeResolve(prefillText);

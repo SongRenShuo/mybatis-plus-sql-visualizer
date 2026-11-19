@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui.gutter;
 
+import cn.song.mybatisplus.visualizer.ui.nav.IbatisXmlStatementTargets;
 import com.intellij.psi.PsiStatement;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiElement;

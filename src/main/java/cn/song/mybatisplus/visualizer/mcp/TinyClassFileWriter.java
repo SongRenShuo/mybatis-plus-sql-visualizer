@@ -138,7 +138,7 @@ public final class TinyClassFileWriter {
 
             byte[] classAnnBytes = buildAnnotations(cp, classAnnotations);
             int codeAttr = cp.utf8("Code");
-            boolean anyAnnotations = !classAnnBytes.isEmpty()
+            boolean anyAnnotations = classAnnBytes.length > 0
                 || prepared.stream().anyMatch(m -> m.annotations.length > 0);
             int rvaAttr = anyAnnotations ? cp.utf8("RuntimeVisibleAnnotations") : 0;
 
@@ -182,7 +182,7 @@ public final class TinyClassFileWriter {
             }
 
             // class 级注解
-            if (classAnnBytes.isEmpty()) {
+            if (classAnnBytes.length == 0) {
                 out.writeShort(0);
             } else {
                 out.writeShort(1);
