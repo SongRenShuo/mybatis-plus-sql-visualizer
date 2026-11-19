@@ -302,10 +302,12 @@ object McpToolsetDynamicRegistrar {
                 annotations = m.annotations.map(::toAnnotationValue),
             )
         }
-        val classAnnotations = listOfNotNull(
-            runCatching { superClass.getAnnotation(Metadata::class.java) }.getOrNull()
-                ?.let(::toAnnotationValue),
-        )
+        // D239 二轮（2026-11-19 真机）：**不复制 kotlin.Metadata**。
+        // 首轮复制了业务类的 metadata，结果是 kotlin-reflect 按该 metadata 去壳类里找函数表、
+        // 签名对不上 → 全部 toolset 展开失败（tools/list 从 1~3 个掉到 0 个，比不修还差）。
+        // 现在壳类无 metadata，kotlin-reflect 退化为 Java 反射视图，仍能看到自己声明的
+        // @McpTool 方法（declared=1 已实测）；注解是运行时可见的，展开链不依赖 metadata。
+        val classAnnotations = emptyList<TinyClassFileWriter.AnnotationValue>()
         return TinyClassFileWriter.shellBytes(
             shellName = shellName,
             // D239：父类改为 McpToolsetSupport（三钩子来源），工具类只作委托目标

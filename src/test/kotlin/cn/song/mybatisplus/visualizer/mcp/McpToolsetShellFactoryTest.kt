@@ -185,7 +185,8 @@ class McpToolsetShellFactoryTest {
         val ann = m.getAnnotation(com.intellij.mcpserver.annotations.McpTool::class.java)
         assertNotNull("委托方法应复制 @McpTool", ann)
         assertEquals("sqlv_check_sql", ann!!.name)
-        assertNotNull("class 应复制 kotlin.Metadata", shell.getAnnotation(Metadata::class.java))
+        // D239 二轮：不复制 Metadata（复制业务类 metadata 会让 kotlin-reflect 解析失败、全部工具消失）
+        assertNull("壳类不复制 kotlin.Metadata（二轮定案）", shell.getAnnotation(Metadata::class.java))
         // 委托目标可达：new 实例 + 调用转发方法（suspend 形态直接传 null Continuation 会 NPE，
         // 故只断言方法存在与注解正确，不做真实调用）
     }
