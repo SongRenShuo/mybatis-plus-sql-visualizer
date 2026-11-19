@@ -51,18 +51,38 @@ public class SqlPreviewDialog extends DialogWrapper {
     }
 
     public SqlPreviewDialog(@Nullable Project project, @NotNull PreviewResult result, @Nullable String sourceLocation) {
+        this(project, result, sourceLocation, null, false);
+    }
+
+    /** 4 参形态（master 默认参展开：带源上下文、不进入贴入即识别待命）。 */
+    public SqlPreviewDialog(@Nullable Project project, @NotNull PreviewResult result, @Nullable String sourceLocation,
+                            @Nullable cn.song.mybatisplus.visualizer.context.PreviewSourceContext sourceContext) {
+        this(project, result, sourceLocation, sourceContext, false);
+    }
+
+    /**
+     * 全参形态（master 默认参展开）。
+     *
+     * @param autoParseOnPaste T-DialogPasteReparse：「先开弹窗、后贴内容」——挂防抖监听，用户往编辑器里
+     *                         贴入内容后自动重新识别一次（独立工作台的<b>空/原文态</b>开窗时置 true）。
+     */
+    public SqlPreviewDialog(@Nullable Project project, @NotNull PreviewResult result, @Nullable String sourceLocation,
+                            @Nullable cn.song.mybatisplus.visualizer.context.PreviewSourceContext sourceContext,
+                            boolean autoParseOnPaste) {
         super(project, false, DialogWrapper.IdeModalityType.MODELESS);
         this.panel = new SqlPreviewPanel(project);
         setTitle(MpSqlVisualizerBundle.message("dialog.preview.title"));
         panel.setSourceLocation(sourceLocation);
+        panel.setSourceContext(sourceContext);
         SqlPreviewPanelResultViewKt.showResult(panel, result);
         Disposer.register(getDisposable(), panel);
         panel.onClosePanelRequested = this::dispose;
         panel.setMinimumSize(new Dimension(MIN_WIDTH, MIN_HEIGHT));
         init();
         setCancelButtonText(MpSqlVisualizerBundle.message("dialog.preview.cancel"));
-        Dimension size = initialSize();
-        setSize(size.width, size.height);
+        // 弹窗默认尺寸（按屏幕比例自适应；环境异常兜底）
+        // 字体/尺寸兜底后进入「贴入即识别」待命（必须在 showResult 之后：面板编辑器此时才就位）
+        if (autoParseOnPaste) armPasteReparse();
         // T-K2JWalk1 KW-1：弹窗自挂 project Disposer 树——工程关闭（含 Open This Window 切换）
         // 时平台遍历树执行本回调收口存活弹窗，根除「预览弹窗跨工程残留」（首个修法把收口挂在
         // SqlPreviewService 构造器，但 gutter 的 XML 链在 getService 之前就 return，服务从未
@@ -83,6 +103,181 @@ public class SqlPreviewDialog extends DialogWrapper {
     @Override
     protected JComponent createCenterPanel() {
         return panel;
+    }
+
+    // ------------------------------------------------------------------
+    // T-DialogPasteReparse：「先开弹窗、后贴内容」
+    // ------------------------------------------------------------------
+
+    /** 是否仍待命（命中一次即 false——之后交还手动，避免与用户后续编辑互相打架）。 */
+    private volatile boolean pasteReparseArmed = false;
+
+    /** 轮询 Timer（仅在待命期存在；命中 / dispose 即停）。 */
+    @Nullable
+    private javax.swing.Timer pasteReparseTimer = null;
+
+    /** 上一次轮询看到的草稿文本（判「还在变 / 已停手」）。 */
+    @Nullable
+    private String lastDraftText = null;
+
+    /** 文本连续未变化的轮询次数（达到 {@link #PASTE_REPARSE_STABLE_TICKS} 即视为停手）。 */
+    private int stableTicks = 0;
+
+    /** 面板自身写文档期间抑制（{@code SqlPreviewPanel.showResult} 会重写编辑器全文）。 */
+    private boolean suppressPasteReparse = false;
+
+    /**
+     * 草稿文本来源（测试缝：headless 下弹窗编辑器可能还没建出来，
+     * 用例注入固定文本即可驱动同一重识别链）。
+     */
+    @NotNull
+    public java.util.function.Supplier<String> draftTextProvider = () -> panel.currentDraftText();
+
+    /**
+     * 进入待命：轮询草稿文本，停手后自动重新识别一次。
+     *
+     * <h2>为什么是轮询而不是挂 DocumentListener</h2>
+     *
+     * <p>面板的编辑器是<b>懒建</b>的（空结果构造期 {@code draftDocument()} 为 null，真机要等首次布局/挂载
+     * 才有编辑器）——挂监听会有「此刻没文档就永远挂不上」的窗口。轮询只读
+     * {@link SqlPreviewPanel#currentDraftText()}，文档何时出现都能接上；代价是待命期每
+     * {@link #PASTE_REPARSE_POLL_MS} 一次取文本（命中即停，常态为零开销）。</p>
+     *
+     * <h2>为什么只在「空/原文态」开窗时进入待命</h2>
+     *
+     * <p>正常语句预览的编辑器内容已是渲染后的 SQL，用户在那儿编辑是<b>改产物</b>（回填参数/手调 SQL），
+     * 自动解析会把他的编辑冲掉。</p>
+     */
+    private void armPasteReparse() {
+        pasteReparseArmed = true;
+        // 注意：本方法在构造期 init 里被调用，而下方字段声明在 init 之后——**不得在这里读取
+        // draftTextProvider 等字段**（此刻仍是 JVM 默认 null，本仓在册坑）。首次轮询再取。
+        lastDraftText = null;
+        stableTicks = 0;
+        if (pasteReparseTimer != null) {
+            pasteReparseTimer.stop();
+        }
+        javax.swing.Timer timer = new javax.swing.Timer(PASTE_REPARSE_POLL_MS, e -> pollDraftForReparse());
+        timer.setRepeats(true);
+        timer.start();
+        pasteReparseTimer = timer;
+    }
+
+    private void pollDraftForReparse() {
+        if (!pasteReparseArmed) {
+            stopPasteReparse();
+            return;
+        }
+        String text = draftTextProvider.get();
+        if (text == null || text.isBlank()) return;
+        if (!text.equals(lastDraftText)) {
+            lastDraftText = text;
+            stableTicks = 0;
+            return;
+        }
+        stableTicks++;
+        if (stableTicks >= PASTE_REPARSE_STABLE_TICKS) {
+            reparseDraftFromEditor();
+        }
+    }
+
+    private void stopPasteReparse() {
+        pasteReparseArmed = false;
+        if (pasteReparseTimer != null) {
+            pasteReparseTimer.stop();
+            pasteReparseTimer = null;
+        }
+    }
+
+    /**
+     * 对当前草稿做一次独立预览识别（贴入停手后触发）。
+     *
+     * <p>识别走与工作台页签<b>同一条链</b>（{@link cn.song.mybatisplus.visualizer.ui.standalone.StandaloneSqlSourceResolver}：
+     * 风味判定 + 双链择优），失败文案同源（{@link cn.song.mybatisplus.visualizer.ui.standalone.StandaloneWarningText}）。
+     * 命中后立即交还手动，不再自动解析。</p>
+     */
+    public void reparseDraftFromEditor() {
+        if (!pasteReparseArmed) return;
+        String text = draftTextProvider.get();
+        if (text == null || text.isBlank()) return;
+        PreviewResult fresh = resolveFreshFromText(text);
+        if (fresh == null) return;
+        stopPasteReparse();
+        suppressPasteReparse = true;
+        try {
+            SqlPreviewPanelResultViewKt.showResult(panel, fresh);
+        } finally {
+            suppressPasteReparse = false;
+        }
+    }
+
+    /** 测试访问器：是否仍待命。 */
+    public boolean pasteReparseArmedForTest() {
+        return pasteReparseArmed;
+    }
+
+    /**
+     * T-DialogPickFile：选一个 mapper XML 文件直接载入并识别。
+     *
+     * <p>与「粘贴」走同一条识别链（{@link cn.song.mybatisplus.visualizer.ui.standalone.StandaloneSqlSourceResolver}）——
+     * 选文件只是换了个取文本的入口，不存在第二条口径。载入后立即交还手动（不会再被自动重解析改写）。</p>
+     */
+    private void loadFileIntoPreview() {
+        Project proj = getProject();
+        if (proj == null) return;
+        com.intellij.openapi.fileChooser.FileChooserDescriptor descriptor =
+                com.intellij.openapi.fileChooser.FileChooserDescriptorFactory.createSingleFileDescriptor("xml")
+                        .withTitle(MpSqlVisualizerBundle.message("dialog.preview.loadFile.title"));
+        com.intellij.openapi.vfs.VirtualFile file =
+                com.intellij.openapi.fileChooser.FileChooser.chooseFile(descriptor, proj, null);
+        if (file == null) return;
+        String text = null;
+        try {
+            // 243 编译目标：ReadAction.compute(ThrowableComputable) 仅此重载
+            text = com.intellij.openapi.application.ReadAction.compute(
+                    (com.intellij.openapi.util.ThrowableComputable<String, Throwable>) () ->
+                            com.intellij.openapi.vfs.VfsUtilCore.loadText(file));
+        } catch (Throwable ignored) {
+            // 取文本失败按「没有内容」处理
+        }
+        if (text == null || text.isBlank()) return;
+        reparseText(text);
+    }
+
+    /** 直给文本走一次识别并回填面板（选文件路径用；不依赖待命态）。 */
+    public void reparseText(String text) {
+        PreviewResult fresh = resolveFreshFromText(text);
+        if (fresh == null) return;
+        stopPasteReparse();
+        suppressPasteReparse = true;
+        try {
+            SqlPreviewPanelResultViewKt.showResult(panel, fresh);
+        } finally {
+            suppressPasteReparse = false;
+        }
+    }
+
+    /** 识别文本 → 失败档换文案 → 预览产物（解析/构造失败返回 null，不抛穿）。 */
+    @Nullable
+    private PreviewResult resolveFreshFromText(String text) {
+        cn.song.mybatisplus.visualizer.ui.standalone.StandaloneSqlSourceResolver.Resolved resolved;
+        try {
+            resolved = cn.song.mybatisplus.visualizer.ui.standalone.StandaloneSqlSourceResolver.resolve(text);
+        } catch (Throwable t) {
+            return null;
+        }
+        if (resolved.failure() != null) {
+            return resolved.result().withWarning(
+                    cn.song.mybatisplus.visualizer.ui.standalone.StandaloneWarningText.failure(resolved.failure()),
+                    false);
+        }
+        return resolved.result();
+    }
+
+    @Override
+    protected void dispose() {
+        stopPasteReparse();
+        super.dispose();
     }
 
     /**
@@ -108,6 +303,13 @@ public class SqlPreviewDialog extends DialogWrapper {
                     @Override
                     protected void doAction(java.awt.event.ActionEvent actionEvent) {
                         SqlPreviewPanelExecutionKt.executeSql(panel);
+                    }
+                },
+                // T-DialogPickFile：从工程里选一个 mapper XML 直接载入（比复制粘贴省事）
+                new DialogWrapperAction(MpSqlVisualizerBundle.message("dialog.preview.loadFile")) {
+                    @Override
+                    protected void doAction(java.awt.event.ActionEvent actionEvent) {
+                        loadFileIntoPreview();
                     }
                 },
                 new DialogWrapperAction(MpSqlVisualizerBundle.message("panel.copySql")) {
@@ -150,6 +352,12 @@ public class SqlPreviewDialog extends DialogWrapper {
     public static final String DIMENSION_KEY = "cn.song.mybatisplus.visualizer.SqlPreviewDialog";
     public static final int MIN_WIDTH = 640;
     public static final int MIN_HEIGHT = 420;
+
+    /** T-DialogPasteReparse：草稿轮询间隔（ms）——文档出现后才接得上（编辑器懒建）。 */
+    public static final int PASTE_REPARSE_POLL_MS = 400;
+
+    /** T-DialogPasteReparse：文本连续未变化的轮询次数阈值（400ms × 2 ≈ 800ms 静默即认为停手）。 */
+    public static final int PASTE_REPARSE_STABLE_TICKS = 2;
     public static final double SCREEN_RATIO_WIDTH = 0.62;
     public static final double SCREEN_RATIO_HEIGHT = 0.65;
     public static final double SCREEN_RATIO_CAP = 0.85;
