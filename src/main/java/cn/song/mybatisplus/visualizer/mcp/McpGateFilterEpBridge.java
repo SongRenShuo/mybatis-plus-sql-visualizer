@@ -2,6 +2,7 @@
 package cn.song.mybatisplus.visualizer.mcp;
 
 import com.intellij.openapi.diagnostic.Logger;
+import com.intellij.openapi.extensions.ExtensionPoint;
 import com.intellij.openapi.extensions.ExtensionPointName;
 
 import java.lang.reflect.InvocationHandler;
@@ -13,7 +14,9 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
+import kotlin.coroutines.Continuation;
 import kotlinx.coroutines.flow.Flow;
 import kotlinx.coroutines.flow.FlowKt;
 
@@ -53,7 +56,7 @@ import kotlinx.coroutines.flow.FlowKt;
  *   <li>各实现体 runCatching，失败降级为「原样返回/空清单」。</li>
  * </ul></p>
  *
- * <p><b>加载纪律</b>：本对象只在 {@code McpGateFilterEpRegistrar.registerOnce} 探测通过（形态 A 或 B）后
+ * <p><b>加载纪律</b>：本类只在 {@link McpGateFilterEpRegistrar#sync} 探测通过（形态 A 或 B）后
  * 被触达；UNKNOWN 与更早平台（253/252/251、261.17801 及更早无此类）不注册，本类即便随 jar
  * 装载也<b>无任何平台过滤类型的链接要求</b>（方法体零平台类型，平台 API 全部经字符串在运行时解析）。</p>
  *
@@ -95,13 +98,80 @@ public final class McpGateFilterEpBridge {
     private static final String TOOL_FILTER_MODIFICATION_FQN =
         "com.intellij.mcpserver.McpToolFilterProvider$McpToolFilterModification";
 
-    public static void register() throws ClassNotFoundException {
+    /** 已注册的 EP 与 provider 实例（摘除/熔断用）。null = 未注册。 */
+    private static volatile ExtensionPoint<Object> registeredEp = null;
+    private static volatile Object registeredProvider = null;
+
+    /** 熔断闸：平台调到未知契约方法后置位，本次运行期不再重新注册。 */
+    private static final AtomicBoolean breakerTripped = new AtomicBoolean(false);
+
+    /** 注册（幂等）。熔断后拒绝重挂——契约已漂移，重挂只会再炸一次。 */
+    public static synchronized void register() throws ClassNotFoundException {
+        if (registeredProvider != null) {
+            return;
+        }
+        if (breakerTripped.get()) {
+            LOG.info("O-68: 熔断已置位，跳过 mcpToolFilterProvider 注册");
+            return;
+        }
         Class<?> filterIface = Class.forName(FILTER_IFACE_FQN);
         ClassLoader loader = McpGateFilterEpBridge.class.getClassLoader();
-        Object provider = Proxy.newProxyInstance(loader, new Class<?>[] {filterIface}, providerHandler());
-        ExtensionPointName<Object> ep = ExtensionPointName.create(EP_NAME);
-        ep.getPoint(null).registerExtension(provider);
+        Object provider = Proxy.newProxyInstance(loader, new Class<?>[] {filterIface},
+            providerHandler(McpGateFilterEpBridge::tripBreaker));
+        ExtensionPoint<Object> ep = ExtensionPointName.<Object>create(EP_NAME).getPoint(null);
+        ep.registerExtension(provider);
+        registeredEp = ep;
+        registeredProvider = provider;
         LOG.info("O-68: sqlv gate filter registered onto mcpToolFilterProvider EP (proxy form)");
+    }
+
+    /** 从 EP 摘除（幂等）。总开关关闭 / Registry 逃生开关 / 熔断三处共用。 */
+    public static synchronized void unregister() {
+        ExtensionPoint<Object> ep = registeredEp;
+        Object provider = registeredProvider;
+        if (ep == null || provider == null) {
+            return;
+        }
+        registeredEp = null;
+        registeredProvider = null;
+        try {
+            ep.unregisterExtension(provider);
+            LOG.info("O-68: sqlv gate filter unregistered from mcpToolFilterProvider EP");
+        } catch (Throwable t) {
+            LOG.warn("O-68: 摘除 mcpToolFilterProvider 注册失败（门控仍生效，MCP 不受影响）", t);
+        }
+    }
+
+    public static boolean isRegistered() {
+        return registeredProvider != null;
+    }
+
+    public static boolean isBreakerTripped() {
+        return breakerTripped.get();
+    }
+
+    /**
+     * 置熔断位并摘除注册；只在首次返回 true（记 WARN + 摘除），后续调用静默。
+     * 测试直接调本方法验「只触发一次」的语义（handlerForTest 的回调是每次未知调用都触发）。
+     */
+    public static boolean tripBreaker(String signature) {
+        if (!breakerTripped.compareAndSet(false, true)) {
+            return false;
+        }
+        // 用 WARN 而不是 ERROR：平台测试框架把 LOG.error 当测试失败，且这条不是插件内部错误
+        // （是平台契约变了、我们主动退让）。文案带 O-68 便于现场 grep。
+        LOG.warn(
+            "O-68: 平台调用了未识别的过滤器契约方法 " + signature + "；已摘除 mcpToolFilterProvider 注册"
+                + "（门控失效，内置 MCP Server 不受影响）");
+        unregister();
+        return true;
+    }
+
+    /** 测试缝：清空注册/熔断状态（应用级单例跨用例存活）。 */
+    public static void resetForTest() {
+        breakerTripped.set(false);
+        registeredEp = null;
+        registeredProvider = null;
     }
 
     /**
@@ -109,6 +179,15 @@ public final class McpGateFilterEpBridge {
      * 形态 A/B 的入口共用一个 handler：平台只声明自己那一形态的方法，另一分支是死路。
      */
     private static InvocationHandler providerHandler() {
+        return providerHandler(McpGateFilterEpBridge::tripBreaker);
+    }
+
+    /** 可注入「未知契约方法」回调的 handler（测试缝；生产回调＝tripBreaker）。 */
+    public static InvocationHandler handlerForTest(java.util.function.Consumer<String> onUnknown) {
+        return providerHandler(onUnknown);
+    }
+
+    private static InvocationHandler providerHandler(java.util.function.Consumer<String> onUnknown) {
         return (proxy, method, args) -> {
             switch (method.getName()) {
                 case "applyFilters": {
@@ -129,6 +208,9 @@ public final class McpGateFilterEpBridge {
                 case "equals":
                     return args != null && args.length > 0 && args[0] == proxy;
                 default:
+                    // 未知方法：先按返回类型给安全值（本次调用不炸），同时通知熔断层摘除注册
+                    // （后续清单请求不再经过本代理）。顺序不能反——摘除只影响下一次调用。
+                    onUnknown.accept(signatureOf(method));
                     return defaultValueFor(method.getReturnType());
             }
         };
@@ -370,32 +452,122 @@ public final class McpGateFilterEpBridge {
     }
 
     /**
-     * 契约感知探测（T-Mcp261FilterContract 券02）：<b>只按方法签名判形态，不看类是否存在</b>。
+     * 契约白名单（T-McpGlobalBreakHardening）：本桥认识的平台方法名。
+     *
+     * <p>白名单的意义是<b>否决未知</b>，而不是「找到已知就注册」。261 的事故形态是「方法名不同」，
+     * 而更危险的形态是「方法名都在、平台又加了一个」——只看有没有 {@code applyFilters} 会判 A 并注册，
+     * 新方法落兜底、对象返回类型给 null，事故原样复发。故接口上出现任何白名单外的方法（Object
+     * 基方法与编译器合成的 {@code $default} 桥除外）一律判 UNKNOWN、不注册。</p>
+     */
+    private static final Set<String> KNOWN_CONTRACT_METHODS = Set.of("applyFilters", "getFilters", "getUpdates");
+
+    /** 接口上所有「不认识」的方法（日志与测试用；非空即契约未知）。 */
+    public static List<String> unknownContractMethods(Class<?> iface) {
+        List<String> out = new ArrayList<>();
+        for (Method method : iface.getMethods()) {
+            if (!method.isSynthetic() && !method.isBridge()
+                && method.getDeclaringClass() != Object.class
+                && !KNOWN_CONTRACT_METHODS.contains(method.getName())) {
+                out.add(signatureOf(method));
+            }
+        }
+        return out;
+    }
+
+    /** 方法签名摘要（日志/守卫共用）。 */
+    public static String signatureOf(Method method) {
+        return method.getName() + "/" + method.getParameterCount() + "->" + method.getReturnType().getSimpleName();
+    }
+
+    /**
+     * Kotlin suspend 方法在 JVM 上表现为「末参 Continuation、返回 Object」。动态代理若对它返回
+     * null，平台会当成「协程已挂起且永不恢复」——比抛异常更糟（会话请求一直挂着）。探测期一律
+     * 按不可识别处理，不注册。
+     */
+    private static boolean isSuspendLike(Method method) {
+        for (Class<?> type : method.getParameterTypes()) {
+            if (Continuation.class.isAssignableFrom(type)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 契约感知探测（T-Mcp261FilterContract 券02 + T-McpGlobalBreakHardening 券01）：
+     * <b>只按方法签名判形态，不看类是否存在；未知方法直接否决</b>。
      *
      * <p>261 上类存在但方法名不同（{@code getFilters} 而非 {@code applyFilters}），旧探测「类在即注册」把
      * 一个按 262 签名写的代理挂上去 → {@code getFilters} 落兜底 → 平台 {@code addAll(collection, null)}
      * → 内置 MCP Server 对所有客户端 500。故此处：
      * <ul>
-     *   <li>{@code applyFilters} 在场 → A（262/263）；</li>
-     *   <li>{@code getFilters} 双参且返回 {@code List} → B（261.24374+ / 261.25134）；</li>
+     *   <li>白名单外出现任何方法 → UNKNOWN；</li>
+     *   <li>{@code applyFilters} 四参、返回 void、非 suspend → A（262/263）；</li>
+     *   <li>{@code getFilters} 双参且返回 {@code List}、非 suspend → B（261.24374+ / 261.25134）；</li>
+     *   <li>{@code getUpdates} 若存在必须返回 {@code Flow} 且非 suspend；</li>
      *   <li>其余（含 261.22158 的 {@code StateFlow} 形态 C、未来新形态）→ UNKNOWN，不注册。</li>
      * </ul></p>
      *
-     * <p>判据只看方法名 + 参数个数 + 返回类型可赋值性——这三项都写在 JVM 描述符里，不依赖 Kotlin
-     * 元数据，也不产生任何类型引用（{@code List} 是 JDK 类型）。</p>
+     * <p>判据只看方法名 + 参数个数 + 返回类型可赋值性 + 是否 suspend——这些都写在 JVM 描述符里，
+     * 不依赖 Kotlin 元数据，也不产生任何平台类型引用（{@code List}/{@code Flow}/{@code Continuation}
+     * 都来自 JDK 或 kotlin 标准库）。</p>
      */
     public static FilterForm detectFilterForm(Class<?> iface) {
-        for (Method method : iface.getMethods()) {
-            if (method.getName().equals("applyFilters")) {
-                return FilterForm.A_APPLY;
+        if (!unknownContractMethods(iface).isEmpty()) {
+            return FilterForm.UNKNOWN;
+        }
+        Method[] methods = iface.getMethods();
+        List<Method> updates = new ArrayList<>();
+        for (Method method : methods) {
+            if (method.getName().equals("getUpdates")) {
+                updates.add(method);
             }
         }
-        for (Method method : iface.getMethods()) {
-            if (method.getName().equals("getFilters")
-                && method.getParameterCount() == 2
-                && List.class.isAssignableFrom(method.getReturnType())) {
-                return FilterForm.B_GET_LIST;
+        if (!updates.isEmpty()) {
+            boolean anyFlow = false;
+            for (Method method : updates) {
+                if (Flow.class.isAssignableFrom(method.getReturnType()) && !isSuspendLike(method)) {
+                    anyFlow = true;
+                    break;
+                }
             }
+            if (!anyFlow) {
+                return FilterForm.UNKNOWN;
+            }
+        }
+        List<Method> apply = new ArrayList<>();
+        for (Method method : methods) {
+            if (method.getName().equals("applyFilters")) {
+                apply.add(method);
+            }
+        }
+        if (!apply.isEmpty()) {
+            boolean ok = false;
+            for (Method method : apply) {
+                if (method.getParameterCount() == 4 && method.getReturnType() == Void.TYPE && !isSuspendLike(method)) {
+                    ok = true;
+                    break;
+                }
+            }
+            return ok ? FilterForm.A_APPLY : FilterForm.UNKNOWN;
+        }
+        List<Method> getFilters = new ArrayList<>();
+        for (Method method : methods) {
+            if (method.getName().equals("getFilters")) {
+                getFilters.add(method);
+            }
+        }
+        if (!getFilters.isEmpty()) {
+            boolean ok = false;
+            for (Method method : getFilters) {
+                if (method.getParameterCount() == 2
+                    && List.class.isAssignableFrom(method.getReturnType())
+                    && !isSuspendLike(method)) {
+                    ok = true;
+                    break;
+                }
+            }
+            return ok ? FilterForm.B_GET_LIST : FilterForm.UNKNOWN;
         }
         return FilterForm.UNKNOWN;
     }

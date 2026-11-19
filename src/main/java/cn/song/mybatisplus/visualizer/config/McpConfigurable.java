@@ -75,6 +75,9 @@ public class McpConfigurable implements Configurable {
     /** 页内开关选择状态，应用后生效。 */
     private JBLabel bannerGateLine = null;
 
+    /** T-McpGlobalBreakHardening：外部会话门控的实际注册状态（只读，不等于工具可调用）。 */
+    private JBLabel bannerGateStatusLine = null;
+
     @Override
     public String getDisplayName() {
         return MpSqlVisualizerBundle.message("settings.mcp.title");
@@ -131,11 +134,21 @@ public class McpConfigurable implements Configurable {
         bannerPlatformLine.setForeground(JBUI.CurrentTheme.ContextHelp.FOREGROUND);
         bannerGateLine = new JBLabel();
         bannerGateLine.setForeground(JBUI.CurrentTheme.ContextHelp.FOREGROUND);
+        // T-McpGlobalBreakHardening：门控「实际注册状态」是第三个独立事实——与页内勾选、
+        // 平台能力都不同源。用户/支持看这一行就能判断「关掉总开关后是否真的不再碰平台链」。
+        bannerGateStatusLine = new JBLabel(
+            MpSqlVisualizerBundle.message(
+                "settings.mcp.banner.gateStatus",
+                gateStatusText()
+            )
+        );
+        bannerGateStatusLine.setForeground(JBUI.CurrentTheme.ContextHelp.FOREGROUND);
         JPanel banner = new JPanel(new GridLayout(0, 1));
         banner.setBorder(JBUI.Borders.emptyBottom(10));
         banner.add(bannerHeadline);
         banner.add(bannerPlatformLine);
         banner.add(bannerGateLine);
+        banner.add(bannerGateStatusLine);
 
         masterCheckBox = new JBCheckBox(
             MpSqlVisualizerBundle.message("settings.mcp.enable.master"),
@@ -217,8 +230,30 @@ public class McpConfigurable implements Configurable {
         }
     }
 
+    /**
+     * T-McpGlobalBreakHardening：门控实际注册状态文案。
+     *
+     * <p>与 {@code refreshBannerGateLine} 的「页内选择」分开：这一行描述的是<b>运行期事实</b>——注册器
+     * 在最近一次同步里对平台契约做了什么。UNRECOGNIZED/TRIPPED 都意味着门控不生效，但
+     * 平台 MCP 服务不受影响；这两个词要让用户/支持一眼看到，而不是去翻 idea.log。</p>
+     */
+    private String gateStatusText() {
+        String key;
+        switch (cn.song.mybatisplus.visualizer.mcp.McpGateFilterEpRegistrar.getState()) {
+            case REGISTERED -> key = "settings.mcp.banner.gateActive";
+            case UNRECOGNIZED -> key = "settings.mcp.banner.gateUnrecognized";
+            case DISABLED -> key = "settings.mcp.banner.gateDisabled";
+            case UNSUPPORTED -> key = "settings.mcp.banner.gateUnsupported";
+            case TRIPPED -> key = "settings.mcp.banner.gateTripped";
+            case PENDING -> key = "settings.mcp.banner.gatePending";
+            default -> key = "settings.mcp.banner.gatePending";
+        }
+        return MpSqlVisualizerBundle.message(key);
+    }
+
     /** 工具级禁用判定（仅禁用清单，不含总开关——总开关是独立维度）。 */
-    private static boolean isToolListedInState(PluginSettings.State state, String toolName) {        if (state == null) {
+    private static boolean isToolListedInState(PluginSettings.State state, String toolName) {
+        if (state == null) {
             return true;
         }
         for (String disabled : state.getMcpDisabledTools()) {
@@ -334,6 +369,20 @@ public class McpConfigurable implements Configurable {
             }
         }
         state.setMcpDisabledTools(disabled);
+        // T-McpGlobalBreakHardening（20261119）：总开关/工具级清单变更必须广播设置变更——
+        // 过滤 EP 的热同步（McpGateRegistrationController 订阅本 topic）靠这条触发。261 真机
+        // GUI 走查实测：缺这条广播时 Apply 后两注册面都不摘（工具消失只是平台 isEnabled
+        // 过滤的副作用，过滤 provider 仍挂在平台上），必须重启才生效——热切换即失效。
+        try {
+            com.intellij.openapi.application.Application app =
+                com.intellij.openapi.application.ApplicationManager.getApplication();
+            if (app != null && app.getMessageBus() != null) {
+                app.getMessageBus().syncPublisher(PluginSettings.SETTINGS_CHANGE_TOPIC).settingsChanged();
+            }
+        } catch (Throwable t) {
+            Logger.getInstance(McpConfigurable.class)
+                .warn("MCP 设置变更广播失败（热同步退化为重启生效）", t);
+        }
     }
 
     @Override

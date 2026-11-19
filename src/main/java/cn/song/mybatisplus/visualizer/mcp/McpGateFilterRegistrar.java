@@ -38,9 +38,20 @@ import kotlin.coroutines.Continuation;
  *       INFO 日志（下一条版本线可直接定位），MCP 服务保持可用。</li>
  * </ul></p>
  *
+ * <p><b>T-McpGlobalBreakHardening（20261118）：总开关联动 + 逃生开关 + 状态可读</b>。
+ * 2026-10-29 报障里「关掉插件 MCP 总开关也无效、只能卸载插件」的根因是注册与开关无关。
+ * 现在：
+ * <ul>
+ *   <li>{@code mcpToolsEnabled=false} 时<b>两个注册面都不挂</b>（toolset 与过滤 EP），关掉功能的用户
+ *       完全不触碰平台链；设置页切回开启即重新注册（动态 EP 晚注册会触发清单重算）；</li>
+ *   <li>Registry {@code sqlvis.mcp.gateFilterEp}（默认 true）是逃生开关：万一再遇契约漂移，用户可以
+ *       只关这一项而不用卸载插件；</li>
+ *   <li>{@link GateRegistrationState} 供设置页只读展示「门控生效 / 未识别 / 已关闭 / 无此能力 / 已熔断」。</li>
+ * </ul></p>
+ *
  * <p><b>线程与时点</b>：ProjectActivity 每项目启动各触发一次，
- * {@link McpGateFilterEpRegistrar#registerOnce} 以原子闸保证全应用只注册一次；EP 层带
- * ExtensionPointListener（字节码实证），晚注册亦会触发清单重算，无需重启 IDE。</p>
+ * {@link McpGateRegistrationController#sync} 幂等；设置页 Apply 经
+ * {@code PluginSettings.SETTINGS_CHANGE_TOPIC} 广播后再同步一次。</p>
  *
  * <p>移植注记：master 同文件的 {@code object McpGateFilterEpRegistrar} 按本仓拆分惯例落为独立文件
  * {@code McpGateFilterEpRegistrar.java}（AcpTransportRegistrar/AcpTransportEpRegistrar 同款）。
@@ -52,10 +63,7 @@ public class McpGateFilterRegistrar implements ProjectActivity {
     /** Kotlin suspend execute 的 Java 侧等价形态（无实际挂起点，直接同步执行）。 */
     @Override
     public Object execute(@NotNull Project project, @NotNull Continuation<? super Unit> continuation) {
-        // T-McpDynamicToolset：十工具动态壳注册先走（探测 McpToolset 接口，253+ Marketplace 包/
-        // 262 内置命中；filter EP 契约分形态，两者独立探测独立降级）。
-        McpToolsetDynamicRegistrar.registerOnce();
-        McpGateFilterEpRegistrar.registerOnce();
+        McpGateRegistrationController.sync();
         return Unit.INSTANCE;
     }
 }
