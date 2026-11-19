@@ -852,8 +852,12 @@ internal fun DataSourceSelector.reuseSharedConsole(
         return false
     }
     runCatching {
-        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
-            editor.document.setText(sql)
+        // T-UserFreezeTriage：与仓内其余写点同规——内容已一致就不开写命令（每次写都要抢写锁，
+        // 外部长读锁在场时这笔白等会被用户读成「插件卡住」）。
+        if (editor.document.text != sql) {
+            com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+                editor.document.setText(sql)
+            }
         }
     }
     // M36.5.24：复用路径同款刷新——setText 只更新 console document，console.getScriptModel()

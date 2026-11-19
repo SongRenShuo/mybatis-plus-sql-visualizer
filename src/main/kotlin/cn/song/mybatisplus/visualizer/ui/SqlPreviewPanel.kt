@@ -937,8 +937,17 @@ class SqlPreviewPanel(
             cn.song.mybatisplus.visualizer.config.SettingsChangeListener {
                 val app = ApplicationManager.getApplication()
                 // 设置应用通常在 EDT；后台广播同步收口，避免开脱敏后仍能复制旧原文。
+                // T-UserFreezeTriage：收口必须有界——EDT 被第三方长读锁占住时，无超时的
+                // invokeAndWait 会把调用线程一起挂死（用户冻结 dump 里 Cool Request 的同族形态）。
                 val update = Runnable { if (!previewDisposed) refreshShardingRouteDisplay() }
-                if (app.isDispatchThread) update.run() else app.invokeAndWait(update)
+                if (app.isDispatchThread) {
+                    update.run()
+                } else {
+                    cn.song.mybatisplus.visualizer.util.EdtDispatch.invokeLaterAndWaitBounded(
+                        reason = "preview settings-change refresh",
+                        block = { update.run() },
+                    )
+                }
             },
         )
 
