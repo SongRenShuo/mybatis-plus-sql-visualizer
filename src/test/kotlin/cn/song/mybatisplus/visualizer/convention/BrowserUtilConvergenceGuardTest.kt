@@ -42,143 +42,143 @@ import org.junit.Test
 class BrowserUtilConvergenceGuardTest : BannedApiScanSupport() {
 
     // 内核为实例层：maskNonCode/lineOf/matchingDelimiter 是 BannedApiScanSupport 的实例成员，companion 无实例接收者
-        // ------------------------------------------------------------------
-        // 判定内核（可注入合成源码：主用例与自证语料共用同一实现）
-        // ------------------------------------------------------------------
+    // ------------------------------------------------------------------
+    // 判定内核（可注入合成源码：主用例与自证语料共用同一实现）
+    // ------------------------------------------------------------------
 
-        /** 被扫调用形态：裸名与全限定名都以此子串命中（掩码后注释/字符串内容已涂白，不产生假命中）。 */
-        private val BROWSER_UTIL_CALL_APIS = listOf("BrowserUtil.browse(", "BrowserUtil.open(")
+    /** 被扫调用形态：裸名与全限定名都以此子串命中（掩码后注释/字符串内容已涂白，不产生假命中）。 */
+    private val BROWSER_UTIL_CALL_APIS = listOf("BrowserUtil.browse(", "BrowserUtil.open(")
 
-        /** 围合函数体内可见即判「收敛」的标记。 */
-        private val CONVERGED_MARKERS = listOf("isUnitTestMode", "isTestEnvironment")
+    /** 围合函数体内可见即判「收敛」的标记。 */
+    private val CONVERGED_MARKERS = listOf("isUnitTestMode", "isTestEnvironment")
 
-        /** Java 控制关键字（头部长这样的是控制流/匿名类，不是方法体，不参与围合）。 */
-        private val NON_METHOD_HEADERS = setOf(
-            "if", "while", "for", "switch", "catch", "synchronized", "new", "return", "do", "try", "else",
-        )
+    /** Java 控制关键字（头部长这样的是控制流/匿名类，不是方法体，不参与围合）。 */
+    private val NON_METHOD_HEADERS = setOf(
+        "if", "while", "for", "switch", "catch", "synchronized", "new", "return", "do", "try", "else",
+    )
 
-        /**
-         * 豁免清单（文件路径 → 理由，逐条人工登记）。**字面量表留在本类源码内，不提成共享常量**——
-         * 前车之鉴（计划册 T2 陷阱项）：提成常量会让守卫提取不到直接红。
-         */
-        private val exemptFiles: Map<String, String> = mapOf(
-            "src/main/java/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.java" to
-                "捕获目录打开缝（captureDirectoryOpener 默认 lambda）：打开本地捕获目录" +
-                    "（目录 URI，文件管理器行为非网页）；且本身是测试缝——PluginSettingsPanelUiTest 注入" +
-                    "替代实现观察目标路径，平台调用在测试进程不触达。属性初始化 lambda 无方法围合，" +
-                    "无法就地收敛，豁免登记；未来若测试改触达默认实现，须先加 isUnitTestMode 收敛。",
-            "src/main/java/cn/song/mybatisplus/visualizer/share/ui/ShareDialog.java" to
-                "导出后打开刚保存的本地 HTML 报告（html 文件 URI，确会拉起默认浏览器渲染本地文件）：仅在" +
-                    "用户经 FileSaverDialog 手动确认保存后才触发；ShareDialogTest 不触达导出链" +
-                    "（grep 实证 0 调用）。未来任何测试触达导出链前，须先把这两处改走 util.SafeBrowser " +
-                    "或加 isUnitTestMode 收敛，不得沿用本豁免。",
-        )
+    /**
+     * 豁免清单（文件路径 → 理由，逐条人工登记）。**字面量表留在本类源码内，不提成共享常量**——
+     * 前车之鉴（计划册 T2 陷阱项）：提成常量会让守卫提取不到直接红。
+     */
+    private val exemptFiles: Map<String, String> = mapOf(
+        "src/main/java/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.java" to
+            "捕获目录打开缝（captureDirectoryOpener 默认 lambda）：打开本地捕获目录" +
+                "（目录 URI，文件管理器行为非网页）；且本身是测试缝——PluginSettingsPanelUiTest 注入" +
+                "替代实现观察目标路径，平台调用在测试进程不触达。属性初始化 lambda 无方法围合，" +
+                "无法就地收敛，豁免登记；未来若测试改触达默认实现，须先加 isUnitTestMode 收敛。",
+        "src/main/java/cn/song/mybatisplus/visualizer/share/ui/ShareDialog.java" to
+            "导出后打开刚保存的本地 HTML 报告（html 文件 URI，确会拉起默认浏览器渲染本地文件）：仅在" +
+                "用户经 FileSaverDialog 手动确认保存后才触发；ShareDialogTest 不触达导出链" +
+                "（grep 实证 0 调用）。未来任何测试触达导出链前，须先把这两处改走 util.SafeBrowser " +
+                "或加 isUnitTestMode 收敛，不得沿用本豁免。",
+    )
 
-        /** 期望计数：与 src/main 生产调用点同步（当前 4 = SqlLogPanel 1 + SafeBrowser 1 + PluginSettingsPanel 1 + ShareDialog 1——T-PerfSweep30 04a（T-PerfSweep31 券03 移植）把两处导出回调收敛进共享 onSuccess 后 2→1）。 */
-        private val EXPECTED_TOTAL_CALL_SITES = 4
+    /** 期望计数：与 src/main 生产调用点同步（当前 4 = SqlLogPanel 1 + SafeBrowser 1 + PluginSettingsPanel 1 + ShareDialog 1——T-PerfSweep30 04a（T-PerfSweep31 券03 移植）把两处导出回调收敛进共享 onSuccess 后 2→1）。 */
+    private val EXPECTED_TOTAL_CALL_SITES = 4
 
-        /** 一个调用站点：文件相对路径、1-based 行号、命中的 API 形态、最小围合函数体（无方法围合为空串）。 */
-        internal data class BrowserUtilCallSite(
-            val path: String,
-            val line: Int,
-            val api: String,
-            val enclosingBody: String,
-        )
+    /** 一个调用站点：文件相对路径、1-based 行号、命中的 API 形态、最小围合函数体（无方法围合为空串）。 */
+    internal data class BrowserUtilCallSite(
+        val path: String,
+        val line: Int,
+        val api: String,
+        val enclosingBody: String,
+    )
 
-        /**
-         * 调用站点提取器：掩码（注释/字符串涂白、保行）后找 API 调用，配最小围合函数体。
-         * 函数体界定 = Java 方法形（头 `(`…`)` `{`，头部非控制关键字/`new`）；lambda 体落在方法体
-         * 之内即可被围合体覆盖，独立 lambda（属性初始化器）按「无围合」处理（未收敛，须豁免）。
-         */
-        internal fun browserUtilCallSites(sources: List<Pair<String, String>>): List<BrowserUtilCallSite> {
-            val sites = mutableListOf<BrowserUtilCallSite>()
-            for ((path, raw) in sources) {
-                val masked = maskNonCode(raw)
-                val bodies = functionBodies(masked)
-                for (api in BROWSER_UTIL_CALL_APIS) {
-                    var idx = masked.indexOf(api)
-                    while (idx >= 0) {
-                        val body = bodies.lastOrNull { idx >= it.first && idx <= it.last }
-                        sites += BrowserUtilCallSite(
-                            path,
-                            lineOf(masked, idx),
-                            api,
-                            body?.let { masked.substring(it.first, it.last + 1) } ?: "",
-                        )
-                        idx = masked.indexOf(api, idx + 1)
-                    }
+    /**
+     * 调用站点提取器：掩码（注释/字符串涂白、保行）后找 API 调用，配最小围合函数体。
+     * 函数体界定 = Java 方法形（头 `(`…`)` `{`，头部非控制关键字/`new`）；lambda 体落在方法体
+     * 之内即可被围合体覆盖，独立 lambda（属性初始化器）按「无围合」处理（未收敛，须豁免）。
+     */
+    internal fun browserUtilCallSites(sources: List<Pair<String, String>>): List<BrowserUtilCallSite> {
+        val sites = mutableListOf<BrowserUtilCallSite>()
+        for ((path, raw) in sources) {
+            val masked = maskNonCode(raw)
+            val bodies = functionBodies(masked)
+            for (api in BROWSER_UTIL_CALL_APIS) {
+                var idx = masked.indexOf(api)
+                while (idx >= 0) {
+                    val body = bodies.lastOrNull { idx >= it.first && idx <= it.last }
+                    sites += BrowserUtilCallSite(
+                        path,
+                        lineOf(masked, idx),
+                        api,
+                        body?.let { masked.substring(it.first, it.last + 1) } ?: "",
+                    )
+                    idx = masked.indexOf(api, idx + 1)
                 }
             }
-            return sites
         }
+        return sites
+    }
 
-        /** 违规点内核：不在豁免清单且围合体内无收敛标记的站点，报 `路径:行 API`。 */
-        internal fun unconvergedBrowserUtilSites(sources: List<Pair<String, String>>): List<String> =
-            browserUtilCallSites(sources)
-                .filter { site -> site.path !in exemptFiles && CONVERGED_MARKERS.none { site.enclosingBody.contains(it) } }
-                .map { "${it.path}:${it.line} ${it.api}" }
+    /** 违规点内核：不在豁免清单且围合体内无收敛标记的站点，报 `路径:行 API`。 */
+    internal fun unconvergedBrowserUtilSites(sources: List<Pair<String, String>>): List<String> =
+        browserUtilCallSites(sources)
+            .filter { site -> site.path !in exemptFiles && CONVERGED_MARKERS.none { site.enclosingBody.contains(it) } }
+            .map { "${it.path}:${it.line} ${it.api}" }
 
-        /**
-         * masked .java 源码里的全部方法体区间：`{` 的最近前缀是 `)` 且其配对 `(` 的头部
-         * 是方法形（非控制关键字 / 非 `new` 匿名类）。类体/初始化块（`{` 前非 `)`）自然出局。
-         */
-        private fun functionBodies(masked: String): List<IntRange> {
-            val ranges = mutableListOf<IntRange>()
-            var i = 0
-            while (true) {
-                val open = masked.indexOf('{', i)
-                if (open < 0) break
-                val headerStart = methodHeaderOpenParen(masked, open)
-                if (headerStart >= 0) {
-                    val end = matchingDelimiter(masked, open, '{', '}')
-                    if (end > 0) ranges += open..end
-                }
-                i = open + 1
+    /**
+     * masked .java 源码里的全部方法体区间：`{` 的最近前缀是 `)` 且其配对 `(` 的头部
+     * 是方法形（非控制关键字 / 非 `new` 匿名类）。类体/初始化块（`{` 前非 `)`）自然出局。
+     */
+    private fun functionBodies(masked: String): List<IntRange> {
+        val ranges = mutableListOf<IntRange>()
+        var i = 0
+        while (true) {
+            val open = masked.indexOf('{', i)
+            if (open < 0) break
+            val headerStart = methodHeaderOpenParen(masked, open)
+            if (headerStart >= 0) {
+                val end = matchingDelimiter(masked, open, '{', '}')
+                if (end > 0) ranges += open..end
             }
-            return ranges
+            i = open + 1
         }
+        return ranges
+    }
 
-        /**
-         * `{` 前回溯：最近 `)` → 向前配平到它的 `(` → 头部词法是「方法形」才返回 `(` 位；
-         * 否则 -1。头部形：`(` 前的最后一个标识符不是控制关键字，且从 `(` 向回看到
-         * `;`/`}`/`{`/换行前的可见字符里不含 `=`（赋值/字段初始化）与 `new`。
-         */
-        private fun methodHeaderOpenParen(masked: String, openBrace: Int): Int {
-            var k = openBrace - 1
-            while (k >= 0 && masked[k].isWhitespace()) k--
-            if (k < 0 || masked[k] != ')') return -1
-            val openParen = matchingDelimiterBackward(masked, k)
-            if (openParen < 0) return -1
-            // 头部（openParen 向前的可见字符）最后一个标识符
-            var j = openParen - 1
-            while (j >= 0 && masked[j].isWhitespace()) j--
-            if (j < 0) return -1
-            val identEnd = j
-            while (j >= 0 && (masked[j].isLetterOrDigit() || masked[j] == '_')) j--
-            val ident = masked.substring(j + 1, identEnd + 1)
-            if (ident.isEmpty() || ident in NON_METHOD_HEADERS) return -1
-            // 头部里出现 `new `（匿名类体）或 `=`（赋值右值 lambda）→ 非方法
-            val header = masked.substring(maxOf(0, openParen - 400), openParen)
-            if (Regex("\\bnew\\s+[^()]*$").containsMatchIn(header.substringAfterLast(';'))) return -1
-            return openParen
-        }
+    /**
+     * `{` 前回溯：最近 `)` → 向前配平到它的 `(` → 头部词法是「方法形」才返回 `(` 位；
+     * 否则 -1。头部形：`(` 前的最后一个标识符不是控制关键字，且从 `(` 向回看到
+     * `;`/`}`/`{`/换行前的可见字符里不含 `=`（赋值/字段初始化）与 `new`。
+     */
+    private fun methodHeaderOpenParen(masked: String, openBrace: Int): Int {
+        var k = openBrace - 1
+        while (k >= 0 && masked[k].isWhitespace()) k--
+        if (k < 0 || masked[k] != ')') return -1
+        val openParen = matchingDelimiterBackward(masked, k)
+        if (openParen < 0) return -1
+        // 头部（openParen 向前的可见字符）最后一个标识符
+        var j = openParen - 1
+        while (j >= 0 && masked[j].isWhitespace()) j--
+        if (j < 0) return -1
+        val identEnd = j
+        while (j >= 0 && (masked[j].isLetterOrDigit() || masked[j] == '_')) j--
+        val ident = masked.substring(j + 1, identEnd + 1)
+        if (ident.isEmpty() || ident in NON_METHOD_HEADERS) return -1
+        // 头部里出现 `new `（匿名类体）或 `=`（赋值右值 lambda）→ 非方法
+        val header = masked.substring(maxOf(0, openParen - 400), openParen)
+        if (Regex("\\bnew\\s+[^()]*$").containsMatchIn(header.substringAfterLast(';'))) return -1
+        return openParen
+    }
 
-        /** 从 `)` 向前找配对 `(`（忽略嵌套与掩码内内容——掩码已保证串内括号被涂白）。 */
-        private fun matchingDelimiterBackward(code: String, close: Int): Int {
-            var depth = 0
-            var i = close
-            while (i >= 0) {
-                when (code[i]) {
-                    ')' -> depth++
-                    '(' -> {
-                        depth--
-                        if (depth == 0) return i
-                    }
+    /** 从 `)` 向前找配对 `(`（忽略嵌套与掩码内内容——掩码已保证串内括号被涂白）。 */
+    private fun matchingDelimiterBackward(code: String, close: Int): Int {
+        var depth = 0
+        var i = close
+        while (i >= 0) {
+            when (code[i]) {
+                ')' -> depth++
+                '(' -> {
+                    depth--
+                    if (depth == 0) return i
                 }
-                i--
             }
-            return -1
+            i--
         }
+        return -1
+    }
 
     // ------------------------------------------------------------------
     // 主用例

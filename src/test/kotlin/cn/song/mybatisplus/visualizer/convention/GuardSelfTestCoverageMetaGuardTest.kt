@@ -711,7 +711,10 @@ class GuardSelfTestCoverageMetaGuardTest {
             ),
             GuardEntry(
                 "convention/BrowserUtilConvergenceGuardTest.kt",
-                listOf(DecisionFn("unconvergedBrowserUtilSites", FnKind.VIOLATIONS)),
+                listOf(
+                    DecisionFn("unconvergedBrowserUtilSites", FnKind.VIOLATIONS),
+                    DecisionFn("browserUtilCallSites", FnKind.SITES),
+                ),
                 "T-TestGapSpeed T2 守卫（k2j 本轮补齐，历轮缺口）：src/main 的 BrowserUtil.browse/open 调用点" +
                     "（掩码后计数）必须围合体内含收敛标记或登记豁免，期望计数同步防扫描器失明空绿。" +
                     "判定内核 unconvergedBrowserUtilSites 返回未收敛站点清单（路径:行 API）。" +

@@ -61,7 +61,8 @@ class MapperNavCacheKeyProjectIdentityGuardTest {
         }
         val cacheKeyIdx = joined.indexOf("static String cacheKey(")
         val cacheKeyBody = if (cacheKeyIdx >= 0) joined.substring(cacheKeyIdx, minOf(joined.length, cacheKeyIdx + 300)) else ""
-        if (!cacheKeyBody.contains("locationHash")) {
+        // Java 侧方法名是 getLocationHash（大写 L），KDoc 里的 locationHash 已被剥——判据大小写不敏感
+        if (!Regex("(?i)locationhash").containsMatchIn(cacheKeyBody)) {
             issues.add("cacheKey 函数体未含 locationHash——项目身份来源丢失")
         }
         val bareKeys = Regex("\\+\\s*\"#\"").findAll(joined).toList()
@@ -108,10 +109,10 @@ class MapperNavCacheKeyProjectIdentityGuardTest {
 
     @Test
     fun `自证_干净样本必须放行`() {
-        // 新形态语料：cacheKey 带 locationHash、两侧调用点齐备、无裸键。
+        // 新形态语料：cacheKey 带 locationHash（Java 方法名 getLocationHash 大写 L）、两侧调用点齐备、无裸键。
         val clean = """
             class MapperXmlToJavaLineMarkerProvider {
-                static String cacheKey(Project project, String namespace, String statementId) {
+                static String cacheKey(@NotNull Project project, String namespace, String statementId) {
                     return project.getLocationHash() + "|" + namespace + "|" + statementId;
                 }
                 private LineMarkerInfo createMarker(PsiElement element) {
