@@ -793,8 +793,17 @@ public final class SqlPreviewPanelResultViewKt {
             String bannerText = p.currentWarningIsNote
                     ? MpSqlVisualizerBundle.message("panel.banner.renderNote", p.currentWarning)
                     : MpSqlVisualizerBundle.message("panel.banner.renderFailed", p.currentWarning);
-            p.degradationBanner.show(DegradationBanner.Kind.RENDER_WARNING, bannerText);
+            p.degradationBanner.show(
+                    DegradationBanner.Kind.RENDER_WARNING,
+                    bannerText,
+                    // T-StandaloneHintAndWarning：横幅是单行 JLabel，超宽必被裁——tooltip 给完整文案，
+                    // 与「点击横幅看全文」两条路都通（组件早就支持第三参，此前调用点漏传）。
+                    bannerText);
+            // T-StandaloneHintAndWarning：横幅正文可点 → 完整提示对话框（可选中/复制/滚动）。
+            // 回调只在有警示时挂，清除时摘掉（避免空点）。
+            p.degradationBanner.onDetailsRequested = () -> WarningDetailDialog.showWarningDetails(p);
         } else {
+            p.degradationBanner.onDetailsRequested = null;
             p.degradationBanner.clear(DegradationBanner.Kind.RENDER_WARNING);
         }
         // T-FullTableWriteRisk：无 WHERE 的 DELETE/UPDATE（XML 链产物随勾选实时变化）。

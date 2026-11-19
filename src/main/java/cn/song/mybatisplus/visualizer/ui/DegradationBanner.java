@@ -65,6 +65,15 @@ public class DegradationBanner extends JBPanel<DegradationBanner> {
     @Nullable
     public Runnable onRetry = null;
 
+    /**
+     * T-StandaloneHintAndWarning：点击正文的回调（null = 正文不可点，指针保持默认）。
+     *
+     * <p>为什么要有它：横幅是单行 {@code JBLabel}，长警告（如 mapper {@code include} 片段缺失说明）在窄面板里
+     * 必被裁，tooltip 只能瞄一眼；用户要的是<b>能整段读、能选中复制</b>。
+     */
+    @Nullable
+    public Runnable onDetailsRequested = null;
+
     private final JBLabel label;
 
     /** 仅 DOLLAR_INJECT 可见的信息级关闭按钮（错误/降级类保持常驻不可关）。 */
@@ -91,6 +100,13 @@ public class DegradationBanner extends JBPanel<DegradationBanner> {
         label.setBorder(JBUI.Borders.empty(4, 8, 4, 8));
         // 详情可能含 SQL 片段（`<` 开头），禁用 HTML 解析纯文本渲染（SqlSelectionDialog 同款约定）
         label.putClientProperty("html.disable", true);
+        // T-StandaloneHintAndWarning：正文单行必被裁——点击正文看全文（回调由调用方按需挂）
+        label.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseClicked(java.awt.event.MouseEvent e) {
+                if (onDetailsRequested != null) onDetailsRequested.run();
+            }
+        });
 
         dismissButton = new JBLabel("✕");
         dismissButton.setToolTipText(null);
@@ -130,12 +146,23 @@ public class DegradationBanner extends JBPanel<DegradationBanner> {
 
     /** 显示提示（文案由调用方按 i18n 键组装三要素）。 */
     public void show(Kind kind, String message) {
+        show(kind, message, null);
+    }
+
+    /** 全参形态（T-StandaloneHintAndWarning：{@code tooltip} 传完整文案，单行正文被裁时兜底）。 */
+    public void show(Kind kind, String message, @Nullable String tooltip) {
         // 高优先类别挂起期间，低优先提示不覆盖（DEGRADED 常驻语义的泛化——
         // RENDER_WARNING 挂起时 DOLLAR_INJECT 信息提示同样让位，警示清除后下次更新再回）
         Kind current = currentKind;
         if (current != null && priority(current) > priority(kind)) return;
         currentKind = kind;
         label.setText(message);
+        // 宽度不足时正文会被裁：调用方传入完整文案作 tooltip（不新造「详情」控件）
+        label.setToolTipText(tooltip);
+        // T-StandaloneHintAndWarning：挂了「看全文」回调时正文给手型指针（可发现性）
+        label.setCursor(onDetailsRequested != null
+                ? java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
+                : null);
         dismissButton.setVisible(kind == Kind.DOLLAR_INJECT);
         dismissButton.setToolTipText(message);
         // T-PrewarmLateRecover F2：动作只在「有回调的降级提示」上出现
@@ -153,6 +180,7 @@ public class DegradationBanner extends JBPanel<DegradationBanner> {
         if (currentKind != kind) return;
         currentKind = null;
         label.setText("");
+        label.setToolTipText(null);
         dismissButton.setVisible(false);
         retryLabel.setVisible(false);
         actions.setVisible(false);
@@ -162,6 +190,12 @@ public class DegradationBanner extends JBPanel<DegradationBanner> {
     /** 测试访问器：当前文案（显隐断言用 isVisible）。 */
     public String textForTest() {
         return label.getText();
+    }
+
+    /** 测试访问器：正文 tooltip（T-StandaloneHintAndWarning：必须是完整文案而非截断文本）。 */
+    @Nullable
+    public String tooltipTextForTest() {
+        return label.getToolTipText();
     }
 
     /** 测试访问器：当前挂起类别。 */

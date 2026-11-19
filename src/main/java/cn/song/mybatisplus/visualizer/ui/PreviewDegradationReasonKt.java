@@ -32,4 +32,30 @@ public final class PreviewDegradationReasonKt {
         }
         return null;
     }
+
+    /**
+     * T-FirstOpenDegradedLabel：装配降级时的<b>原因决策</b>（纯函数，便于单测钉住优先级）。
+     *
+     * <p>顺序：显式原因 &gt; 预热终态（失败 / 超时）&gt; <b>仍在途 → {@link PreviewDegradationReason#TIMEOUT}</b> &gt; 已消费。</p>
+     *
+     * <p>最后一步为什么不能一律 PRODUCT_CONSUMED：那个原因属硬失败档（<b>立即</b>弹横幅 + 重试），
+     * 而首次打开时预热通常刚发起、产物仍在路上——旧实现因此在每次首开都给用户看一条假失败提示
+     * （2026-11-18 用户截图）。在途的正确语义是 TIMEOUT：宽限期静默，超时才以「仍在准备中」披露，
+     * 产物到达后由迟到产物换装静默切换。</p>
+     */
+    @NotNull
+    public static PreviewDegradationReason fallbackDegradationReason(
+            @Nullable PreviewDegradationReason explicit,
+            @Nullable PrewarmAwait<?> await) {
+        if (explicit != null) {
+            return explicit;
+        }
+        PreviewDegradationReason fromAwait = await != null ? degradationReasonOrNull(await) : null;
+        if (fromAwait != null) {
+            return fromAwait;
+        }
+        return await != null && !await.isDone()
+                ? PreviewDegradationReason.TIMEOUT
+                : PreviewDegradationReason.PRODUCT_CONSUMED;
+    }
 }
