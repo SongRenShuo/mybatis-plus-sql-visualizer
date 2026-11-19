@@ -6,6 +6,10 @@ import cn.song.mybatisplus.visualizer.model.Condition
 import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.model.SqlValue
 import cn.song.mybatisplus.visualizer.model.TableInfo
+import cn.song.mybatisplus.visualizer.sql.RuntimeSlotValues
+import cn.song.mybatisplus.visualizer.sql.RuntimeSlot
+import cn.song.mybatisplus.visualizer.sql.SlotKind
+import cn.song.mybatisplus.visualizer.sql.SlotValue
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -104,6 +108,66 @@ class ParameterReplacerTest {
             listOf(ParamHint(true)),
         )
         assertEquals("SELECT id FROM tbl WHERE name = 'O''Brien'", result)
+    }
+
+    // ------------------------------------------------------------------
+    // T-PreQuotedLiteral：值已是完整引号字面量 → 原样渲染，不再转义包裹（引号翻倍前科）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `buildExecutableSql_已引号字符串原样不翻倍`() {
+        val sql = "SELECT id FROM tbl WHERE name = ?"
+        val result = ParameterReplacer.buildExecutableSql(
+            sql,
+            listOf("name"),
+            mapOf("name" to "'abc'"),
+            listOf(ParamHint(true)),
+        )
+        assertEquals("SELECT id FROM tbl WHERE name = 'abc'", result)
+    }
+
+    @Test
+    fun `buildExecutableSql_已引号输入走启发式档同样原样`() {
+        val sql = "SELECT id FROM tbl WHERE name = ?"
+        val result = ParameterReplacer.buildExecutableSql(
+            sql,
+            listOf("name"),
+            mapOf("name" to "'abc'"),
+            emptyList(),
+        )
+        assertEquals("SELECT id FROM tbl WHERE name = 'abc'", result)
+    }
+
+    @Test
+    fun `buildExecutableSql_数值列收到已引号非数字_原样不翻倍`() {
+        val sql = "SELECT id FROM tbl WHERE id = ?"
+        val result = ParameterReplacer.buildExecutableSql(
+            sql,
+            listOf("id"),
+            mapOf("id" to "'abc'"),
+            listOf(ParamHint(false)),
+        )
+        assertEquals("SELECT id FROM tbl WHERE id = 'abc'", result)
+    }
+
+    @Test
+    fun `运行期占位_VALUE_已引号输入落在引号内_剥外引号按内层转义`() {
+        val target = slot("rt9", SlotKind.VALUE, "kw", null, ParamHint(true))
+        val sql = "SELECT id FROM t WHERE name LIKE '%${target.token}%'"
+        val result = render(sql, listOf(target), RuntimeSlotValues.of(java.util.Map.entry("rt9", SlotValue.text("'abc'"))))
+        assertEquals("SELECT id FROM t WHERE name LIKE '%abc%'", result.sql)
+    }
+
+    @Test
+    fun `buildExecutableSql_已转义内层引号完整字面量原样`() {
+        val sql = "SELECT id FROM tbl WHERE name = ?"
+        val result = ParameterReplacer.buildExecutableSql(
+            sql,
+            listOf("name"),
+            mapOf("name" to "'a''b'"),
+            listOf(ParamHint(true)),
+        )
+        assertEquals("SELECT id FROM tbl WHERE name = 'a''b'", result)
     }
 
     @Test
@@ -223,4 +287,31 @@ class ParameterReplacerTest {
         // 去掉空白后应一致
         assertEquals(multi.replace(Regex("\\s+"), " ").trim(), single)
     }
+
+    // ------------------------------------------------------------------
+    // T-RuntimeSlotFill 券 B：运行期占位回填（本轮 T-PreQuotedLiteral 用例引入）
+    // ------------------------------------------------------------------
+
+    /** 造一个占位：token 与券 A 产物同形（`运行时值: <摘要> · <id>` 包在块注释里）。 */
+    private fun slot(
+        id: String,
+        kind: SlotKind,
+        expression: String = "expr",
+        template: String? = null,
+        hint: ParamHint = ParamHint(),
+    ) = RuntimeSlot(
+        id,
+        kind,
+        expression,
+        template,
+        hint,
+        "/* 运行时值: $expression · $id */",
+    )
+
+    private fun render(
+        sql: String,
+        slots: List<RuntimeSlot>,
+        values: RuntimeSlotValues,
+        dialectName: String? = null,
+    ) = ParameterReplacer.replaceRuntimeSlots(sql, slots, values, dialectName)
 }
