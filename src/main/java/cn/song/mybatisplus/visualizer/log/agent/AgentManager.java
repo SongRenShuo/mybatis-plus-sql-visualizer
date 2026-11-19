@@ -369,6 +369,9 @@ public final class AgentManager implements Disposable {
 
     public AgentManager(Project project) {
         this.project = project;
+        // T-HdAbsorb D215：调试器挂起账本安装（幂等；Community/无 debugger 环境反射缺类静默降级）——
+        // 断点挂起时段入账，agent 耗时在适配期按测量窗交集扣减（补偿自身带 registry 闸）。
+        DebuggerSuspendTracker.install();
         // 通知出口默认实现（master 属性初始化器直译；测试可注入替身）。须在 project 赋值之后。
         this.attachFallbackNotifier = () -> {
             com.intellij.openapi.application.Application app = ApplicationManager.getApplication();
