@@ -21,6 +21,12 @@ import com.intellij.openapi.vfs.VirtualFile
  * 读文件是**输入源**能力，不是**展示**能力。调用方只应是「需要一段待解析文本」的入口：
  * 独立工作台（载入 → 解析预览）与补齐片段框（抽出 `<sql>` 片段）；通用预览弹窗只展示已渲染的
  * SQL，不再拥有该入口。
+ *
+ * ## 线程纪律（T-Perf33MergeAlign：选/读分离）
+ *
+ * 「弹选择框」必须在 EDT（`FileChooser.chooseFile` 是 UI 操作）；「读文本」是读权限 IO，
+ * 大文件在 EDT 读会卡界面。故本对象只拆成两个原语：[chooseFile]（EDT，仅选）+ [loadText]
+ * （后台，仅读）——调用方负责把 [loadText] 派到后台线程、回填再回 EDT。
  */
 internal object MapperFileLoader {
 
@@ -28,21 +34,24 @@ internal object MapperFileLoader {
     class LoadedFile(val fileName: String, val text: String)
 
     /**
-     * 弹单文件选择框（只过滤 xml）并读回文本；用户取消、读取失败或内容为空都返回 null。
+     * 弹单文件选择框（只过滤 xml）并返回选中的虚拟文件；用户取消返回 null。
+     *
+     * **必须在 EDT 调用**（`FileChooser.chooseFile` 是 UI 操作）。读文本交给 [loadText]，
+     * 由调用方在后台线程执行——选文件与读文件在两处，各自放在对的线程上。
      *
      * @param titleKey 选择框标题的 bundle 键（两个入口文案不同，但行为同一）。
      */
-    fun choose(project: Project?, titleKey: String): LoadedFile? {
+    fun chooseFile(project: Project?, titleKey: String): VirtualFile? {
         val descriptor = FileChooserDescriptorFactory
             .createSingleFileDescriptor("xml")
             .withTitle(MpSqlVisualizerBundle.message(titleKey))
-        val file: VirtualFile = FileChooser.chooseFile(descriptor, project, null) ?: return null
-        val text = loadText(file)?.takeIf { it.isNotBlank() } ?: return null
-        return LoadedFile(file.name, text)
+        return FileChooser.chooseFile(descriptor, project, null)
     }
 
     /**
      * 读虚拟文件全文（读权限 + 失败兜底）。
+     *
+     * **应由调用方在后台线程调用**（读权限 IO，大文件在 EDT 会卡界面）。
      *
      * 243 编译目标下 `ReadAction.compute(ThrowableComputable)` 是唯一可用重载（已标 deprecated，
      * 与仓内既有调用点同处置）。
