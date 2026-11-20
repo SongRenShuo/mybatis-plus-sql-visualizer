@@ -37,6 +37,11 @@
          ⑦ 交流群码引 .jpg 而非 .png：站点上的 group-qr.png 文件内容实为 JPEG（magic FF D8 FF E0），
             按扩展名却返回 image/png，与内容不符，配合 nosniff 在部分客户端会被拒渲染。站点已补一份
             字节相同的 group-qr.jpg，旧 .png 保留不删（已发布版本与历史文档仍指向它）。
+         ⑧ 作者微信码 2026-11-20 起同样引 .jpg：wechat-qr.png 是 7481 色抗锯齿原图（66KB），描边与渐变
+            吃掉了全部字节；转 q92 JPEG 后 23KB，OpenCV 在原尺寸与 180px 两档解码结果均与原件一致。
+            不引 WebP：插件内的交流群弹窗（CommunityQrImages）用 ImageIO 解码，JVM 原生无 WebP reader
+            （JDK8 实测 wechat-qr.webp → no reader）；描述区虽在浏览器渲染，但两处保持同一种格式好维护。
+            旧 .png 保留不删。
          HTML 片段下同。 -->
     <description><![CDATA[
         <p><b>See the exact SQL your code will run.</b> Renders MyBatis-Plus, JPA and JdbcTemplate queries into executable SQL with real parameter values, before the server starts.</p>
@@ -78,7 +83,7 @@
         <p>两张二维码用途不同，请对照下方说明选择扫码（二维码为限时码）。</p>
         <table>
             <tr>
-                <td width="200" align="center"><img src="https://sql-visualizer.jvtools.cn/wechat-qr.png" width="200" alt="作者微信二维码"/><br/><b>作者微信</b><br/>扫码添加作者为朋友，欢迎交流插件使用与开发话题；加好友时请备注「SQL Visualizer」。</td>
+                <td width="200" align="center"><img src="https://sql-visualizer.jvtools.cn/wechat-qr.jpg" width="200" alt="作者微信二维码"/><br/><b>作者微信</b><br/>扫码添加作者为朋友，欢迎交流插件使用与开发话题；加好友时请备注「SQL Visualizer」。</td>
                 <td width="200" align="center"><img src="https://sql-visualizer.jvtools.cn/group-qr.jpg" width="200" alt="交流群二维码"/><br/><b>交流群</b><br/>扫码加入 SQL Visualizer 交流群；群码失效时可添加作者微信。</td>
             </tr>
         </table>
