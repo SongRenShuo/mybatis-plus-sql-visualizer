@@ -6,7 +6,7 @@
   - `git merge-tree --write-tree master t-perfsweep33` → 冲突 2 处：`CHANGELOG.md`（append 撞车）、`src/main/kotlin/.../ui/SqlPreviewDialog.kt`（实质）
   - 分支守卫 `SqlPreviewDialogOffEdtResolveHotPathTest` 断言：`SqlPreviewDialog` 内 `StandaloneSqlSourceResolver.resolve(` **恰 1 处**、且必须位于 `private fun resolveOffEdt` 体内（调用行号 > 声明行号）、文件内必须有 `executeOnPooledThread`；另断言 `SqlPreviewPanelExecution` 的 EXPLAIN 前热调用带 `cacheOnly = true`
   - 主分支当前形态：`resolveForDisplay`（同步纯函数）+ `fillMissingFragment` 里自带的 `executeOnPooledThread` → **不满足**上述形状 ⇒ 直接合流守卫必红
-- 状态：**已实施（master `49058391c` + `c55f48be6` + `f348d7d03` 三次合流），待 push（等用户点名）与 CI 全量门禁**
+- 状态：**已实施并合入 master（`49058391c` + `53dc6ca40` + `0b948e221` + 落账 `c41ee8a78`），已推双仓；CI 推送门禁 run 44681024478 全绿（8/8）**
 
 ## 一、三件事的定义与验收
 
@@ -84,8 +84,13 @@
 - A：把 `reparseDraftFromEditor` 改回同步直调 → `resolve` 调用点变 2 处、且首个调用行号 < `resolveOffEdt` 声明行 ⇒ 守卫形态判红；还原后回 1 处、定向 16/3/6 复绿。
 - B：把 `LoadFileAction` 改回 EDT 直接读盘 → `10 tests completed, 2 failed`（`读盘不在 EDT` 与「已替换」文案两条）；还原后 `6/0/0` + `4/0/0` 复绿。
 
-### 5.3 遗留
+### 5.3 推送与 CI（2026-11-20 13:26~13:36）
 
-- **全量门禁交 CI**（本地只做定向，按用户口径）；`push` 待用户点名。
+- 推送：`dev-support/push-all.ps1 -Branch master` —— Gitee `OK`、GitHub(direct) `OK`（令牌通路，日志为 `x-access-token:***@`，无 GUI 凭据弹窗）；远端 `origin/master` = `c41ee8a781dd3ddaa180beb4f5b41f55b2b0e133`（20 笔 fast-forward）。
+- **CI 推送门禁 run 44681024478「推送测试 · master @ c41ee8a78」→ conclusion `success`（8/8）**：`test (1)~(5)` 五片 + `fast (1)`/`fast (2)` + `nightly-nudge` 全 success，起始 13:26 完成 13:36（约 9.5 分钟），一次通过、无 rerun。
+- 附注：本轮日志里没有 `MPV-TEST-COUNT` 汇总行——该标记目前只存在于 **未合流的 `t-rollback-preexec` 分支**的 `buildSrc/mpv-testing.gradle.kts`，master 侧尚无，故无法从 CI 日志读逐片条数（本地逐类读数见 §5.2）。
+
+### 5.4 遗留
+
 - 券01 的沙盒 GUI 验收（A1/A2/A3）是在**弹窗链**上做的，合流后弹窗链形态未变（同一 `resolveOffEdt`），故沿用；B 新增的「工作台载入文件读盘后台化」属线程模型改动，无用户可见差异，GUI 面按需复核（可选）。
-- 两条 worktree 车道（`wt-perf-align` / `wt-loadfile-bg`）已合入 master，其分支保留、工作树待清理（合入后删除可回收约 2.6GB，`F:` 余量偏低）。
+- 两条 worktree 车道（`wt-perf-align` / `wt-loadfile-bg`）已删除，分支 `t-perf-align` / `t-loadfile-bg` 保留（内容已随 master 推送）。
