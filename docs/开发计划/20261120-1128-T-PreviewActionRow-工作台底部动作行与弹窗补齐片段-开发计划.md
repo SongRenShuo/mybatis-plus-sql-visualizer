@@ -191,6 +191,9 @@
 - **D-7**：`SqlPreviewService.showResult(..., sourceText)` → `SqlPreviewDialog(sourceText)`；弹窗本地
   `fragmentOverrides` + `lastSourceText`（贴入路径），`fillMissingFragment` 先 `stopPasteReparse()` 再用原文
   重解析并 `panel.showResult`（不重开弹窗）。工作台 `openDialogWith` 传 `sourceText = inputEditor.text`。
+  - **补齐重解析走池线程**（补记，同日）：补进来的是整段 mapper，DOM 解析在 100k 上限下最坏数百毫秒，
+    点一下卡 EDT 不可接受——按工作台 `resolveFromInput` 同形做「池线程解析 + 代次守卫 + `invokeLater(nonModal)`」，
+    `fillGeneration` 只应用最后一次请求、`isDisposed` 后不回填。用例改为泵 EDT 等落定（`SqlPreviewDialogTest`）。
 - **D-8**：新增 `standalone.action.copySql(.description)` / `standalone.status.copy.noPreview` /
   `panel.missingFragment.label`；删 `standalone.missingFragment.label`（提示行改由面板渲染），中英同步。
 

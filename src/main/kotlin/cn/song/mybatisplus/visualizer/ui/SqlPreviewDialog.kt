@@ -92,6 +92,9 @@ class SqlPreviewDialog(
      */
     private var lastSourceText: String? = null
 
+    /** 补齐重解析的代次守卫（只应用最后一次请求；弹窗 dispose 后不再回填）。 */
+    private var fillGeneration = 0L
+
     init {
         title = MpSqlVisualizerBundle.message("dialog.preview.title")
         panel.setSourceLocation(sourceLocation)
@@ -223,16 +226,27 @@ class SqlPreviewDialog(
      *
      * 不重开弹窗：用户是在结果区看到 TODO 占位后点进来补的，补完应该当场看到展开后的 SQL。
      * 先 [stopPasteReparse]：待命计时器若还在跑，会拿旧草稿再覆盖一次刚补好的结果。
+     *
+     * **解析放池线程**（与工作台 `resolveFromInput` 同形）：补进来的是整段 mapper，DOM 解析在
+     * 100k 上限下最坏数百毫秒，点一下卡一下 EDT 不能接受；代次守卫只应用最后一次请求。
      */
     private fun fillMissingFragment(refid: String) {
         val source = sourceText ?: lastSourceText ?: return
         val content = missingFragmentPrompt(refid)
         if (!MissingFragmentFillFlow.record(refid, content, fragmentOverrides)) return
         stopPasteReparse()
-        val fresh = resolveForDisplay(
-            MissingSqlFragmentSupport.withFragments(source, fragmentOverrides),
-        ) ?: return
-        panel.showResult(fresh)
+        val text = MissingSqlFragmentSupport.withFragments(source, fragmentOverrides)
+        val generation = ++fillGeneration
+        com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
+            val fresh = resolveForDisplay(text)
+            com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater(
+                {
+                    if (isDisposed || generation != fillGeneration || fresh == null) return@invokeLater
+                    panel.showResult(fresh)
+                },
+                com.intellij.openapi.application.ModalityState.nonModal(),
+            )
+        }
     }
 
     /** 测试缝：触发一次补齐（等价点击面板提示行；内容由 [missingFragmentPrompt] 提供）。 */

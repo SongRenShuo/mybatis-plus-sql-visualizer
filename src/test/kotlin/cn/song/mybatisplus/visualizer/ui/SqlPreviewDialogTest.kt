@@ -348,7 +348,16 @@ class SqlPreviewDialogTest : BasePlatformTestCase() {
             dialog.missingFragmentPrompt = { "ID, CHANNEL_NAME" }
             dialog.fillMissingFragmentForTest("Base_Column_List")
 
-            val current = panel.current
+            // 重解析在池线程（DOM 解析不上 EDT），代次守卫回 EDT——泵队列等它落定
+            val deadline = System.currentTimeMillis() + 10_000
+            var current = panel.current
+            while (System.currentTimeMillis() < deadline) {
+                com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+                current = panel.current
+                if (current != null && !current.sql.contains("TODO: missing")) break
+                Thread.sleep(10)
+            }
+
             assertNotNull("补齐后应有新的预览载荷", current)
             assertTrue(
                 "补上的片段应展开进 SQL，实际：${current!!.sql}",
