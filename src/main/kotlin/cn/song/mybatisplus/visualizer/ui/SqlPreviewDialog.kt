@@ -94,9 +94,6 @@ class SqlPreviewDialog(
      */
     private var lastSourceText: String? = null
 
-    /** 解析代次守卫：只应用最后一次请求（贴入停手与补齐重解析竞态时保最后一次；dispose 后不回填）。 */
-    private var resolveGeneration = 0
-
     init {
         title = MpSqlVisualizerBundle.message("dialog.preview.title")
         panel.setSourceLocation(sourceLocation)
@@ -201,64 +198,39 @@ class SqlPreviewDialog(
      *
      * 识别走与工作台页签**同一条链**（[StandaloneSqlSourceResolver]：风味判定 + 双链择优），
      * 失败文案同源（[StandaloneWarningText]）。命中后立即交还手动，不再自动解析。
+     *
+     * T-PerfSweep33 券01：识别挪池线程（见 [resolveOffEdt]）；本入口只在 EDT 读草稿文本。
      */
     internal fun reparseDraftFromEditor() {
         if (!pasteReparseArmed) return
         val text = draftTextProvider()?.takeIf { it.isNotBlank() } ?: return
-        // 记一手原文：识别成功后草稿文本变成渲染结果，补齐片段还得靠这段输入
+        // T-PreviewActionRow D-7：记一手原文——识别成功后草稿文本变成渲染结果，
+        // 缺片段补齐要的还是「贴进来那段」，只能在这里留底
         lastSourceText = text
-        resolveOffEdt({ text }) { panel.showResult(it) }
-        stopPasteReparse()
+        resolveOffEdt({ text }, ::applyResolvedAsFresh)
     }
 
-    /**
-     * 唯一的解析出口：池线程解析原文，回 EDT 按代次守卫应用（失败文案同源 [StandaloneWarningText]）。
-     *
-     * 识别（[StandaloneSqlSourceResolver]）是纯文本链（零 PSI/索引），最坏多次 DOM 解析、
-     * 输入上限 100k 字符时 EDT 直跑可停数百毫秒——故统一挪池线程。只应用最后一次请求
-     * （[resolveGeneration]），弹窗已释放则丢弃迟到产物。
-     */
-    private fun resolveOffEdt(textSource: () -> String?, applyOnEdt: (PreviewResult) -> Unit) {
-        val generation = ++resolveGeneration
-        val app = ApplicationManager.getApplication()
-        app.executeOnPooledThread {
-            val fresh = runCatching {
-                textSource()?.let { StandaloneSqlSourceResolver.resolve(it) }
-            }.getOrNull()?.let { resolved ->
-                resolved.failure?.let { failure ->
-                    resolved.result.copy(
-                        warning = StandaloneWarningText.failure(failure),
-                        informationalWarning = false,
-                    )
-                } ?: resolved.result
-            }
-            app.invokeLater(
-                {
-                    if (isDisposed || generation != resolveGeneration) return@invokeLater
-                    fresh?.let(applyOnEdt)
-                },
-                ModalityState.nonModal(),
-            )
-        }
-    }
+    /** 测试访问器：是否仍待命。 */
+    internal fun pasteReparseArmedForTest(): Boolean = pasteReparseArmed
 
     /**
      * T-PreviewActionRow D-6/D-7：补齐一个缺失片段 → 用原文重解析 → 就地回填面板。
      *
      * 不重开弹窗：用户是在结果区看到 TODO 占位后点进来补的，补完应该当场看到展开后的 SQL。
-     * 先 [stopPasteReparse]：待命计时器若还在跑，会拿旧草稿再覆盖一次刚补好的结果。
+     * 先停待命：计时器若还在跑，会拿旧草稿再覆盖一次刚补好的结果。
      *
-     * **解析放池线程**（与工作台 `resolveFromInput` 同形）：补进来的是整段 mapper，DOM 解析在
-     * 100k 上限下最坏数百毫秒，点一下卡一下 EDT 不能接受；代次守卫只应用最后一次请求。
+     * 解析同样走 [resolveOffEdt]（T-PerfSweep33 券01 的唯一出口）：补进来的是整段 mapper，
+     * DOM 解析在 100k 上限下最坏数百毫秒，不能停在 EDT。
      */
     private fun fillMissingFragment(refid: String) {
         val source = sourceText ?: lastSourceText ?: return
         val content = missingFragmentPrompt(refid)
         if (!MissingFragmentFillFlow.record(refid, content, fragmentOverrides)) return
         stopPasteReparse()
-        resolveOffEdt({ MissingSqlFragmentSupport.withFragments(source, fragmentOverrides) }) {
-            panel.showResult(it)
-        }
+        resolveOffEdt(
+            textSource = { MissingSqlFragmentSupport.withFragments(source, fragmentOverrides) },
+            applyOnEdt = ::applyResolvedAsFresh,
+        )
     }
 
     /** 测试缝：触发一次补齐（等价点击面板提示行；内容由 [missingFragmentPrompt] 提供）。 */
@@ -269,8 +241,66 @@ class SqlPreviewDialog(
     /** 测试缝：提示行组件（派发真实点击覆盖监听接线）。 */
     internal fun missingFragmentLabelForTest(): javax.swing.JLabel? = panel.missingFragmentLabelForTest()
 
-    /** 测试访问器：是否仍待命。 */
-    internal fun pasteReparseArmedForTest(): Boolean = pasteReparseArmed
+    // ------------------------------------------------------------------
+    // T-PerfSweep33 券01：识别链挪池线程（性能分析第十期 §4.1）
+    // ------------------------------------------------------------------
+
+    /** 解析代次守卫：只应用最后一次请求的产物（贴入停手与手动操作竞态时保最后一次）。 */
+    private var resolveGeneration = 0
+
+    /**
+     * 测试缝：替换「池线程计算 + invokeLater 回 EDT」的派发（默认 null = 生产形态）。
+     * 契约：计算完回调 [onDone] 恰一次（空文本/识别失败传 null，不回调则无回填）。用例注入
+     * 同步形态即可确定性驱动同一条链——先例＝[cn.song.mybatisplus.visualizer.util.EdtDispatch.invokeLaterOverride]。
+     */
+    internal var resolveOffEdtDispatcher: (
+        (textSource: () -> String?, onDone: (StandaloneSqlSourceResolver.Resolved?) -> Unit) -> Unit
+    )? = null
+
+    /**
+     * 识别链后台化。`StandaloneSqlSourceResolver.resolve` 是纯文本链（零 PSI/索引；工作台页签同链
+     * 早已池线程化——SqlStandalonePreviewPanel），但最坏 8 次 DOM 解析、输入上限 100k 字符，
+     * EDT 直跑可停数百毫秒。代次守卫只应用最后一次请求；弹窗已释放时丢弃（迟到产物面）。
+     */
+    private fun resolveOffEdt(textSource: () -> String?, applyOnEdt: (StandaloneSqlSourceResolver.Resolved) -> Unit) {
+        val generation = ++resolveGeneration
+        val seam = resolveOffEdtDispatcher
+        if (seam != null) {
+            seam(textSource) { deliverResolved(generation, it, applyOnEdt) }
+            return
+        }
+        val app = ApplicationManager.getApplication()
+        app.executeOnPooledThread {
+            val text = runCatching(textSource).getOrNull()
+            val resolved = text?.let { runCatching { StandaloneSqlSourceResolver.resolve(it) }.getOrNull() }
+            app.invokeLater({ deliverResolved(generation, resolved, applyOnEdt) }, ModalityState.nonModal())
+        }
+    }
+
+    /** 迟到产物闸：只应用最后一次请求；弹窗已释放时丢弃。 */
+    private fun deliverResolved(
+        generation: Int,
+        resolved: StandaloneSqlSourceResolver.Resolved?,
+        applyOnEdt: (StandaloneSqlSourceResolver.Resolved) -> Unit,
+    ) {
+        if (isDisposed || generation != resolveGeneration) return
+        resolved?.let(applyOnEdt)
+    }
+
+    /**
+     * 识别产物回填（失败文案同源 [StandaloneWarningText]）；命中后停轮询、交还手动——
+     * 不再自动解析，与用户后续编辑互不打架。
+     */
+    private fun applyResolvedAsFresh(resolved: StandaloneSqlSourceResolver.Resolved) {
+        val fresh = resolved.failure?.let { failure ->
+            resolved.result.copy(
+                warning = StandaloneWarningText.failure(failure),
+                informationalWarning = false,
+            )
+        } ?: resolved.result
+        stopPasteReparse()
+        panel.showResult(fresh)
+    }
 
     override fun dispose() {
         stopPasteReparse()

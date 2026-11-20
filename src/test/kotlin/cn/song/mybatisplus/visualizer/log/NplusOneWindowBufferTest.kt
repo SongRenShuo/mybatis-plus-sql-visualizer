@@ -20,6 +20,10 @@ import org.junit.Test
  * `if (dedupeEnabled && canDedupe(added))` 分支内**，上面两条新用例必红（去重关闭与
  * ShardingSphere 两条路径戳为空 → windowSuspectKeys 恒空集），而原有同线程用例仍绿
  * （它走去重开启路径）——探针精度可据此判读。
+ *
+ * **T-PerfSweep33 券02（2026-11-20）**：markWindowStampLocked 加双帽兜底（单键 64 / 键数 1024，
+ * 面板长期不开时防无界累积）。反向锚点＝**摘掉双帽**：[test同键戳超帽_只留最近段_窗内检测不丢]
+ * （戳数 100 > 64 必红）与 [test键数超帽_整体清空_新戳照常登记]（键数 1100 > 1024 必红）。
  */
 class NplusOneWindowBufferTest {
 
@@ -137,6 +141,40 @@ class NplusOneWindowBufferTest {
         assertTrue(
             "ShardingSphere 来源条目也应参与 N+1 判定（判定与去重能力无关）：$keys",
             keys.contains(entryAt(TEMPLATE, 1, 1_000L, "http-nio").structureKey),
+        )
+    }
+
+    // ======================== T-PerfSweep33 券02：双帽兜底 ========================
+
+    /** 单键戳超帽（64）：丢最旧保最近段——窗内检测能力不丢（阈值 5 ≪ 帽），且戳数被帽住。 */
+    @Test
+    fun `同键戳超帽_只留最近段_窗内检测不丢`() {
+        val b = SqlLogEntryBuffer(maxEntries = 200)
+        // 100 条同模板异字面量（dedupeKey 互异不走去重丢弃；structureKey 相同 → 单键 100 枚 > 帽 64）
+        for (i in 1..100) b.addEntry(entryAt(TEMPLATE, i, 1_000L + i, "http-nio"))
+        val shape = b.windowStampShapeForTest()
+        assertTrue("单键戳队列应被帽住（≤64，现 ${shape.second}）", shape.second <= 64)
+        val keys = b.windowSuspectKeys(nowMs = 2_000L, windowMs = 60_000L, threshold = 5)
+        assertTrue(
+            "帽内保留的是最近段——同线程窗内远超阈值仍应判嫌疑：$keys",
+            keys.contains(entryAt(TEMPLATE, 1, 1_000L, "http-nio").structureKey),
+        )
+    }
+
+    /** 键数超帽（1024）：整体清空一次（当窗精度损失可接受），清空后新戳照常登记参与判定。 */
+    @Test
+    fun `键数超帽_整体清空_新戳照常登记`() {
+        val b = SqlLogEntryBuffer(maxEntries = 2000)
+        // 1100 个不同模板（structureKey 各异 → 1100 键 > 键帽 1024）
+        for (i in 1..1100) b.addEntry(entryAt("SELECT * FROM t_$i WHERE id = ?", 1, 1_000L + i, "http-nio"))
+        val shape = b.windowStampShapeForTest()
+        assertTrue("键数应被帽住（≤1024，现 ${shape.first}）", shape.first <= 1024)
+        // 清空后的新戳照常登记：窗内 5 条同模板仍判嫌疑
+        for (i in 1..5) b.addEntry(entryAt(TEMPLATE, i, 1_100_000L + i, "http-nio"))
+        val keys = b.windowSuspectKeys(nowMs = 1_101_000L, windowMs = 60_000L, threshold = 5)
+        assertTrue(
+            "键数帽清空后新戳应照常参与嫌疑判定：$keys",
+            keys.contains(entryAt(TEMPLATE, 1, 1_100_000L, "http-nio").structureKey),
         )
     }
 }

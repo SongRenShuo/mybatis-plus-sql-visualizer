@@ -88,6 +88,9 @@ class SqlLogEntryBuffer(
      *    structureKey 直接取条目自己的 `by lazy`（同实例一次，随条目淘汰回收）；
      *  - **逐条出队不做摘戳**：头部淘汰/融合换实例留下的陈旧戳靠窗龄自愈（窗 60s 上限），
      *    「刚被淘汰的条目让键多嫌疑 ≤ 一个窗」为如实登记的近似；[clear] 全量复位；
+     *  - **双帽兜底（T-PerfSweep33 券02）**：单键戳队列 [WINDOW_STAMP_MAX_PER_KEY] 上限（丢最旧
+     *    保最近段——窗口判定本就只看窗内，只降不升）+ 键数 [WINDOW_STAMP_MAX_KEYS] 上限（超限
+     *    整体清空、下一窗重建）。面板长期不打开时不再随捕获速率无界累积（性能分析第十期 §4.2）；
      *  - 读取见 [windowSuspectKeys]（修剪 + 同线程分桶 + 阈值判定，null 线程单桶参与——
      *    控制台回落通道条目无线程名，按会话级同窗计数回落口径）。
      */
@@ -888,8 +891,15 @@ class SqlLogEntryBuffer(
      * 代价仅是同 dedupeKey 的多实例各算一次（收益本来也只有几 µs/条）。
      */
     private fun markWindowStampLocked(entry: LogSqlEntry) {
-        windowStamps.getOrPut(entry.structureKey) { ArrayDeque() }
-            .addLast(WindowStamp(entry.timestamp, entry.threadName))
+        // T-PerfSweep33 券02：双帽兜底——戳只在「读取时修剪 / clear」清、淘汰不摘戳（窗龄自愈近似），
+        // 面板长期不打开时捕获速率 × 无读时段曾单调累积（性能分析第十期 §4.2）。键数超帽整体清空
+        // （当窗嫌疑判定一次精度损失，下一窗重建）；单键超帽丢最旧保最近段——窗口判定本就只看窗内，
+        // 只降不升，保守方向。
+        if (windowStamps.size >= WINDOW_STAMP_MAX_KEYS) windowStamps.clear()
+        windowStamps.getOrPut(entry.structureKey) { ArrayDeque() }.apply {
+            while (size >= WINDOW_STAMP_MAX_PER_KEY) removeFirst()
+            addLast(WindowStamp(entry.timestamp, entry.threadName))
+        }
     }
 
     /**
@@ -927,6 +937,11 @@ class SqlLogEntryBuffer(
             if (byThread.values.any { it >= threshold }) out.add(e.key)
         }
         out
+    }
+
+    /** 测试访问器（T-PerfSweep33 券02 帽兜底）：（键数, 戳总数）。 */
+    internal fun windowStampShapeForTest(): Pair<Int, Int> = synchronized(entries) {
+        windowStamps.size to windowStamps.values.sumOf { it.size }
     }
 
     /**
@@ -1237,6 +1252,12 @@ class SqlLogEntryBuffer(
 
         /** T-PerfSweep F3：去重丢弃计数键上限——超限淘汰最旧（见 [dedupeCounts] KDoc）。 */
         private const val MAX_DEDUPE_COUNT_KEYS = 4096
+
+        /** T-PerfSweep33 券02：窗口嫌疑戳单键队列上限（丢最旧保最近段；见 [windowStamps] KDoc）。 */
+        private const val WINDOW_STAMP_MAX_PER_KEY = 64
+
+        /** T-PerfSweep33 券02：窗口嫌疑戳键数上限——超限整体清空、下一窗重建（见 [windowStamps] KDoc）。 */
+        private const val WINDOW_STAMP_MAX_KEYS = 1024
 
         /** O-147 W0：归因诊断限频窗（10s）。 */
         private const val ATTRIB_DIAG_INTERVAL_NANOS = 10_000_000_000L

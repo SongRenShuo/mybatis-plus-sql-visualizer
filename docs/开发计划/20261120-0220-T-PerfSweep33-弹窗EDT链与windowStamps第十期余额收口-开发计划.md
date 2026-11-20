@@ -71,4 +71,22 @@
 
 ## 六、实施记录
 
-> 立项版（2026-11-20，T-PerfSweep33 未开工）。来源报告第十期 §四（新增面证据）、§五（hiddenbug 对账）、§六.8（EXPLAIN 前热实参实证）。
+> 2026-11-20 主控实施（分支 `t-perfsweep33`，工作树 `.worktrees/t-perfsweep33`，基线 master `ec39a7518`）。四笔提交 + 一笔回填。
+
+- **券03**（`ca1a38a3b`）：EXPLAIN 前热补 `cacheOnly = true`（SqlPreviewPanelExecution.kt）。
+- **券01**（`b64e71e43`）：`resolveOffEdt` 池线程计算 + 代次守卫 + `invokeLater(nonModal)` 回 EDT；文件读取随解析一并后台（`ReadAction.compute` 在 BGT 取读锁，**待验证前提 1 取保守解**：保留读动作包裹）；测试缝 `resolveOffEdtDispatcher` 照 `EdtDispatch.invokeLaterOverride` 惯例；新增代次守卫竞态用例。**实施超出计划两处（按死代码纪律顺手收口）**：①删除只写不读的死状态 `suppressPasteReparse`；②`reparseText` 在统一链后失去全部生产调用方，已删除，竞态测试改连发两次真实入口 `reparseDraftFromEditor`（更贴近真实贴入竞态）。
+- **券02**（`7b318a5d1`）：双帽兜底——**帽值较计划 §五.5 的 20_000 枚口径收紧**为「单键 64 + 键数 1024」（键帽 × 单键帽 = 65_536 枚 ≈ 5MB 最坏界；单键丢最旧保最近段，阈值 5 ≪ 64 检测能力不丢）；新增 `windowStampShapeForTest()` 访问器。
+- **守卫**（`54d1103f1`）：`SqlPreviewDialogOffEdtResolveHotPathTest` 钉两券形态（单点路由 + cacheOnly 实参），合成样本自证防空绿；命名与函数形态按元守卫口径免 GUARD_CLASSES 登记（同 IbatisTypeAliasResolverHotPathTest 先例）。
+- **定向读数**：首轮 8 类 102 例 0 红（DialogPasteReparseTest 4、SqlPreviewDialogTest 12、SizeTest 3、守卫 4、NplusOneWindowBufferTest 10、SqlLogEntryBufferTest 60、ExecFileWriteCountTest 7、ExecTempFileEdtGuardTest 2，XML tests= 逐一核对无 pattern 漏跑）；删码后增量重跑 2 类 8 例 0 红；终态全量定向（上表 8 类）在探针还原后复绿。
+- **反向验证**：三处生产码同时撤修复（入口直调 resolve / 双帽摘除 / cacheOnly 摘除）→ **恰 4 红**（守卫 2 红：「调用点应恰 1 处（现 2）」「EXPLAIN 前热调用缺 cacheOnly = true」；帽测试 2 红：「单键戳队列应被帽住（≤64，现 100）」「键数应被帽住（≤1024，现 1100）」）→ 还原复绿（gradle exit=0，4/0 + 10/0）。注意：探针轮 Bash 管道末命令退出码恒 0 的坑再次出现，判定以 XML 计数为准。
+- **CHANGELOG**：`[Unreleased]` 新增 Changed 三条（一句一条带哈希），随文档提交落账。
+- **沙盒 GUI 验收（2026-11-20 03:08~03:23，runIde 243 隔离沙盒 MPSV-PerfSweep33-UI，非提权合成输入，IDE 全屏+TOPMOST）**——三场景全过、零缺陷：
+  - **A1 空弹窗贴入 70KB 风味歧义片段**（MyBatis `<if>`×500 + iBatis `<isNotNull>`×500 混排，双链最坏形态）：自动识别完成——iBatis 链出 isNotNull 条件行 + SQL 渲染 + 混排降级警告（预期形态）；**阳性对照**＝解析待命窗内点击「复制 SQL」→ toast「SQL 已复制到剪贴板」出现（EDT 未卡）；idea.log 探针窗口期 **0 freeze/hang 记录、0 ERROR/SEVERE**（证据帧 img_03~05）。
+  - **A2 贴入后立即编辑不被冲掉**：`SELECT 1 FROM DUAL` 贴入后 250ms 内追加 `X`，识别等停手触发且**消耗最终文本**——终帧编辑器第 3 行 `FROM DUALX`（不是旧文本 DUAL，证明没在中途用旧结果覆盖编辑）（img_12~14）。顺带实证「命中一次交还手动」：首轮命中后再编辑，面板纹丝不动（img_08）。
+  - **A3 从文件加载 70KB XML**：文件选择器粘路径 → 磁盘读取+识别全链后台完成，T_PERF_PROBE 查询渲染 + 条件行（img_20~23）。
+  - **A4（正常弹窗不进待命）**：定向测试收口（DialogPasteReparseTest.test正常开窗不进入待命，12/12 绿）+ 静态面（autoParseOnPaste 只有独立空/原文态开窗一路传 true），GUI 面不重复占镜头。
+  - **A5（券03）**：测试收口（ExecFileWriteCountTest 7/0 + 守卫钉实参）。
+  - 场景脚本 `record/probe_perf33_dialog{,2,3}.py`（一次性探针，按惯例留 record/ 不入库）；证据帧 `build/MPSV-PerfSweep33-UI-shots/`（build 生命周期）。
+- **CI 门禁第一轮（run 44592868282 attempt 1）**：test(4) 分片 1 红＝`SqlStandalonePreviewPanelDialogTest` 未识别文本用例（:116 currentWarning 时序），与本分支改动面（弹窗贴入链/嫌疑戳帽/EXPLAIN 前热）**无机制交集**（该链同步构造弹窗、warning 在 init 落定，diff 未触碰）；同类同分片在 beta.2 发行轮即有「弹窗抖动」瞬态红先例（LESSONS L90）。已按 L90 口径 rerun-failed（attempt 2）做同 SHA 对照——**attempt 2 全绿（test(4) success、gate success，零代码变更）**，L90 瞬态红定性坐实：非本分支回归。门禁终态＝run 44592868282 attempt 2 success（build + test 1~5/fast + verifyplugin + verify×3 + marketplace×3 全绿）。
+- **not run 声明**：全量门禁未跑（交 CI 收口）；k2j 端口分支同步未做（该分支按发行 tag 冻结节奏另批同步）。
+

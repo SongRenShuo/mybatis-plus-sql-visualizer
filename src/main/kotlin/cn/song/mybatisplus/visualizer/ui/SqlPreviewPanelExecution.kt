@@ -1674,6 +1674,9 @@ internal fun SqlPreviewPanel.submitExplainDirectConsole(
                 explainSqlForPrewarm,
                 requestForPrewarm.renderedDialectName,
                 com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java),
+                // T-PerfSweep33 券03：与预览主链预热对齐——cache-only 判等（PerfSweep31 券03a）
+                // 在 EXPLAIN 低频路径同样生效，同内容不再绕过零写盘形态
+                cacheOnly = true,
             )
         }.onFailure { e ->
             com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
