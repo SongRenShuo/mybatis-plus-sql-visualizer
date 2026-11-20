@@ -1,0 +1,13 @@
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/xml/ibatis/IbatisXmlRecognizer.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/xml/ibatis/IbatisXmlRecognizer.kt
+@@ -127,7 +127,9 @@ object IbatisXmlRecognizer {
+         if (rootTagName?.trim()?.lowercase(Locale.ROOT) in IBATIS_ROOT_TAGS) {
+             signals += Signal.ROOT_TAG
+         }
+-        if (doctypePublicId?.trim() in IBATIS_PUBLIC_IDS || doctypeSystemId?.trim() in IBATIS_SYSTEM_IDS) {
++        // REVERSE-PROBE（T-Ibatis2Support 券 A 识别器）：DOCTYPE 信号禁用——反证锚 = 三选二的
++        // 成对组合用例、四条 DTD 取值用例、Apache publicId 反例，以及 PSI 取证用例。
++        if (false && (doctypePublicId?.trim() in IBATIS_PUBLIC_IDS || doctypeSystemId?.trim() in IBATIS_SYSTEM_IDS)) {
+             signals += Signal.DOCTYPE
+         }
+         if (hasIbatisOnClasspath) {

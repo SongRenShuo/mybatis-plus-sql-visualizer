@@ -1,0 +1,24 @@
+diff --git a/src/main/kotlin/cn/song/mybatisplus/visualizer/xml/ibatis/SqlMapSqlRenderer.kt b/src/main/kotlin/cn/song/mybatisplus/visualizer/xml/ibatis/SqlMapSqlRenderer.kt
+index 2ceae3da..ddee467d 100644
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/xml/ibatis/SqlMapSqlRenderer.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/xml/ibatis/SqlMapSqlRenderer.kt
+@@ -202,15 +202,10 @@ class SqlMapSqlRenderer {
+                     else -> Unit
+                 }
+             } catch (e: Throwable) {
+-                unrendered.add(
+-                    IbatisUnrenderedNode(
+-                        tagName = (child as? IbatisTagNode)?.kind?.tagName,
+-                        topNodeIndex = index,
+-                        reason = classifyFailure(e),
+-                        property = (e as? IbatisIterateNotCollectionException)?.property,
+-                        message = e.message,
+-                    ),
+-                )
++                // REVERSE-PROBE（T-Ibatis2Gap 券 D）：降级结构化禁用——不记录未渲染节点
++                // （degraded 恒 false / unrenderedNodes 恒空，退回旧 getOrElse 只拼顶层文本节点的语义）。
++                // 反证锚 = SqlMapSqlRendererTest 券 D 断言（degraded / unrenderedNodes /
++                // reason=ITERATE_NOT_COLLECTION / property 透出）。
+                 throw e
+             }
+         }

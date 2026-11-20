@@ -1,0 +1,21 @@
+diff --git a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/IbatisXmlPreviewService.kt b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/IbatisXmlPreviewService.kt
+index e64e3cdf..41621e63 100644
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/IbatisXmlPreviewService.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/IbatisXmlPreviewService.kt
+@@ -148,13 +148,9 @@ object IbatisXmlPreviewService {
+      * 文本**（不是空结果），warning 换成失败档「重渲染失败：<原因>」，横幅以 ⚠ 呈现——禁止吞掉
+      * 后静默返回旧结果。`rerender` 闭包随 copy 保留，用户修正参数后可立即重试。
+      */
+-    internal fun rerenderFailedResult(baseline: PreviewResult, error: Throwable): PreviewResult = baseline.copy(
+-        warning = MpSqlVisualizerBundle.message(
+-            "ibatis.preview.rerenderFailed.warning",
+-            error.message ?: error.javaClass.simpleName,
+-        ),
+-        informationalWarning = false,
+-    )
++    internal fun rerenderFailedResult(baseline: PreviewResult, error: Throwable): PreviewResult =
++        // REVERSE-PROBE: 恢复旧的「吞掉异常、静默返回基线」形态（锚：修复三 失败可见用例必红）
++        baseline
+ 
+     // ------------------------------------------------------------------
+     // T-IbatisFix2 修复一：<selectKey> 子语句展示

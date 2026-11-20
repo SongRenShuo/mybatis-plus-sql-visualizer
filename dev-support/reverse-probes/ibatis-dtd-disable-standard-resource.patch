@@ -1,0 +1,17 @@
+diff --git a/src/main/resources/META-INF/plugin.xml b/src/main/resources/META-INF/plugin.xml
+index 918e1225..0f306899 100644
+--- a/src/main/resources/META-INF/plugin.xml
++++ b/src/main/resources/META-INF/plugin.xml
+@@ -582,7 +582,11 @@
+          资产 = ibatis-sqlmap-2.3.4.726.jar 内 com/ibatis/sqlmap/engine/builder/xml/ 的原始副本
+          （sha256 见 THIRD-PARTY-NOTICES.md 第 4 节；网站版 sql-map-config-2.dtd 是 sqlMap*，
+          jar 内是 sqlMap+，必须用后者）。 -->
+-    <extensions defaultExtensionNs="com.intellij">
++    <!-- REVERSE-PROBE（T-Ibatis2Support 券 E）：把下方的 standardResource 段挂到不存在的 EP
++         命名空间 com.intellij.reverseProbe，等价于「平台一条都没登记」——平台对解析不到的 EP
++         名静默忽略（见 config/PluginXmlExtensionPointResolutionTest 类头），声明文本原样在场，
++         只有「解析结果」这一条判据会变红。 -->
++    <extensions defaultExtensionNs="com.intellij.reverseProbe">
+         <standardResource url="http://ibatis.apache.org/dtd/sql-map-2.dtd"
+                           path="dtd/ibatis/sql-map-2.dtd"/>
+         <standardResource url="http://www.ibatis.com/dtd/sql-map-2.dtd"

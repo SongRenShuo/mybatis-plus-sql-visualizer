@@ -1,0 +1,16 @@
+diff --git a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlToJavaLineMarkerProvider.kt b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlToJavaLineMarkerProvider.kt
+index a312f772..f4acf3fd 100644
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlToJavaLineMarkerProvider.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlToJavaLineMarkerProvider.kt
+@@ -85,7 +85,10 @@ class IbatisXmlToJavaLineMarkerProvider : LineMarkerProvider {
+         val token = element as? XmlToken ?: return null
+         if (token.tokenType != XmlTokenType.XML_NAME) return null
+         val tag = token.parent as? XmlTag ?: return null
+-        if (tag.name !in IbatisXmlGutterLineMarkerProvider.STATEMENT_TAGS) return null
++        // REVERSE-PROBE（T-Ibatis2Gap 券 B）：语句标签锚定产出点禁用——机制 =「sqlMap 语句标签起始名
++        // token 出跳转箭头」；反证锚 = IbatisNavigationLineMarkerProvidersTest 的 XML→Java 正例
++        // （点击落 Java 调用字面量 / 一语句一锚 / 六种语句标签 / 无namespace锚定 / 预览共存 nav 认领）。
++        if (true || tag.name !in IbatisXmlGutterLineMarkerProvider.STATEMENT_TAGS) return null
+         if (XmlTagUtil.getStartTagNameElement(tag) !== token) return null
+         val file = tag.containingFile
+         if (!IbatisXmlStatementTargets.isSqlMapFile(file)) return null

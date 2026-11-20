@@ -1,0 +1,16 @@
+diff --git a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/nav/IbatisDaoStatementGotoDeclarationHandler.kt b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/nav/IbatisDaoStatementGotoDeclarationHandler.kt
+index 6a6b8ed7..b3b4ead0 100644
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/nav/IbatisDaoStatementGotoDeclarationHandler.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/nav/IbatisDaoStatementGotoDeclarationHandler.kt
+@@ -90,7 +90,10 @@ class IbatisDaoStatementGotoDeclarationHandler : GotoDeclarationHandler {
+         if (name !in STATEMENT_ENTRY_METHODS) return null
+         val first = call.argumentList?.expressions?.firstOrNull() as? PsiLiteralExpression ?: return null
+         val value = first.value as? String ?: return null
+-        return value.trim().takeIf { it.isNotEmpty() }
++        // REVERSE-PROBE（T-Ibatis2Support 券 F-2）：首参 statementId 产出点禁用——
++        // 机制 = 「入口方法首参 String 字面量 → statementId」；反证锚 =
++        // IbatisDaoStatementGotoDeclarationHandlerTest 的 ns.id / 裸 id / 字面量落点正例。
++        return value.trim().takeIf { false && it.isNotEmpty() }
+     }
+ 
+     private fun nearestCall(element: PsiElement): PsiMethodCallExpression? {

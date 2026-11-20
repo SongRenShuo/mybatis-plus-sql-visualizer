@@ -1,0 +1,17 @@
+diff --git a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisJavaToXmlLineMarkerProvider.kt b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisJavaToXmlLineMarkerProvider.kt
+index 42756ebb..d133942c 100644
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisJavaToXmlLineMarkerProvider.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisJavaToXmlLineMarkerProvider.kt
+@@ -79,7 +79,11 @@ class IbatisJavaToXmlLineMarkerProvider : LineMarkerProvider {
+         val call = ref.parent as? PsiMethodCallExpression ?: return null
+         if (call.methodExpression.referenceName !in IbatisJavaCallSites.STATEMENT_ENTRY_METHODS) return null
+         val first = call.argumentList?.expressions?.firstOrNull() as? PsiLiteralExpression ?: return null
+-        val statementId = (first.value as? String)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
++        // REVERSE-PROBE（T-Ibatis2Gap 券 B）：Java 调用行首参 statementId 产出点禁用——机制 =
++        // 「入口方法名 + 首参 String 字面量 + 目标存在 → 调用行箭头」；反证锚 =
++        // IbatisNavigationLineMarkerProvidersTest 的 Java→XML 正例（点击落 XML id 值 /
++        // 点号与裸 id / 互斥认领 / 总闸组开关恢复箭头）。
++        val statementId = (first.value as? String)?.trim()?.takeIf { false && it.isNotEmpty() } ?: return null
+         val project = element.project
+         if (DumbService.isDumb(project)) return null
+         val anchors = IbatisXmlStatementTargets.resolveStatementAnchors(project, statementId, ownerNamespace(element))

@@ -1,0 +1,18 @@
+diff --git a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/IbatisXmlPreviewService.kt b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/IbatisXmlPreviewService.kt
+index 49bc5dac..f869c806 100644
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/IbatisXmlPreviewService.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/IbatisXmlPreviewService.kt
+@@ -231,10 +231,10 @@ object IbatisXmlPreviewService {
+                 },
+             )
+         }
+-        // 主语句恒在最前，且**不加块注释**——首字符必须是语句关键字本身：执行链按首条语句判类型
+-        // （见 KDoc），且用户复制出去的第一段就该是可直接执行的主语句，不能被 `--` 注释行打头。
++        // REVERSE-PROBE: 恢复「pre 的 selectKey 在主语句之前」的旧顺序（锚：修复一_主语句恒在最前 必红）
++        selectKeyRenders.filter { !it.first.runAfterSql }.forEach { (sk, r) -> appendBlock(selectKeyComment(sk), r) }
+         appendBlock("", main)
+-        selectKeyRenders.forEach { (sk, r) -> appendBlock(selectKeyComment(sk), r) }
++        selectKeyRenders.filter { it.first.runAfterSql }.forEach { (sk, r) -> appendBlock(selectKeyComment(sk), r) }
+         return blocks.joinToString(separator = "\n\n")
+     }
+ 

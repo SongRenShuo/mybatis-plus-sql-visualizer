@@ -1,0 +1,14 @@
+diff --git a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/inject/SqlMapperHighlightingLexer.kt b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/inject/SqlMapperHighlightingLexer.kt
+index 482c347d..6a149a45 100644
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/inject/SqlMapperHighlightingLexer.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/inject/SqlMapperHighlightingLexer.kt
+@@ -280,7 +280,8 @@ class SqlMapperHighlightingLexer : LexerBase(), RestartableLexer {
+      */
+     private fun scanIbatisDelimiter(c: Char) {
+         // 转义字面量 `##` / `$$`：整体一个无色文本 token（消费两字符，防第二个定界符被当起始）
+-        if (tokenStart + 1 < endOffset && buffer[tokenStart + 1] == c) {
++        // REVERSE-PROBE ②: 摘掉转义分支（反证锚：SqlMapperIbatisDelimiterTest 字面量用例必红）
++        if (false && tokenStart + 1 < endOffset && buffer[tokenStart + 1] == c) {
+             tokenEnd = tokenStart + 2
+             tokenType = SqlMapperTT.IBATIS_ESCAPE
+             return

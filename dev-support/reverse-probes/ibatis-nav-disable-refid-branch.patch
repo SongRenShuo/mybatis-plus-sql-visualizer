@@ -1,0 +1,15 @@
+diff --git a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/ref/IbatisXmlIdReferenceContributor.kt b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/ref/IbatisXmlIdReferenceContributor.kt
+index 93e620ac..a58ea690 100644
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/ref/IbatisXmlIdReferenceContributor.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/ref/IbatisXmlIdReferenceContributor.kt
+@@ -63,7 +63,9 @@ object IbatisXmlAttributeReferenceProvider : PsiReferenceProvider() {
+         val attributeName = attr.name
+         val tagName = tag.name
+         val reference: PsiReference? = when {
+-            attributeName == "refid" && tagName == "include" ->
++            // REVERSE-PROBE（T-Ibatis2Support 券 F-1）：refid 解析分支禁用——反证锚 =
++            // IbatisXmlIdReferenceContributorTest 的 refid 同文件正例 / 命名空间回退 / 负例三组。
++            false && attributeName == "refid" && tagName == "include" ->
+                 IbatisXmlIdReference(value, "sql")
+             attributeName == "resultMap" ->
+                 IbatisXmlIdReference(value, "resultMap")

@@ -1,0 +1,14 @@
+diff --git a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/IbatisXmlPreviewService.kt b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/IbatisXmlPreviewService.kt
+index e64e3cdf..0113f63f 100644
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/IbatisXmlPreviewService.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/IbatisXmlPreviewService.kt
+@@ -206,7 +206,8 @@ object IbatisXmlPreviewService {
+         main: IbatisRenderResult,
+         selectKeyRenders: List<Pair<IbatisSelectKey, IbatisRenderResult>>,
+     ): String? {
+-        if (selectKeyRenders.isEmpty()) return null
++        // REVERSE-PROBE: 摘除 selectKey 多语句组装（锚：IbatisXmlPreviewServiceTest 的「修复一」块必红）
++        if (true || selectKeyRenders.isEmpty()) return null
+         val blocks = ArrayList<String>()
+         fun appendBlock(comment: String, result: IbatisRenderResult) {
+             val sql = result.sql.trim()

@@ -1,0 +1,35 @@
+diff --git a/src/main/kotlin/cn/song/mybatisplus/visualizer/xml/ibatis/SqlMapSqlRenderer.kt b/src/main/kotlin/cn/song/mybatisplus/visualizer/xml/ibatis/SqlMapSqlRenderer.kt
+index 2ceae3da..b3fece4a 100644
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/xml/ibatis/SqlMapSqlRenderer.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/xml/ibatis/SqlMapSqlRenderer.kt
+@@ -238,8 +238,10 @@ class SqlMapSqlRenderer {
+             // paramNames 只取**前 N 个**声明映射（N = string-aware 位点数），剩余映射不丢——
+             // 透出 unusedDeclaredParams 供 UI 提示「声明了但未消费」。位点数多于声明数时全部
+             // 声明都被消费（与保真对照 oracle 一致：oracle 返回全部声明映射）。
+-            val siteCount = countParameterSites(raw)
+-            declared.parameters.take(siteCount).forEach { parameter ->
++            // REVERSE-PROBE（T-Ibatis2Gap 券 C）：按位对齐禁用——全部声明映射塞进 mapped（退回旧口径），
++            // unusedDeclaredParams 恒空。反证锚 = SqlMapSqlRendererTest 券 C 断言
++            // （声明多于位点取前 N / 未消费透出 / 位点 string-aware 计数）。
++            declared.parameters.forEach { parameter ->
+                 mapped.add(
+                     IbatisParamMapping(
+                         propertyName = parameter.property,
+@@ -250,17 +252,6 @@ class SqlMapSqlRenderer {
+                     ),
+                 )
+             }
+-            declared.parameters.drop(siteCount).forEach { parameter ->
+-                unusedDeclared.add(
+-                    IbatisParamMapping(
+-                        propertyName = parameter.property,
+-                        jdbcTypeName = parameter.jdbcType,
+-                        nullValue = parameter.nullValue,
+-                        javaTypeName = parameter.javaType,
+-                        mode = parameter.mode,
+-                    ),
+-                )
+-            }
+             return raw.replace('\r', ' ').replace('\n', ' ')
+         }
+         val parsed = tokenParser.parseInlineParameterMap(

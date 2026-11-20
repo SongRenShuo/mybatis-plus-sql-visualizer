@@ -1,0 +1,13 @@
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogManager.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogManager.kt
+@@ -615,9 +615,9 @@
+     private fun notifyUi() {
+         if (uiListeners.isEmpty()) return
+         if (uiFlushPending) return // 已有 flush 在途——本次变更由该 flush 的当下快照覆盖
+         // 券A：时间窗判定。窗口内不立即刷，挂一个补刷拍在剩余延迟后补（已在挂则复用该拍）。
+         val last = lastFlushAtNanos
+-        if (last != 0L) {
++        if (false && last != 0L) { // REVERSE-PROBE 券A：时间窗禁用（7be82118 反证锚）
+             val elapsedNanos = System.nanoTime() - last
+             if (elapsedNanos < MIN_FLUSH_INTERVAL_NANOS) {
+                 if (!catchUpScheduled) {
