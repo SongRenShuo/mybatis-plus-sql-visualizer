@@ -65,6 +65,23 @@ class SqlStandalonePreviewPanelDialogTest : BasePlatformTestCase() {
         runCatching { dialog.doDispose() }
     }
 
+    /**
+     * L90：`awaitDialog()` 拿到弹窗 ≠ 面板的异步装配（编辑器 + 摘要行 + 警示横幅）已经跑完。
+     * 断言「最终会成立的状态」必须轮询到成立；瞬时直读会偶发读到空值（CI 上 961 例只红这 1 例，
+     * 同 src 另一轮全绿——本类 2026-11-20 本地复现同一形态）。
+     */
+    private fun awaitWarning(dialog: SqlPreviewDialog, timeoutMs: Long = 5_000): String {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        var last = ""
+        while (System.currentTimeMillis() < deadline) {
+            waitForEdt()
+            last = dialog.panelForTest()?.currentWarning.orEmpty()
+            if (last.isNotBlank()) return last
+            Thread.sleep(10)
+        }
+        return last
+    }
+
     /** 触发工具栏「在弹框中打开」的真实动作路径（缺陷就在这条路径上）。 */
     private fun clickOpenInDialog(p: SqlStandalonePreviewPanel) {
         val action = p.OpenInDialogAction()
@@ -112,7 +129,7 @@ class SqlStandalonePreviewPanelDialogTest : BasePlatformTestCase() {
         clickOpenInDialog(p)
         val dialog = awaitDialog()
         assertNotNull("未识别文本时也必须弹窗（按原文展示）", dialog)
-        val warning = dialog!!.panelForTest()?.currentWarning.orEmpty()
+        val warning = awaitWarning(dialog!!)
         assertTrue("未识别应是信息级说明而非渲染失败：$warning", warning.isNotBlank())
     }
 
@@ -132,7 +149,18 @@ class SqlStandalonePreviewPanelDialogTest : BasePlatformTestCase() {
         clickOpenInDialog(p)
         val dialog = awaitDialog()
         assertNotNull("iBatis 片段同样要能开弹窗", dialog)
-        val warning = dialog!!.panelForTest()?.currentWarning.orEmpty()
-        assertFalse("iBatis 片段不得再报 Unknown element：$warning", warning.contains("Unknown element"))
+        // 成功识别时 warning 本来就可能是空的（没有告警），故这里不能要求「非空」；改为在装配期内
+        // 持续观察——假错误一旦出现就能抓到（L90：瞬时直读会漏掉异步填充的告警）。
+        var sawUnknown = false
+        val deadline = System.currentTimeMillis() + 2_000
+        while (System.currentTimeMillis() < deadline) {
+            waitForEdt()
+            if (dialog!!.panelForTest()?.currentWarning.orEmpty().contains("Unknown element")) {
+                sawUnknown = true
+                break
+            }
+            Thread.sleep(10)
+        }
+        assertFalse("iBatis 片段不得再报 Unknown element", sawUnknown)
     }
 }

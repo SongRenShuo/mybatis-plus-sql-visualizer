@@ -22,7 +22,7 @@ import javax.swing.JComponent
  * 并记忆用户拉伸后的尺寸（[rememberLastWindowSize]）。
  */
 class SqlPreviewDialog(
-    private val project: Project?,
+    project: Project?,
     private val result: PreviewResult,
     private val sourceLocation: String? = null,
     sourceContext: cn.song.mybatisplus.visualizer.context.PreviewSourceContext? = null,
@@ -96,9 +96,6 @@ class SqlPreviewDialog(
 
     /** 文本连续未变化的轮询次数（达到 [PASTE_REPARSE_STABLE_TICKS] 即视为停手）。 */
     private var stableTicks = 0
-
-    /** 面板自身写文档期间抑制（[SqlPreviewPanel.showResult] 会重写编辑器全文）。 */
-    private var suppressPasteReparse = false
 
     /**
      * 草稿文本来源（测试缝：headless 下弹窗编辑器可能还没建出来，
@@ -174,56 +171,11 @@ class SqlPreviewDialog(
             )
         } ?: resolved.result
         stopPasteReparse()
-        suppressPasteReparse = true
-        try {
-            panel.showResult(fresh)
-        } finally {
-            suppressPasteReparse = false
-        }
+        panel.showResult(fresh)
     }
 
     /** 测试访问器：是否仍待命。 */
     internal fun pasteReparseArmedForTest(): Boolean = pasteReparseArmed
-
-    /**
-     * T-DialogPickFile：选一个 mapper XML 文件直接载入并识别。
-     *
-     * 与「粘贴」走同一条识别链（[StandaloneSqlSourceResolver]）——选文件只是换了个取文本的入口，
-     * 不存在第二条口径。载入后立即交还手动（不会再被自动重解析改写）。
-     */
-    private fun loadFileIntoPreview() {
-        val proj = project ?: return
-        val descriptor = com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
-            .createSingleFileDescriptor("xml")
-            .withTitle(MpSqlVisualizerBundle.message("dialog.preview.loadFile.title"))
-        val file = com.intellij.openapi.fileChooser.FileChooser.chooseFile(descriptor, proj, null) ?: return
-        val text = runCatching {
-            @Suppress("DEPRECATION") // 243 编译目标：ReadAction.compute(ThrowableComputable) 仅此重载
-            com.intellij.openapi.application.ReadAction.compute<String, Throwable> {
-                com.intellij.openapi.vfs.VfsUtilCore.loadText(file)
-            }
-        }.getOrNull()
-        if (text.isNullOrBlank()) return
-        reparseText(text)
-    }
-
-    /** 直给文本走一次识别并回填面板（选文件路径用；不依赖待命态）。 */
-    internal fun reparseText(text: String) {
-        val resolved = runCatching { StandaloneSqlSourceResolver.resolve(text) }.getOrNull() ?: return
-        val fresh = resolved.failure?.let { failure ->
-            resolved.result.copy(
-                warning = StandaloneWarningText.failure(failure),
-                informationalWarning = false,
-            )
-        } ?: resolved.result
-        stopPasteReparse()
-        suppressPasteReparse = true
-        try {
-            panel.showResult(fresh)
-        } finally {
-            suppressPasteReparse = false
-        }
-    }
 
     override fun dispose() {
         stopPasteReparse()
@@ -247,12 +199,6 @@ class SqlPreviewDialog(
         object : DialogWrapperAction(MpSqlVisualizerBundle.message("panel.executeSql")) {
             override fun doAction(actionEvent: java.awt.event.ActionEvent?) {
                 panel.executeSql()
-            }
-        },
-        // T-DialogPickFile：从工程里选一个 mapper XML 直接载入（比复制粘贴省事）
-        object : DialogWrapperAction(MpSqlVisualizerBundle.message("dialog.preview.loadFile")) {
-            override fun doAction(actionEvent: java.awt.event.ActionEvent?) {
-                loadFileIntoPreview()
             }
         },
         // 复制 SQL（F-08，提示由面板统一处理）

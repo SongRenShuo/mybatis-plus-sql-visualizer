@@ -74,11 +74,16 @@ class SqlPreviewDialogTest : BasePlatformTestCase() {
         // 之前就被静默丢掉，不抛错、不写日志。所以「构造没崩」≠「构造正确」，而只断言
         // 「数组里含某个按钮名」也抓不到「少了一个但目标名字还在」。
         // 元素个数 + 无 null 槽是唯一能看见那次静默过滤的读数。
+        //
+        // **这个数改过两次，都不是被谁偷偷改的**：
+        //  4 → 5：T-DialogPickFile 把「从文件加载…」加进通用预览弹窗；
+        //  5 → 4：T-LoadFilePlacement 判定它是**输入源**能力（弹窗是全插件 21 处入口共用的展示层），
+        //         挪到独立工作台的输入工具栏。弹窗只剩 执行 / 复制 / 复制并关闭 / 取消。
         val dialog = SqlPreviewDialog(project, previewResult())
         try {
             val captured = dialog.actionsAtConstructionForTest
             assertNotNull("构造期应已捕获动作数组", captured)
-            assertEquals("底部动作应为 执行/从文件加载/复制/复制并关闭/取消 五个", 5, captured!!.size)
+            assertEquals("底部动作应为 执行/复制/复制并关闭/取消 四个", 4, captured!!.size)
             assertTrue(
                 "构造期动作数组不得有空元素（字段声明序晚于 init 的典型症状）：" +
                     captured.joinToString { it.getValue(javax.swing.Action.NAME)?.toString() ?: "<null>" },
@@ -90,8 +95,22 @@ class SqlPreviewDialogTest : BasePlatformTestCase() {
         }
     }
 
-    fun testNonPrimaryButtonsKeepPlatformDefaultStyle() {
-        // UI-043 补强：只有「复制 SQL 并关闭」该是主行动样式。防「修过头」——把
+    fun testDialogHasNoLoadFromFileAction() {
+        // T-LoadFilePlacement A-1：「从文件加载…」已从通用弹窗移到独立工作台的输入工具栏——
+        // 弹窗是 21 处入口共用的展示层（gutter 图标 / 日志 / 历史 / 语句入口），在里面换输入
+        // 会静默改掉「这条 SQL 从哪来」。这里按旧文案两种语言字面量兜底断言，键已从 bundle 删除。
+        val legacyLabels = setOf("从文件加载…", "Load from File…")
+        val dialog = SqlPreviewDialog(project, previewResult())
+        try {
+            val names = dialog.actionsForTest().mapNotNull { it.getValue(javax.swing.Action.NAME)?.toString() }
+            assertTrue("弹窗底部不应再有「从文件加载」入口，实际=$names", names.none { it in legacyLabels })
+        } finally {
+            if (!dialog.isDisposed()) dialog.doDispose()
+            dialog.panelForTest()?.clear()
+        }
+    }
+
+    fun testNonPrimaryButtonsKeepPlatformDefaultStyle() {        // UI-043 补强：只有「复制 SQL 并关闭」该是主行动样式。防「修过头」——把
         // applyPrimaryButtonStyle 误用到全部动作，会让每个按钮都变成蓝底。
         val dialog = SqlPreviewDialog(project, previewResult())
         try {

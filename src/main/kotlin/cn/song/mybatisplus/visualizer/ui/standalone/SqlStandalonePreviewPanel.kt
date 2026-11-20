@@ -105,6 +105,23 @@ class SqlStandalonePreviewPanel(
     /** 代次守卫：晚到的后台解析结果触碰已过期/已清空的 UI（对齐 SqlToJavaPanel invalidateRequests）。 */
     private var resolveGeneration = 0L
 
+    /**
+     * 当前输入来自哪个文件（T-LoadFilePlacement D-2）：非 null 时状态行带「已从 X 加载」，
+     * 用户再编辑输入 / 清空 / 换文件即失效。
+     *
+     * 为什么记状态而不是只弹一次提示：解析是异步的，加载后状态行会立刻被识别结果覆盖——
+     * 不挂住来源的话，用户看不到「我现在看的是文件里的内容」。
+     */
+    private var loadedFileName: String? = null
+
+    /**
+     * 测试缝：替代真实文件选择框的取数通道（headless 下不能弹 `FileChooser`）。
+     *
+     * 生产路径为 null → 走 [MapperFileLoader.choose]；用例注入固定文件名与文本后驱动
+     * [LoadFileAction] 的真实动作路径。
+     */
+    internal var filePicker: (() -> MapperFileLoader.LoadedFile?)? = null
+
     private var disposed = false
 
     /** 解析预览动作实例（字段化：构造期就要注册组件级快捷键，不能每次建工具栏都新建一个）。 */
@@ -112,6 +129,21 @@ class SqlStandalonePreviewPanel(
 
     /** 执行 SQL 动作实例（字段化同 [resolveAction] 先例；enable 随内嵌面板存亡翻转）。 */
     private val executeAction = ExecuteAction()
+
+    /**
+     * 输入工具栏的动作序列（T-LoadFilePlacement：字段化——用例要能断言「从文件加载」真的挂在
+     * 工具栏上，而不只是类存在；构造期定型，与 [buildInputToolbar] 同一份来源）。
+     */
+    private val inputActions: List<AnAction> = listOf(
+        resolveAction,
+        executeAction,
+        FormatAction(),
+        ClearAction(),
+        // 读文件是**输入源**能力，只挂在有输入区的工作台上；通用预览弹窗
+        //（21 处入口共用、只展示已渲染 SQL）不再拥有它。
+        LoadFileAction(),
+        OpenInDialogAction(),
+    )
 
     init {
         Disposer.register(this, inputEditor)
@@ -150,6 +182,8 @@ class SqlStandalonePreviewPanel(
         inputEditor.editor.document.addDocumentListener(object : DocumentListener {
             override fun documentChanged(e: DocumentEvent) {
                 inputHintLabel.isVisible = inputEditor.text.isBlank()
+                // 输入一变，「来自某个文件」的溯源就不再成立（载入后本字段会立刻重新赋值）
+                loadedFileName = null
             }
         }, this)
     }
@@ -159,13 +193,7 @@ class SqlStandalonePreviewPanel(
     // ------------------------------------------------------------------
 
     private fun buildInputToolbar(): JPanel {
-        val group = DefaultActionGroup(
-            resolveAction,
-            executeAction,
-            FormatAction(),
-            ClearAction(),
-            OpenInDialogAction(),
-        )
+        val group = DefaultActionGroup(inputActions)
         val toolbar = ActionManager.getInstance()
             .createActionToolbar(TOOLBAR_ID, group, true)
             .apply { targetComponent = this@SqlStandalonePreviewPanel }
@@ -247,6 +275,52 @@ class SqlStandalonePreviewPanel(
     }
 
     /**
+     * 从文件加载（T-LoadFilePlacement D-2）：选一个 mapper XML → 替换输入区 → 直接解析预览。
+     *
+     * 为什么在工作台而不在弹窗：弹窗是「看结果」的通用展示层（18 个 gutter 图标、日志、历史
+     * 共 21 处入口），在里面换输入会静默改掉「这条 SQL 从哪来」的语义；工作台才有「取文本」这一层。
+     *
+     * **`internal`**：回归用例必须走真实动作路径（同 [OpenInDialogAction] 口径）。
+     */
+    internal inner class LoadFileAction : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = MpvsIcons.MapperXml
+            e.presentation.text = MpSqlVisualizerBundle.message("standalone.action.loadFile")
+            e.presentation.description = MpSqlVisualizerBundle.message("standalone.action.loadFile.description")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            val loaded = filePicker?.invoke()
+                ?: MapperFileLoader.choose(project, "standalone.action.loadFile.title")
+                ?: return
+            applyLoadedFile(loaded)
+        }
+    }
+
+    /**
+     * 把选中的文件内容换进输入区并解析（P-1/P-3 口径：替换不弹确认，但状态行写明来源；
+     * 超长文件**不写入**，避免把编辑器撑爆）。
+     */
+    private fun applyLoadedFile(loaded: MapperFileLoader.LoadedFile) {
+        if (loaded.text.length > StandaloneSqlSourceResolver.MAX_TEXT_LENGTH) {
+            setStatus(MpSqlVisualizerBundle.message("standalone.status.loadedFile.tooLong"))
+            return
+        }
+        val replacedExisting = inputEditor.text.isNotBlank()
+        // 程序性写入走 setSql（抑制补全 autopopup）；文档监听会先把 loadedFileName 清掉，故在其后赋值
+        inputEditor.setSql(loaded.text)
+        inputHintLabel.isVisible = false
+        loadedFileName = loaded.fileName
+        setStatus(
+            MpSqlVisualizerBundle.message(
+                if (replacedExisting) "standalone.status.loadedFile.replaced" else "standalone.status.loadedFile",
+                loaded.fileName,
+            ),
+        )
+        resolveFromInput()
+    }
+
+    /**
      * 在弹框中打开：同一解析链产出 → 既有 modeless 弹窗（与三条语句入口同构）。
      *
      * **`internal` 而非 `private`**：回归用例必须走这条真实动作路径——2026-11-18 缺陷就出在
@@ -320,7 +394,7 @@ class SqlStandalonePreviewPanel(
     ) {
         updateMissingFragmentHint(missingRefids)
         if (resolved == null) {
-            setStatus(MpSqlVisualizerBundle.message("standalone.status.unrecognized"))
+            setStatus(withOrigin(MpSqlVisualizerBundle.message("standalone.status.unrecognized")))
             if (openDialog) openDialogWith(rawTextResult(rawText), autoReparse = true)
             return
         }
@@ -334,8 +408,17 @@ class SqlStandalonePreviewPanel(
         } ?: resolved.result
         ensurePreviewPanel().showResult(result)
         previewHintLabel.isVisible = false
-        setStatus(statusTextOf(resolved))
+        setStatus(withOrigin(statusTextOf(resolved)))
         if (openDialog) openDialogWith(result)
+    }
+
+    /**
+     * 状态行挂上「输入来源」（T-LoadFilePlacement）：文件载入后识别结果会覆盖状态行，
+     * 不带上来源用户就分不清「这是文件里的内容还是我贴的」。
+     */
+    private fun withOrigin(text: String): String {
+        val name = loadedFileName ?: return text
+        return "$text ｜ ${MpSqlVisualizerBundle.message("standalone.status.loadedFile", name)}"
     }
 
     /** T-IncludePlaceholder A 券：更新「缺失片段」提示行（无缺失即隐藏）。 */
@@ -444,6 +527,7 @@ class SqlStandalonePreviewPanel(
     private fun clear() {
         resolveGeneration++
         fragmentOverrides.clear()
+        loadedFileName = null
         missingFragmentLabel.isVisible = false
         inputEditor.setSql("")
         previewPanel?.let {
@@ -478,6 +562,12 @@ class SqlStandalonePreviewPanel(
     internal fun setInputTextForTest(text: String) {
         inputEditor.setSql(text)
     }
+
+    /** 测试缝：输入区当前文本（T-LoadFilePlacement：断言「载入替换了输入」）。 */
+    internal fun inputTextForTest(): String = inputEditor.text
+
+    /** 测试缝：输入工具栏动作序列（简单类名）——钉住「从文件加载」真的挂在工具栏上。 */
+    internal fun inputToolbarActionNamesForTest(): List<String> = inputActions.map { it.javaClass.simpleName }
 
     /** 测试缝：内嵌预览面板当前生效的空态提示（证工作台专用文案真的接上了）。 */
     internal fun embeddedPreviewHintForTest(): String = ensurePreviewPanel().previewEmptyHintForTest()

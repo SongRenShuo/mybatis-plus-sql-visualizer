@@ -69,18 +69,8 @@ class MissingFragmentDialog(
 
     /** 选文件 → 抽出本 refid 的 `<sql>` 内容（找不到则整段带入）。 */
     private fun pickFromFile() {
-        val descriptor = com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
-            .createSingleFileDescriptor("xml")
-            .withTitle(MpSqlVisualizerBundle.message("standalone.missingFragment.fromFile.title"))
-        val file = com.intellij.openapi.fileChooser.FileChooser.chooseFile(descriptor, project, null) ?: return
-        val text = runCatching {
-            @Suppress("DEPRECATION") // 243 编译目标：ReadAction.compute(ThrowableComputable) 仅此重载
-            com.intellij.openapi.application.ReadAction.compute<String, Throwable> {
-                com.intellij.openapi.vfs.VfsUtilCore.loadText(file)
-            }
-        }.getOrNull()
-        if (text.isNullOrBlank()) return
-        area.text = MissingSqlFragmentSupport.extractFragment(text, refid) ?: text
+        val loaded = MapperFileLoader.choose(project, "standalone.missingFragment.fromFile.title") ?: return
+        area.text = MissingSqlFragmentSupport.extractFragment(loaded.text, refid) ?: loaded.text
     }
 
     /** 用户输入的内容（确定时读取；取消路径不读）。 */
