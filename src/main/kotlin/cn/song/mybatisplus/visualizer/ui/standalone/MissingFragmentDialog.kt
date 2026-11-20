@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.ui.standalone
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.ui.components.JBLabel
@@ -67,10 +69,25 @@ class MissingFragmentDialog(
         }
     }
 
-    /** 选文件 → 抽出本 refid 的 `<sql>` 内容（找不到则整段带入）。 */
+    /**
+     * 选文件 → 抽出本 refid 的 `<sql>` 内容（找不到则整段带入）。
+     *
+     * 线程（T-Perf33MergeAlign）：选文件在 EDT、读文本在后台、回填回 EDT——大文件在 EDT 读会卡弹框；
+     * `isDisposed` 守卫丢弃用户已关框后晚到的读取结果。
+     */
     private fun pickFromFile() {
-        val loaded = MapperFileLoader.choose(project, "standalone.missingFragment.fromFile.title") ?: return
-        area.text = MissingSqlFragmentSupport.extractFragment(loaded.text, refid) ?: loaded.text
+        val file = MapperFileLoader.chooseFile(project, "standalone.missingFragment.fromFile.title") ?: return
+        val app = ApplicationManager.getApplication()
+        app.executeOnPooledThread {
+            val text = MapperFileLoader.loadText(file) ?: return@executeOnPooledThread
+            app.invokeLater(
+                {
+                    if (isDisposed) return@invokeLater
+                    area.text = MissingSqlFragmentSupport.extractFragment(text, refid) ?: text
+                },
+                ModalityState.nonModal(),
+            )
+        }
     }
 
     /** 用户输入的内容（确定时读取；取消路径不读）。 */

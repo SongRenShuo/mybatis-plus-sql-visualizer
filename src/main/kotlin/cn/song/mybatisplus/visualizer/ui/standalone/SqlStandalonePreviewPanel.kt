@@ -30,6 +30,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Splitter
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.SystemInfo
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
@@ -116,12 +117,23 @@ class SqlStandalonePreviewPanel(
     private var loadedFileName: String? = null
 
     /**
-     * 测试缝：替代真实文件选择框的取数通道（headless 下不能弹 `FileChooser`）。
+     * 测试缝：替代真实文件选择框的「选文件」通道（headless 下不能弹 `FileChooser`）。
      *
-     * 生产路径为 null → 走 [MapperFileLoader.choose]；用例注入固定文件名与文本后驱动
-     * [LoadFileAction] 的真实动作路径。
+     * 生产路径为 null → 走 [MapperFileLoader.chooseFile]（EDT 选文件）；用例注入一个真实
+     * `VirtualFile` 后驱动 [LoadFileAction] 的完整动作路径——选文件与读文件由此分离：
+     * 本缝只决定「选了哪个文件」，读文本仍走 [loadTextInvoker]。
      */
-    internal var filePicker: (() -> MapperFileLoader.LoadedFile?)? = null
+    internal var fileChooserForTest: (() -> VirtualFile?)? = null
+
+    /**
+     * 测试缝：把「读文件文本」这一原语换成可观察的替身（校验读发生在后台线程 / 不该被读时抛错）。
+     *
+     * 生产默认 [MapperFileLoader.loadText]——读权限 IO，由 [LoadFileAction] 派到后台线程执行。
+     */
+    internal var loadTextInvoker: (VirtualFile) -> String? = { MapperFileLoader.loadText(it) }
+
+    /** 载入文件的代次守卫：晚到的后台读取结果不得触碰已清空/已释放/已被新一次加载取代的 UI。 */
+    private var loadFileGeneration = 0L
 
     private var disposed = false
 
@@ -373,6 +385,9 @@ class SqlStandalonePreviewPanel(
      * 为什么在工作台而不在弹窗：弹窗是「看结果」的通用展示层（18 个 gutter 图标、日志、历史
      * 共 21 处入口），在里面换输入会静默改掉「这条 SQL 从哪来」的语义；工作台才有「取文本」这一层。
      *
+     * 线程（T-Perf33MergeAlign）：选文件在 EDT、读文本在后台、回填回 EDT；读前先按 `file.length`
+     * 粗筛超大文件（UTF-8 4 字节/字符），避免整份读进内存。
+     *
      * **`internal`**：回归用例必须走真实动作路径（同 [OpenInDialogAction] 口径）。
      */
     internal inner class LoadFileAction : AnAction() {
@@ -383,10 +398,32 @@ class SqlStandalonePreviewPanel(
         }
 
         override fun actionPerformed(e: AnActionEvent) {
-            val loaded = filePicker?.invoke()
-                ?: MapperFileLoader.choose(project, "standalone.action.loadFile.title")
+            // 一、选文件（EDT）：FileChooser 是 UI 操作，测试缝可替换
+            val file = fileChooserForTest?.invoke()
+                ?: MapperFileLoader.chooseFile(project, "standalone.action.loadFile.title")
                 ?: return
-            applyLoadedFile(loaded)
+            // 二、读前粗筛（EDT，零成本）：UTF-8 单字符最多 4 字节，字节数 > 4×字符上限
+            //      ⇒ 字符数必超上限，直接拒绝——避免把极端大文件整份读进内存再被精确判据丢弃。
+            //      （精确判据仍是 applyLoadedFile 里的字符数检查，这里只是保守前置拦截。）
+            if (file.length > StandaloneSqlSourceResolver.MAX_TEXT_LENGTH * 4L) {
+                setStatus(MpSqlVisualizerBundle.message("standalone.status.loadedFile.tooLong"))
+                return
+            }
+            // 三、读文本（后台）：读权限 IO 不能压 EDT；代次守卫丢弃在途/过期的结果
+            val generation = ++loadFileGeneration
+            val app = ApplicationManager.getApplication()
+            app.executeOnPooledThread {
+                val text = loadTextInvoker(file)
+                app.invokeLater(
+                    {
+                        if (disposed || generation != loadFileGeneration || project.isDisposed) return@invokeLater
+                        text?.takeIf { it.isNotBlank() }?.let {
+                            applyLoadedFile(MapperFileLoader.LoadedFile(file.name, it))
+                        }
+                    },
+                    ModalityState.nonModal(),
+                )
+            }
         }
     }
 
@@ -620,6 +657,7 @@ class SqlStandalonePreviewPanel(
 
     private fun clear() {
         resolveGeneration++
+        loadFileGeneration++ // 丢弃在途的文件读取（清空后晚到的文本不得写回）
         fragmentOverrides.clear()
         loadedFileName = null
         inputEditor.setSql("")
@@ -692,6 +730,7 @@ class SqlStandalonePreviewPanel(
         if (disposed) return
         disposed = true
         resolveGeneration++
+        loadFileGeneration++ // 丢弃在途的文件读取（释放后晚到的文本不得写回）
         // 显式释放子件（对齐 SqlToJavaPanel.dispose 的既有口径；guard 幂等防双释放）
         inputEditor.dispose()
         previewPanel?.let { Disposer.dispose(it) }
