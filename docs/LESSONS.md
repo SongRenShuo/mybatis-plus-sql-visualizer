@@ -1079,6 +1079,20 @@ expected 10 was 12）与分片 2（`SqlLogPanelFocusTabTest` expected 4 was 6）
 
 **Seen 1× (2026-11-20)**
 
+### L92 解冲突「整份取 theirs」会把对方已死的入口一起带回来——合流后必须编译 + grep 已删入口
+
+**规则**：`git checkout --theirs -- <file>` 是**整文件**语义，不是「只取对方那批有效改动」。当 master 上已删除某个入口、
+而分支仍保留它时，取 theirs 会把这个死入口原样搬回来，连带它引用的已删除函数 / bundle 键一起复活——
+编译期或运行期才炸。判据：冲突解完**立刻编译**，再 `grep` 一遍「本分支已删除的函数名 / bundle 键」是否为 0。
+**证据**：T-Perf33MergeAlign（2026-11-20，`c55f48be6`）合 `t-perfsweep33` 时，为保住守卫所钉的 `resolveOffEdt` 形态而
+`--theirs` 取 `SqlPreviewDialog.kt`，结果把分支仍保留的 `loadFileIntoPreview` 与其底部「从文件加载」按钮一并带回，
+而该函数在 master 已随 T-LoadFilePlacement 删除、且引用已删除的 `dialog.preview.loadFile` 键 ⇒ 首次复跑直接
+`e: Unresolved reference 'loadFileIntoPreview'`（`SqlPreviewDialog.kt:332`）。处置＝再删一次该动作与函数并 amend 进 merge 提交。
+**正例**：解冲突时按「守卫/契约要求的最小差异」逐段挑，而不是整文件取边；取边后必编译、必 grep 已删符号。
+**反例**：合并冲突解完直接 `git add` + 提交，把不可编译的中间态留在历史里（bisect 会踩到）。
+
+**Seen 1× (2026-11-20)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |

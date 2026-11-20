@@ -6,7 +6,7 @@
   - `git merge-tree --write-tree master t-perfsweep33` → 冲突 2 处：`CHANGELOG.md`（append 撞车）、`src/main/kotlin/.../ui/SqlPreviewDialog.kt`（实质）
   - 分支守卫 `SqlPreviewDialogOffEdtResolveHotPathTest` 断言：`SqlPreviewDialog` 内 `StandaloneSqlSourceResolver.resolve(` **恰 1 处**、且必须位于 `private fun resolveOffEdt` 体内（调用行号 > 声明行号）、文件内必须有 `executeOnPooledThread`；另断言 `SqlPreviewPanelExecution` 的 EXPLAIN 前热调用带 `cacheOnly = true`
   - 主分支当前形态：`resolveForDisplay`（同步纯函数）+ `fillMissingFragment` 里自带的 `executeOnPooledThread` → **不满足**上述形状 ⇒ 直接合流守卫必红
-- 状态：**已立项，实施中**
+- 状态：**已实施（master `49058391c` + `c55f48be6` + `f348d7d03` 三次合流），待 push（等用户点名）与 CI 全量门禁**
 
 ## 一、三件事的定义与验收
 
@@ -50,4 +50,42 @@
 
 ## 五、实施记录
 
-（待回填）
+实施于 2026-11-20 13:0x~13:2x。三条车道提交与两次合流：
+
+| 项 | 提交 | 内容 |
+|---|---|---|
+| 车道 A（worktree `wt-perf-align`，分支 `t-perf-align`） | `516acc09d` | `SqlPreviewDialog` 解析收成唯一出口 `resolveOffEdt(textSource, applyOnEdt)`：池线程解析 + `resolveGeneration` 代次 + `invokeLater(nonModal)`；贴入识别与补齐回填共用；删除 `resolveForDisplay`/`fillGeneration`；`DialogPasteReparseTest` 两条用例改有界轮询（断言未放宽） |
+| 集成① | `49058391c`（merge） | A 合入 master |
+| 集成② | `c55f48be6`（merge，amend 过一次） | `t-perfsweep33` 合入：券01 `resolveOffEdt`/`resolveOffEdtDispatcher`/`deliverResolved`/`applyResolvedAsFresh`、券02 嫌疑戳双帽（单键 64 / 键数 1024）、券03 EXPLAIN 前热 `cacheOnly = true`、源码守卫 `SqlPreviewDialogOffEdtResolveHotPathTest`（**未改断言**） |
+| 车道 B（worktree `wt-loadfile-bg`，分支 `t-loadfile-bg`） | `f20a79205` | `MapperFileLoader.choose` 拆成 `chooseFile`（EDT）+ `loadText`（BGT）；`LoadFileAction` 与 `MissingFragmentDialog.pickFromFile` 三段化（选/读/回填），读前 `file.length > 4×上限` 粗筛，`loadFileGeneration` + `disposed` 守卫；测试缝 `fileChooserForTest` / `loadTextInvoker` |
+| 集成③ | `f348d7d03`（merge） | B 合入 master |
+
+### 5.1 冲突解决（2 处）
+
+- **`CHANGELOG.md`**：取并集（我方 2 Added + 1 Changed，分支 3 Changed），券01 那条按**实际形态**改写——弹窗已无「从文件载入」入口，那半边由 B 在工作台落地（`f20a79205`）。
+- **`SqlPreviewDialog.kt`**：以分支侧为基底（`--theirs`）保留守卫所钉的单点形态，再补回 master 侧 `sourceText` + 补齐链（`fragmentOverrides`/`missingFragmentPrompt`/`lastSourceText`/`fillMissingFragment` 两个测试缝）。
+  - **踩到的坑**：取 theirs 同时把分支仍保留的 `loadFileIntoPreview` 与其底部「从文件加载」按钮一起带了回来，而该函数在 master 已删、还引用了已删除的 `dialog.preview.loadFile` 键 ⇒ 合流后编译直接报 `Unresolved reference 'loadFileIntoPreview'`（`SqlPreviewDialog.kt:332`）。处理＝再删除一次该动作与函数，底部回到四项，amend 进同一个 merge 提交（不留不可编译的中间态）。已记 **LESSONS L92**。
+
+### 5.2 读数（合流后 master，13 类 130 例 0 红）
+
+| 类 | tests | 类 | tests |
+|---|---|---|---|
+| `SqlPreviewDialogOffEdtResolveHotPathTest`（守卫，含自证） | 4 | `SqlPreviewDialogTest` | 16 |
+| `SqlPreviewDialogSizeTest` | 3 | `DialogPasteReparseTest`（含分支竞态用例） | 4 |
+| `SqlLogEntryBufferTest`（券02） | 60 | `NplusOneWindowBufferTest`（券02） | 10 |
+| `ExecFileWriteCountTest`（券03） | 7 | `ExecTempFileEdtGuardTest` | 2 |
+| `SqlStandaloneLoadFileTest`（B，含新增 2 条） | 6 | `SqlStandaloneActionRowTest` | 4 |
+| `SqlStandalonePreviewPanelDialogTest` | 6 | `SqlStandaloneExecuteActionTest` | 3 |
+| `SqlPreviewPanelMissingFragmentHintTest` | 5 | — | — |
+
+条数按 `build/test-results/test/*.xml` 的 `tests=` 逐一核对，`failures=0 errors=0 skipped=0`。
+
+车道内反向验证（各自报告）：
+- A：把 `reparseDraftFromEditor` 改回同步直调 → `resolve` 调用点变 2 处、且首个调用行号 < `resolveOffEdt` 声明行 ⇒ 守卫形态判红；还原后回 1 处、定向 16/3/6 复绿。
+- B：把 `LoadFileAction` 改回 EDT 直接读盘 → `10 tests completed, 2 failed`（`读盘不在 EDT` 与「已替换」文案两条）；还原后 `6/0/0` + `4/0/0` 复绿。
+
+### 5.3 遗留
+
+- **全量门禁交 CI**（本地只做定向，按用户口径）；`push` 待用户点名。
+- 券01 的沙盒 GUI 验收（A1/A2/A3）是在**弹窗链**上做的，合流后弹窗链形态未变（同一 `resolveOffEdt`），故沿用；B 新增的「工作台载入文件读盘后台化」属线程模型改动，无用户可见差异，GUI 面按需复核（可选）。
+- 两条 worktree 车道（`wt-perf-align` / `wt-loadfile-bg`）已合入 master，其分支保留、工作树待清理（合入后删除可回收约 2.6GB，`F:` 余量偏低）。
