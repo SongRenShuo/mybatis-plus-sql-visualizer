@@ -158,7 +158,7 @@ B 组与用户截图的对照：报文句式（短式 `Unsupported major.minor v
 | 券 | 状态 | 提交 | 读数 |
 |---|---|---|---|
 | 复现与形态原型（真 JDK 1.6.0_119） | 已完成 2026-11-20 | —（仅计划与临时产物，零生产码） | §3.2 三组 + §3.3 三组 |
-| 券01 闸门 | 已完成 2026-11-20 | 本提交 | `PremainInjectionTest` 5/0、`TargetJvmCompatTest` 8/0、`AgentManagerPremainTest` 16/0；反向摘闸 → 「老 JVM 上不得协商端口」红，还原后绿 |
-| 券02 引导类 | 已完成 2026-11-20 | 本提交 | 产物 major 分布 `{49:103, 50:1, 52:49}`、manifest 双入口=AgentShim；`AgentShimClassGuardTest` 4/0 + agent premain/attach 16/0；反向摘降版本 → 「引导类必须是 major 50，实际 52」红，还原后绿 |
-| 券03 收口 | 已完成 2026-11-20 | 本提交 | 架构文档 02 / CHANGELOG / LESSONS L93 / 构建脚本注释 |
-| 真机验收 | 已完成 2026-11-20 | 本提交产物 | JDK 1.6.0_119：`skipped … does not support Java 8+ bytecode` + `[PROBE] … active marker=null`、**EXIT=0**（改前同命令 EXIT=1）；JDK 8：`active marker=port=1`（正常委托）；JDK 6 attach：`loadAgent returned normally` + 目标进程跑到 `finished normally` |
+| 券01 闸门 | 已完成 2026-11-20 | `79cafe2a6` | `PremainInjectionTest` 5/0、`TargetJvmCompatTest` 8/0、`AgentManagerPremainTest` 16/0；反向摘闸 → 「老 JVM 上不得协商端口」红，还原后绿 |
+| 券02 引导类 | 已完成 2026-11-20 | `79cafe2a6` | 产物 major 分布 `{49:103, 50:1, 52:49}`、manifest 双入口=AgentShim；`AgentShimClassGuardTest` 4/0 + agent premain/attach 16/0；反向摘降版本 → 「引导类必须是 major 50，实际 52」红，还原后绿 |
+| 券03 收口 | 已完成 2026-11-20 | `79cafe2a6` | 架构文档 02 / CHANGELOG / LESSONS L93 / 构建脚本注释 |
+| 真机验收 | 已完成 2026-11-20 | `79cafe2a6` 产物 | JDK 1.6.0_119：`skipped … does not support Java 8+ bytecode` + `[PROBE] … active marker=null`、**EXIT=0**（改前同命令 EXIT=1）；JDK 8：`active marker=port=1`（正常委托）；JDK 6 attach：`loadAgent returned normally` + 目标进程跑到 `finished normally` |
