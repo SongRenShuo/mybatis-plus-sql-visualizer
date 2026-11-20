@@ -721,6 +721,15 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "自证=守卫自证_未收敛调用点必红_收敛豁免与注释形态各归其位（合成源码三态）。",
             ),
             GuardEntry(
+                "convention/CiWorkflowCoverageGuardTest.kt",
+                listOf(DecisionFn("violationsIn", FnKind.VIOLATIONS)),
+                "T-SyncK2JMaster180 守卫（2026-11-20）：CI 关键测试腿接线契约——build-plugin gate 必须有独立" +
+                    " agenttest job 跑 :sql-visualizer-agent:test（且打包命令行不得串入该腿，防回退拖长关键路径）、" +
+                    "nightly 必须有 :sql-visualizer-agent:test 与 :testExternal、push-test 必须有 :testShard，" +
+                    "凡跑 agent 腿的命令行必须带 -PagentTestExclude（真库用例剔除口径一致）。" +
+                    "判定内核 violationsIn 返回违规说明集合。自证=缺腿与串行回退的合成样本必被抓出 + 完整样本放行两用例。",
+            ),
+            GuardEntry(
                 "update/HotUpdateSettingsGuardTest.kt",
                 emptyList(),
                 "T-HotUpdateSettingsGuard 守卫：热更新（动态装载）后设置页「确定」无反应的兜底判定——" +
