@@ -1059,10 +1059,12 @@ expected 10 was 12）与分片 2（`SqlLogPanelFocusTabTest` expected 4 was 6）
 **证据**：CI run 44567164326 首轮 `testShard4` 961 tests 1 failed（`AssertionFailedError` 于
 `SqlStandalonePreviewPanelDialogTest.kt:116`，warning 为空串）；`git diff 9dd35bb66 4596fa90b -- src/`
 为空（同代码在 run 44562342176 同分片全绿）→ 瞬态定性成立；`gh run rerun --failed` 后同 run 全绿。
+2026-11-20 本地复现同一形态（T-LoadFilePlacement 的 22 例定向首跑只红这一条，同 src 重跑全绿）；
+已按本规则把该用例改成轮询、`iBatis 片段不报 Unknown element` 改成装配期内持续观察（`0611f6ab2`）。
 **正例**：失败先做同 src 跨 run 对照（前一轮全绿 ⇒ 瞬态），再 rerun-failed-jobs，不改代码不前移 tag。
 **反例**：看到红就怀疑新改动引入回归，去动生产代码或重排队列——本轮 src 与上一轮完全相同。
 
-**Seen 1× (2026-11-19)**
+**Seen 2× (2026-11-20)**
 
 ## 升级记录
 
