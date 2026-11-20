@@ -62,7 +62,7 @@ OpenJDK Runtime Environment (Zulu 6.22.0.3-win64) (build 1.6.0-119-b119)
 
 运行期类版本上限实测：JDK 6 `java.class.version=50.0`，JDK 8 `52.0`，agent 产物 `52`——差值就是这次故障的全部。
 
-测试程序用 **JDK 6 自己的 javac** 编（`-source 1.6 -target 1.6`，否则程序本身也起不来），载体是**真实产出的 `mps-sql-agent.jar`**。复现产物在 `%TEMP%\mpsv-jdk6-repro\`。
+测试程序用 **JDK 6 自己的 javac** 编（`-source 1.6 -target 1.6`，否则程序本身也起不来），载体是**真实产出的 `mps-sql-agent.jar`**。复现产物的临时目录（`%TEMP%\mpsv-jdk6-repro\`，含包拷贝与打补丁脚本）验收后已清理，按本节命令可随时重建；真 JDK 6 保留在 `D:\HuanJing\Java\jdk1.6.0_119`。
 
 ### 3.2 三组读数
 
@@ -132,10 +132,10 @@ B 组与用户截图的对照：报文句式（短式 `Unsupported major.minor v
 
 1. **`params.jdkPath` 的语义**：Application / Spring Boot 配置应等于目标 JVM（闸门可直接用）；Gradle / Maven external-system 配置可能给的是 Gradle / Maven 自身 JVM，而 `bootRun` 等 fork 出来的应用 JVM 由 toolchain 决定——这类形态券01 探不到，必须靠券02 兜。实施时在沙盒里对三种配置各打一条日志实测，读数写进 §八。
 2. `JavaParameters.getJdkPath()` 在 262 也可调（243 已 javap 实证），262 同日复核一次。
-3. JDK 6/7 安装目录是否有 `release` 文件（Sun/Oracle 从某个 7u/8 版本起才有）；拿不到就只走 rt.jar 分支，两分支都要有用例。
-4. `java.class.version` 在国产 JVM（毕昇/Dragonwell/Ark 等）上是否恒为该 JVM 的 max major；若非，shim 的阈值判定退化为「猜」，但 `catch (Throwable)` 的结构性保护不受影响。
+3. **已实测（2026-11-20）**：Zulu JDK 1.6.0_119 安装目录**没有 `release` 文件**，只有 `jre/lib/rt.jar`；且该 rt.jar 全部是 **major 49**（Oracle 系 JDK 6 自带类库按 1.5 编译）——并非此前假设的 50。判定仍正确（49 < 52 一样拦下），但**不能拿它报具体版本号**，故提示文案改为不报版本、只报「低于 8」，对应用例见 `TargetJvmCompatTest.rtjar实测形态_major49同样被判定为不支持`。
+4. **已实测**：`java.class.version` 在 Zulu 6.0.119 上是 `50.0`、Oracle 8u181 上是 `52.0`——即该 JVM 的类版本上限，shim 的阈值判定成立（国产 JVM 未测，若非则退化为「猜」，`catch (Throwable)` 的结构性保护不受影响）。
 5. `updateJavaParameters` 的调用线程与耗时：该处已做 jar 落盘与 `ServerSocket` bind，探测比它们轻；但首次读 `rt.jar` 要走缓存，若实测在 EDT 且可感停顿，改在设置页打开时预热。
-6. `RelocateAsmMain` 用 ASM 能否把 major 52 的输入以 `V1_6` 输出（ASM 不做 API 校验，预期可行）；实施时先跑一次，用 `AgentShimClassGuardTest` 的读数钉住。
+6. **已实测**：`RelocateAsmMain` 用 ASM 把 major 52 的 `AgentShim` 以 `V1_6` 输出可行——产物实测 `AgentShim.class` major = 50、`AgentMain.class` 52、重定位 ASM 49（`major 分布: {49: 103, 50: 1, 52: 49}`），manifest 两条入口均指向 `AgentShim`。
 
 ## 六、验收清单（可照抄）
 
@@ -158,6 +158,7 @@ B 组与用户截图的对照：报文句式（短式 `Unsupported major.minor v
 | 券 | 状态 | 提交 | 读数 |
 |---|---|---|---|
 | 复现与形态原型（真 JDK 1.6.0_119） | 已完成 2026-11-20 | —（仅计划与临时产物，零生产码） | §3.2 三组 + §3.3 三组 |
-| 券01 闸门 | 待开工 | — | — |
-| 券02 引导类 | 待开工 | — | — |
-| 券03 收口 | 待开工 | — | — |
+| 券01 闸门 | 已完成 2026-11-20 | `79cafe2a6` | `PremainInjectionTest` 5/0、`TargetJvmCompatTest` 8/0、`AgentManagerPremainTest` 16/0；反向摘闸 → 「老 JVM 上不得协商端口」红，还原后绿 |
+| 券02 引导类 | 已完成 2026-11-20 | `79cafe2a6` | 产物 major 分布 `{49:103, 50:1, 52:49}`、manifest 双入口=AgentShim；`AgentShimClassGuardTest` 4/0 + agent premain/attach 16/0；反向摘降版本 → 「引导类必须是 major 50，实际 52」红，还原后绿 |
+| 券03 收口 | 已完成 2026-11-20 | `79cafe2a6` | 架构文档 02 / CHANGELOG / LESSONS L93 / 构建脚本注释 |
+| 真机验收 | 已完成 2026-11-20 | `79cafe2a6` 产物 | JDK 1.6.0_119：`skipped … does not support Java 8+ bytecode` + `[PROBE] … active marker=null`、**EXIT=0**（改前同命令 EXIT=1）；JDK 8：`active marker=port=1`（正常委托）；JDK 6 attach：`loadAgent returned normally` + 目标进程跑到 `finished normally` |
