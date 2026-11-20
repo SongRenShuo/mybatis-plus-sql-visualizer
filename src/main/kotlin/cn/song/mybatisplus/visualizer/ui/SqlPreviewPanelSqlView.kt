@@ -726,6 +726,8 @@ internal fun SqlPreviewPanel.clear() {
     ibatisRenderWarningIsNote = false
     currentWarning = null
     currentWarningIsNote = false
+    // T-PreviewActionRow D-5：缺失片段入口随清空隐藏（handler 保留——同一面板下次预览仍可补）
+    refreshMissingFragmentHint(emptyList())
     errorCopyButton?.isVisible = false
     toggleSelectButton = null
     batchToggleSelectButton = null

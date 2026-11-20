@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.model.PreviewResult
+import cn.song.mybatisplus.visualizer.ui.standalone.MissingFragmentFillFlow
+import cn.song.mybatisplus.visualizer.ui.standalone.MissingSqlFragmentSupport
 import cn.song.mybatisplus.visualizer.ui.standalone.StandaloneSqlSourceResolver
 import cn.song.mybatisplus.visualizer.ui.standalone.StandaloneWarningText
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -22,7 +24,7 @@ import javax.swing.JComponent
  * 并记忆用户拉伸后的尺寸（[rememberLastWindowSize]）。
  */
 class SqlPreviewDialog(
-    project: Project?,
+    private val project: Project?,
     private val result: PreviewResult,
     private val sourceLocation: String? = null,
     sourceContext: cn.song.mybatisplus.visualizer.context.PreviewSourceContext? = null,
@@ -31,6 +33,14 @@ class SqlPreviewDialog(
      * 自动重新识别一次（独立工作台的**空/原文态**开窗时置 true）。
      */
     private val autoParseOnPaste: Boolean = false,
+    /**
+     * T-PreviewActionRow D-7：产出本次预览的**原始文本**（只有工作台开窗这条链传）。
+     *
+     * 为什么弹窗需要它：面板只拿得到渲染后的 SQL（include 已展开成 TODO 占位），缺片段要补齐
+     * 就必须用原始 XML 重解析。其余入口（gutter / 日志 / 历史 / 语句预览）没有原文可重解析，
+     * 传 null ⇒ 弹窗不挂补齐入口，避免出现点了没反应的链接。
+     */
+    private val sourceText: String? = null,
 ) : DialogWrapper(project, false, DialogWrapper.IdeModalityType.MODELESS) {
 
     private val panel = SqlPreviewPanel(project)
@@ -60,11 +70,38 @@ class SqlPreviewDialog(
      */
     internal var actionsAtConstructionForTest: Array<Action>? = null
 
+    /**
+     * T-PreviewActionRow D-6/D-7：本弹窗内补齐的片段（refid → 内容）。
+     *
+     * 存弹窗自己不存工作台：补完只影响**这个弹窗**的展示，不回写工作台输入区——用户手里那段
+     * 原文保持原样（与工作台同一语义：补齐不污染原文）。
+     */
+    private val fragmentOverrides = linkedMapOf<String, String>()
+
+    /** 补齐内容来源（默认弹 `MissingFragmentDialog`；测试注入，避免 headless 弹模态框）。 */
+    internal var missingFragmentPrompt: (String) -> String? = { refid ->
+        MissingFragmentFillFlow.promptViaDialog(project, refid)
+    }
+
+    /**
+     * 最近一次「贴入即识别」用的原文（T-PreviewActionRow D-7）。
+     *
+     * 为什么单独存：识别成功后面板里是**渲染后的 SQL**，缺片段补齐要的却是贴进来那段原文；
+     * `draftTextProvider` 那时已经给出渲染结果，不能再用。贴入路径没有 `sourceText` 参数，
+     * 只能在这里记一手。
+     */
+    private var lastSourceText: String? = null
+
     init {
         title = MpSqlVisualizerBundle.message("dialog.preview.title")
         panel.setSourceLocation(sourceLocation)
         panel.setSourceContext(sourceContext)
         panel.showResult(result)
+        // T-PreviewActionRow D-7：注入补齐入口——有原文（工作台开窗 / 贴入即识别）才有得补；
+        // 其余入口（gutter / 日志 / 历史 / 语句预览）拿不到原文，不注入 ⇒ 面板整行不显示。
+        if (sourceText != null || autoParseOnPaste) {
+            panel.missingFragmentFillHandler = { refid -> fillMissingFragment(refid) }
+        }
         // 注册面板到弹窗 Disposer 树：弹窗 dispose 时级联释放面板及其 messageBus 连接
         Disposer.register(disposable, panel)
         // T-M23.6：复制/执行 SQL 成功提示的「关闭 SQL 面板」按钮 → 关闭预览弹窗
@@ -163,16 +200,48 @@ class SqlPreviewDialog(
     internal fun reparseDraftFromEditor() {
         if (!pasteReparseArmed) return
         val text = draftTextProvider()?.takeIf { it.isNotBlank() } ?: return
-        val resolved = runCatching { StandaloneSqlSourceResolver.resolve(text) }.getOrNull() ?: return
-        val fresh = resolved.failure?.let { failure ->
-            resolved.result.copy(
-                warning = StandaloneWarningText.failure(failure),
-                informationalWarning = false,
-            )
-        } ?: resolved.result
+        // 记一手原文：识别成功后草稿文本变成渲染结果，补齐片段还得靠这段输入
+        lastSourceText = text
+        val fresh = resolveForDisplay(text) ?: return
         stopPasteReparse()
         panel.showResult(fresh)
     }
+
+    /** 解析一段原文并映射成面板载荷（失败时带结构化四段文案，与工作台同源）。 */
+    private fun resolveForDisplay(text: String): PreviewResult? =
+        runCatching { StandaloneSqlSourceResolver.resolve(text) }.getOrNull()?.let { resolved ->
+            resolved.failure?.let { failure ->
+                resolved.result.copy(
+                    warning = StandaloneWarningText.failure(failure),
+                    informationalWarning = false,
+                )
+            } ?: resolved.result
+        }
+
+    /**
+     * T-PreviewActionRow D-6/D-7：补齐一个缺失片段 → 用原文重解析 → 就地回填面板。
+     *
+     * 不重开弹窗：用户是在结果区看到 TODO 占位后点进来补的，补完应该当场看到展开后的 SQL。
+     * 先 [stopPasteReparse]：待命计时器若还在跑，会拿旧草稿再覆盖一次刚补好的结果。
+     */
+    private fun fillMissingFragment(refid: String) {
+        val source = sourceText ?: lastSourceText ?: return
+        val content = missingFragmentPrompt(refid)
+        if (!MissingFragmentFillFlow.record(refid, content, fragmentOverrides)) return
+        stopPasteReparse()
+        val fresh = resolveForDisplay(
+            MissingSqlFragmentSupport.withFragments(source, fragmentOverrides),
+        ) ?: return
+        panel.showResult(fresh)
+    }
+
+    /** 测试缝：触发一次补齐（等价点击面板提示行；内容由 [missingFragmentPrompt] 提供）。 */
+    internal fun fillMissingFragmentForTest(refid: String) {
+        fillMissingFragment(refid)
+    }
+
+    /** 测试缝：提示行组件（派发真实点击覆盖监听接线）。 */
+    internal fun missingFragmentLabelForTest(): javax.swing.JLabel? = panel.missingFragmentLabelForTest()
 
     /** 测试访问器：是否仍待命。 */
     internal fun pasteReparseArmedForTest(): Boolean = pasteReparseArmed

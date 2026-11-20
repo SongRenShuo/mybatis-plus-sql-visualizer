@@ -774,6 +774,69 @@ class SqlPreviewPanel(
     internal var xmlDollarSubstitutions = 0
 
     /**
+     * T-PreviewActionRow D-5：缺失 `<sql id="…">` 片段的补齐入口（结果区一行可点链接）。
+     *
+     * 提示事实来自载荷（[cn.song.mybatisplus.visualizer.model.PreviewResult.missingFragmentIds]），
+     * 补齐动作由**持有原文的一方**注入（[missingFragmentFillHandler]）——面板只有渲染后的 SQL，
+     * 自己重解析不出原本的 include。没有注入方时整行不显示（真实文件来源的 gutter/日志弹窗不该出现
+     * 一条点了没反应的链接）。
+     */
+    internal val missingFragmentLabel = JBLabel(" ").apply {
+        putClientProperty("html.disable", true)
+        foreground = com.intellij.ui.JBColor.namedColor("Link.activeForeground", com.intellij.ui.JBColor.BLUE)
+        cursor = java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
+        border = JBUI.Borders.empty(2, 8, 2, 8)
+        isVisible = false
+        addMouseListener(object : java.awt.event.MouseAdapter() {
+            override fun mouseClicked(e: java.awt.event.MouseEvent) {
+                val refid = missingFragmentRefid ?: return
+                missingFragmentFillHandler?.invoke(refid)
+            }
+        })
+    }
+
+    /** 补齐回调（refid → 弹框收内容 → 调用方重解析回填）。赋值即按当前载荷刷新可见性。 */
+    internal var missingFragmentFillHandler: ((String) -> Unit)? = null
+        set(value) {
+            field = value
+            refreshMissingFragmentHint(current?.missingFragmentIds.orEmpty())
+        }
+
+    /** 当前提示行指向的 refid（点击时用它回调；多缺失时一次补一个，补完重解析自然收敛）。 */
+    private var missingFragmentRefid: String? = null
+
+    /**
+     * 刷新缺失片段提示行（[SqlPreviewPanel.updateMeta] 与 handler 赋值两处驱动）。
+     *
+     * 双条件才可见：产物确实带缺失 id，且有人能补（handler 非 null）。任一不满足即隐藏——
+     * 隐藏是常态，本行不占高度。
+     */
+    internal fun refreshMissingFragmentHint(ids: List<String>) {
+        val handler = missingFragmentFillHandler
+        val first = ids.firstOrNull()
+        if (first == null || handler == null) {
+            missingFragmentRefid = null
+            missingFragmentLabel.isVisible = false
+            return
+        }
+        missingFragmentRefid = first
+        missingFragmentLabel.text = MpSqlVisualizerBundle.message(
+            "panel.missingFragment.label",
+            ids.joinToString("、"),
+        )
+        missingFragmentLabel.isVisible = true
+    }
+
+    /** 测试访问器：提示行可见性（证「无 handler 不出现 / 有 handler 出现」）。 */
+    internal fun missingFragmentVisibleForTest(): Boolean = missingFragmentLabel.isVisible
+
+    /** 测试访问器：提示行文案。 */
+    internal fun missingFragmentTextForTest(): String = missingFragmentLabel.text
+
+    /** 测试访问器：提示行组件（用例派发真实 MouseEvent，覆盖监听器接线而不只是直接调 handler）。 */
+    internal fun missingFragmentLabelForTest(): JBLabel = missingFragmentLabel
+
+    /**
      * T-InjectionGate T-IG-02：本面板实例内已确认过 `${}` raw 段执行（会话级记忆）。
      *
      * 同一面板确认一次后不再重复弹（常用 `${orderBy}` 场景的确认疲劳缓解）；记忆随面板实例
@@ -883,6 +946,8 @@ class SqlPreviewPanel(
                     isOpaque = false
                     add(degradationBanner, BorderLayout.NORTH)
                     add(dmlImpactBanner, BorderLayout.CENTER)
+                    // T-PreviewActionRow D-5：缺失片段补齐入口贴着 SQL 区（离 TODO 占位最近）
+                    add(missingFragmentLabel, BorderLayout.SOUTH)
                 },
                 BorderLayout.SOUTH,
             )

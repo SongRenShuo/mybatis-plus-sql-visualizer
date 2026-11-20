@@ -853,6 +853,8 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
             if (result.xmlModel != null) xmlErrors else emptyList(),
         )
     }
+    // T-PreviewActionRow D-5：缺失片段补齐入口随本轮载荷刷新（无缺失 / 无注入方即隐藏，不占高度）
+    refreshMissingFragmentHint(result.missingFragmentIds)
     val warningLine = currentWarning?.let { if (currentWarningIsNote) "   ℹ $it" else "   ⚠ $it" } ?: ""
     // T-SourceJumpFunnel P2-2：调用栈快照并入 meta 提示行（截断展示；T-StackHoverUi 起
     // 完整链归悬停弹层）。

@@ -133,8 +133,41 @@ class SqlStandalonePreviewPanelDialogTest : BasePlatformTestCase() {
         assertTrue("未识别应是信息级说明而非渲染失败：$warning", warning.isNotBlank())
     }
 
-    /** iBatis 2 片段：弹窗照开，且不再出现 MyBatis 的 Unknown element 假错误。 */
-    fun test在弹框中打开_iBatis片段不报UnknownElement() {
+    /**
+     * T-PreviewActionRow D-7（A-4）：工作台开窗必须把**原文**带进弹窗——弹窗里才补得了缺失片段。
+     *
+     * 这条钉的是「透传」这一环：只测 `SqlPreviewDialog(sourceText=…)` 构造证明不了工作台真的传了；
+     * 2026-11-20 用户报障正是「弹窗预览 XML 没地方补」。
+     */
+    fun test在弹框中打开_缺片段时弹窗内出现补齐入口() {
+        val p = newPanel()
+        p.setInputTextForTest(
+            """
+            <select id="selectByPrimaryKey">
+              SELECT <include refid="Base_Column_List"/> FROM CUST_CHANNEL WHERE ID = #{id}
+            </select>
+            """.trimIndent(),
+        )
+        clickOpenInDialog(p)
+        val dialog = awaitDialog()
+        assertNotNull("缺片段的 XML 同样要能开弹窗", dialog)
+
+        val deadline = System.currentTimeMillis() + 5_000
+        var visible = false
+        while (System.currentTimeMillis() < deadline) {
+            waitForEdt()
+            visible = dialog!!.panelForTest()?.missingFragmentVisibleForTest() == true
+            if (visible) break
+            Thread.sleep(10)
+        }
+        assertTrue("工作台开窗应带上原文，弹窗内应出现「缺少片段…点此补上」入口", visible)
+        assertTrue(
+            "提示行应指向缺失的 refid",
+            dialog!!.panelForTest()!!.missingFragmentTextForTest().contains("Base_Column_List"),
+        )
+    }
+
+    /** iBatis 2 片段：弹窗照开，且不再出现 MyBatis 的 Unknown element 假错误。 */    fun test在弹框中打开_iBatis片段不报UnknownElement() {
         val p = newPanel()
         p.setInputTextForTest(
             """

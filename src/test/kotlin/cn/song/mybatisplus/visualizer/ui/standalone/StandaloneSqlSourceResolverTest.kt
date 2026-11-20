@@ -363,4 +363,64 @@ class StandaloneSqlSourceResolverTest {
         assertEquals("select", failure.statementTagName)
         assertNotNull("原因不得为空", failure.reason)
     }
+
+    // ---------- T-PreviewActionRow D-4：缺失片段事实随载荷走 ----------
+
+    @Test
+    fun `引用但未定义的片段id挂到载荷上`() {
+        // 面板只拿得到渲染后的 SQL（include 已展开成 TODO 占位），缺失事实必须由解析侧随载荷给出，
+        // 否则弹窗与工作台都得各自回头扫原文。
+        val text = """
+            <select id="q20">
+              SELECT <include refid="Base_Column_List"/>
+              FROM t WHERE id = #{id}
+            </select>
+        """.trimIndent()
+        val resolved = StandaloneSqlSourceResolver.resolve(text)
+        assertNotNull(resolved)
+        assertEquals(listOf("Base_Column_List"), resolved!!.result.missingFragmentIds)
+        assertTrue("缺失处仍留 TODO 占位：${resolved.result.sql}", resolved.result.sql.contains("TODO: missing"))
+    }
+
+    @Test
+    fun `片段定义在同一段文本里时不算缺失`() {
+        val text = """
+            <sql id="Base_Column_List">id, name</sql>
+            <select id="q21">SELECT <include refid="Base_Column_List"/> FROM t</select>
+        """.trimIndent()
+        val resolved = StandaloneSqlSourceResolver.resolve(text)
+        assertNotNull(resolved)
+        assertTrue("已定义过就不该报缺失", resolved!!.result.missingFragmentIds.isEmpty())
+        assertFalse("展开后不应再有 TODO 占位", resolved.result.sql.contains("TODO: missing"))
+    }
+
+    @Test
+    fun `纯SQL路径不产缺失片段事件`() {
+        val resolved = StandaloneSqlSourceResolver.resolve("SELECT * FROM t WHERE a = ?")
+        assertNotNull(resolved)
+        assertTrue(resolved!!.result.missingFragmentIds.isEmpty())
+    }
+
+    @Test
+    fun `转义形态的include也能算出缺失`() {
+        // 网页复制的 `&lt;include …&gt;` 只有解码后才是真 XML——缺失判定必须按解码文本走
+        val text = "<select id=\"q22\">SELECT &lt;include refid=\"Cols\"/&gt; FROM t</select>"
+        val resolved = StandaloneSqlSourceResolver.resolve(text)
+        assertNotNull(resolved)
+        assertEquals(listOf("Cols"), resolved!!.result.missingFragmentIds)
+    }
+
+    @Test
+    fun `跨命名空间refid按末段名对定义`() {
+        val text = """
+            <sql id="Cols">id</sql>
+            <select id="q23">SELECT <include refid="base.Cols"/> FROM t</select>
+        """.trimIndent()
+        val resolved = StandaloneSqlSourceResolver.resolve(text)
+        assertNotNull(resolved)
+        assertTrue(
+            "ns 前缀的引用与裸 id 定义应视为已定义：${resolved!!.result.missingFragmentIds}",
+            resolved.result.missingFragmentIds.isEmpty(),
+        )
+    }
 }

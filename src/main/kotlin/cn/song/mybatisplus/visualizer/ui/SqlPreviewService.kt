@@ -2053,6 +2053,13 @@ class SqlPreviewService(internal val project: Project) {
              * 贴入内容后自动重新识别一次（仅独立工作台的空/原文态开窗时置 true；其余入口保持 false）。
              */
             autoParseOnPaste: Boolean = false,
+            /**
+             * T-PreviewActionRow D-7：产出本次预览的原始文本（仅独立工作台开窗传）。
+             *
+             * 面板展示的是渲染后的 SQL，缺 `<sql>` 片段要补齐必须用原文重解析；其余入口
+             * 没有原文，传 null ⇒ 弹窗不挂补齐入口（不制造点了没反应的链接）。
+             */
+            sourceText: String? = null,
         ) {
             // T-PreviewFast P7：请求→弹窗耗时（第二段锚点；后续控制台可见由面板记）
             runCatching {
@@ -2093,7 +2100,7 @@ class SqlPreviewService(internal val project: Project) {
             // 注：不再量「池线程→EDT 排队」——该值依赖全局单槽时间戳，并发预览会串读数（实测 651ms
             // 的请求被后一次请求覆盖成 1ms），不可信。
             val constructStarted = System.currentTimeMillis()
-            val dialog = SqlPreviewDialog(project, result, sourceLocation, sourceContext, autoParseOnPaste)
+            val dialog = SqlPreviewDialog(project, result, sourceLocation, sourceContext, autoParseOnPaste, sourceText)
             val constructMs = System.currentTimeMillis() - constructStarted
             activePreviewDialogs[project] = java.lang.ref.WeakReference(dialog)
             val showStarted = System.currentTimeMillis()

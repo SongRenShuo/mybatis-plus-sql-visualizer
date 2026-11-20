@@ -4,6 +4,8 @@ import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.SqlInputEditor
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
+import cn.song.mybatisplus.visualizer.ui.applyPrimaryButtonStyle
+import cn.song.mybatisplus.visualizer.ui.copySql
 import cn.song.mybatisplus.visualizer.ui.executeSql
 import cn.song.mybatisplus.visualizer.ui.showResult
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
@@ -11,10 +13,12 @@ import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.actionSystem.ActionPlaces
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CustomShortcutSet
+import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.actionSystem.KeyboardShortcut
 import com.intellij.openapi.actionSystem.Shortcut
@@ -82,17 +86,14 @@ class SqlStandalonePreviewPanel(
      */
     private val fragmentOverrides = linkedMapOf<String, String>()
 
-    /** 缺失片段提示行（有缺失才可见；点击进入补齐输入）。 */
-    private val missingFragmentLabel = JBLabel(" ").apply {
-        foreground = JBUI.CurrentTheme.Link.Foreground.ENABLED
-        cursor = java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
-        border = JBUI.Borders.empty(2, 6, 2, 6)
-        isVisible = false
-        addMouseListener(object : java.awt.event.MouseAdapter() {
-            override fun mouseClicked(e: java.awt.event.MouseEvent) {
-                promptMissingFragment()
-            }
-        })
+    /**
+     * 补齐内容来源（T-PreviewActionRow D-6）：默认弹 `MissingFragmentDialog`，测试可注入。
+     *
+     * 与 [MissingFragmentFillFlow.promptViaDialog] 同一实现——注入点只在"怎么问用户"，
+     * 「记进 overrides + 重解析」仍走真实链路。
+     */
+    internal var missingFragmentPrompt: (String) -> String? = { refid ->
+        MissingFragmentFillFlow.promptViaDialog(project, refid)
     }
 
     /** 内嵌预览面板（懒创建；Disposer 挂本面板，防双 Editor 常驻）。@Volatile：ExecuteAction 的 update 在 BGT 读（面板内执行入口同口径先例）。 */
@@ -130,20 +131,36 @@ class SqlStandalonePreviewPanel(
     /** 执行 SQL 动作实例（字段化同 [resolveAction] 先例；enable 随内嵌面板存亡翻转）。 */
     private val executeAction = ExecuteAction()
 
+    /** 复制 SQL（T-PreviewActionRow D-1）：页签里唯一的「取走产物」入口。 */
+    private val copySqlAction = CopySqlAction()
+
+    private val clearAction = ClearAction()
+
+    private val openInDialogAction = OpenInDialogAction()
+
     /**
-     * 输入工具栏的动作序列（T-LoadFilePlacement：字段化——用例要能断言「从文件加载」真的挂在
-     * 工具栏上，而不只是类存在；构造期定型，与 [buildInputToolbar] 同一份来源）。
+     * 输入侧动作（T-PreviewActionRow D-2）：解析 / 格式化 / 从文件加载——都只影响**输入区**。
+     *
+     * 产物侧（执行 / 复制 / 在弹框中打开 / 清空）已下沉到底部动作行，见 [bottomActions]。
      */
     private val inputActions: List<AnAction> = listOf(
         resolveAction,
-        executeAction,
         FormatAction(),
-        ClearAction(),
         // 读文件是**输入源**能力，只挂在有输入区的工作台上；通用预览弹窗
-        //（21 处入口共用、只展示已渲染 SQL）不再拥有它。
+        //（22 个文件 / 53 处调用点共用、只展示已渲染 SQL）不再拥有它。
         LoadFileAction(),
-        OpenInDialogAction(),
     )
+
+    /** 产物侧动作（顺序即底部按钮顺序；enable 由 [refreshBottomActions] 统一刷新）。 */
+    private val bottomActions: List<AnAction> = listOf(
+        executeAction,
+        copySqlAction,
+        openInDialogAction,
+        clearAction,
+    )
+
+    /** 底部按钮（与 [bottomActions] 下标一一对应）。 */
+    private val bottomButtons = mutableListOf<javax.swing.JButton>()
 
     init {
         Disposer.register(this, inputEditor)
@@ -159,10 +176,10 @@ class SqlStandalonePreviewPanel(
             isShowDividerControls = false
         }
         add(splitter, BorderLayout.CENTER)
-        // T-IncludePlaceholder：底部两行——缺失片段提示（有缺失才显示）+ 识别状态行
+        // T-PreviewActionRow：底部两行——产物动作行 + 识别状态行
         add(
             JPanel(BorderLayout()).apply {
-                add(missingFragmentLabel, BorderLayout.NORTH)
+                add(buildBottomActionRow(), BorderLayout.NORTH)
                 add(statusLabel, BorderLayout.SOUTH)
             },
             BorderLayout.SOUTH,
@@ -199,6 +216,52 @@ class SqlStandalonePreviewPanel(
             .apply { targetComponent = this@SqlStandalonePreviewPanel }
         return JPanel(BorderLayout()).apply { add(toolbar.component, BorderLayout.WEST) }
     }
+
+    /**
+     * 底部产物动作行（T-PreviewActionRow D-1）：文字按钮，右对齐。
+     *
+     * 为什么用手工 `JButton` 而不是 `ActionToolbar`：工具窗工具栏在图标模式下只画图标，
+     * 要文字得逐按钮改 presentation（平台未提供稳定的"强制文字"入口）；而且这一排要和
+     * 预览弹窗底部那排手感一致（弹窗侧也是 `JButton`）。
+     *
+     * 文案与 enable 都来自 [bottomActions] 的动作本体：先 `update(e)` 再读 presentation，
+     * enable 判定只有一处（`ExecuteAction`/`CopySqlAction` 各看 `previewPanel != null`）。
+     */
+    private fun buildBottomActionRow(): JPanel {
+        val labels = listOf(
+            "standalone.action.execute",
+            "standalone.action.copySql",
+            "standalone.action.openDialog",
+            "standalone.action.clear",
+        )
+        val row = JPanel(java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 6, 4)).apply {
+            border = JBUI.Borders.empty(2, 6, 2, 6)
+        }
+        bottomActions.forEachIndexed { index, action ->
+            val button = javax.swing.JButton(MpSqlVisualizerBundle.message(labels[index])).apply {
+                addActionListener { action.actionPerformed(anActionEventOf(action)) }
+            }
+            // 主行动＝复制 SQL（与弹窗「复制 SQL 并关闭」同一取走口径；执行 SQL 次之）
+            if (index == PRIMARY_BOTTOM_INDEX) applyPrimaryButtonStyle(button)
+            bottomButtons += button
+            row.add(button)
+        }
+        refreshBottomActions()
+        return row
+    }
+
+    /** 按动作自身的 `update` 结果刷新底部按钮的 enable（面板未建立时执行/复制禁用）。 */
+    private fun refreshBottomActions() {
+        bottomButtons.forEachIndexed { index, button ->
+            val action = bottomActions[index]
+            val event = anActionEventOf(action)
+            action.update(event)
+            button.isEnabled = event.presentation.isEnabled
+        }
+    }
+
+    private fun anActionEventOf(action: AnAction): AnActionEvent =
+        AnActionEvent.createFromAnAction(action, null, ActionPlaces.TOOLBAR, DataContext.EMPTY_CONTEXT)
 
     /** 解析预览：后台跑双源解析器，代次守卫回 EDT 喂内嵌面板。 */
     private inner class ResolveAction : AnAction() {
@@ -245,6 +308,36 @@ class SqlStandalonePreviewPanel(
                 return
             }
             panel.executeSql()
+        }
+    }
+
+    /**
+     * 复制 SQL（T-PreviewActionRow D-1）：页签里最重要的"取走"动作——此前**完全没有入口**，
+     * 用户要么进弹窗点一次，要么在编辑器里全选 Ctrl+C（复制到的是带注释原文）。
+     *
+     * 走 [SqlPreviewPanel.copySql]（与弹窗「复制 SQL」同一条链，含去注释），但**必须**
+     * `offerClosePanelAction = false`：那条通知默认会挂「关闭 SQL 面板」动作，而
+     * `onClosePanelRequested` 只有弹窗注入——页签里会挂一条点了没反应的死链接。
+     *
+     * **`internal`**：回归用例走真实动作路径（同 [ExecuteAction] 口径）。
+     */
+    internal inner class CopySqlAction : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.text = MpSqlVisualizerBundle.message("standalone.action.copySql")
+            e.presentation.description =
+                MpSqlVisualizerBundle.message("standalone.action.copySql.description")
+            e.presentation.isEnabled = previewPanel != null
+        }
+
+        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+
+        override fun actionPerformed(e: AnActionEvent) {
+            val panel = previewPanel
+            if (panel == null) {
+                setStatus(MpSqlVisualizerBundle.message("standalone.status.copy.noPreview"))
+                return
+            }
+            panel.copySql(offerClosePanelAction = false)
         }
     }
 
@@ -372,27 +465,31 @@ class SqlStandalonePreviewPanel(
         }
         // T-IncludePlaceholder A 券：补齐的片段只在解析前拼入，用户输入保持原样
         val text = MissingSqlFragmentSupport.withFragments(rawInput, fragmentOverrides)
-        val missing = MissingSqlFragmentSupport.missingRefids(rawInput)
         val generation = ++resolveGeneration
         ApplicationManager.getApplication().executeOnPooledThread {
             val resolved = runCatching { StandaloneSqlSourceResolver.resolve(text) }.getOrNull()
             ApplicationManager.getApplication().invokeLater(
                 {
                     if (disposed || generation != resolveGeneration || project.isDisposed) return@invokeLater
-                    applyResolved(resolved, openDialog, rawInput, missing)
+                    applyResolved(resolved, openDialog, rawInput)
                 },
                 ModalityState.nonModal(),
             )
         }
     }
 
+    /**
+     * 装配一次解析结果。
+     *
+     * T-PreviewActionRow D-5：缺失片段事件**不再由这里算**——解析器已按原文把
+     * `missingFragmentIds` 挂进载荷，面板据此在结果区渲染补齐入口（工作台只负责注入"怎么补"）。
+     * 这样弹窗（同一面板）也能展示同一份事实，不必各自扫文本。
+     */
     private fun applyResolved(
         resolved: StandaloneSqlSourceResolver.Resolved?,
         openDialog: Boolean,
         rawText: String,
-        missingRefids: List<String> = emptyList(),
     ) {
-        updateMissingFragmentHint(missingRefids)
         if (resolved == null) {
             setStatus(withOrigin(MpSqlVisualizerBundle.message("standalone.status.unrecognized")))
             if (openDialog) openDialogWith(rawTextResult(rawText), autoReparse = true)
@@ -421,31 +518,18 @@ class SqlStandalonePreviewPanel(
         return "$text ｜ ${MpSqlVisualizerBundle.message("standalone.status.loadedFile", name)}"
     }
 
-    /** T-IncludePlaceholder A 券：更新「缺失片段」提示行（无缺失即隐藏）。 */
-    private fun updateMissingFragmentHint(missing: List<String>) {
-        if (missing.isEmpty()) {
-            missingFragmentLabel.isVisible = false
-            return
-        }
-        missingFragmentLabel.text = MpSqlVisualizerBundle.message(
-            "standalone.missingFragment.label",
-            missing.joinToString("、"),
-        )
-        missingFragmentLabel.isVisible = true
-    }
-
     /**
-     * T-IncludePlaceholder A 券：点提示行 → 让用户补齐首个缺失片段，补齐后立即重解析。
+     * T-PreviewActionRow D-6：补齐一个缺失片段后重解析。
      *
      * 为什么逐个补：一个片段可能引用另一个缺失片段，一次只问一个才不会让用户面对一个
      * 不知道从哪粘起的空框；补完重解析会重新算缺失集合，链路自然收敛。
+     *
+     * 内容来源走 [missingFragmentPrompt]（默认弹出框，测试可注入）——「记 overrides + 重解析」
+     * 仍是真实链路，与弹窗侧共用 [MissingFragmentFillFlow]。
      */
-    private fun promptMissingFragment() {
-        val missing = MissingSqlFragmentSupport.missingRefids(inputEditor.text).firstOrNull() ?: return
-        val dialog = MissingFragmentDialog(project, missing)
-        if (!dialog.showAndGet()) return
-        val content = dialog.content().takeIf { it.isNotBlank() } ?: return
-        fragmentOverrides[missing] = content
+    private fun fillMissingFragment(refid: String) {
+        val content = missingFragmentPrompt(refid)
+        if (!MissingFragmentFillFlow.record(refid, content, fragmentOverrides)) return
         resolveFromInput()
     }
 
@@ -457,7 +541,14 @@ class SqlStandalonePreviewPanel(
      */
     private fun openDialogWith(result: PreviewResult, autoReparse: Boolean = false) {
         if (project.isDisposed) return
-        SqlPreviewService.showResult(project, result, autoParseOnPaste = autoReparse)
+        // T-PreviewActionRow D-7：把原文随窗带上——弹窗内看到 TODO 占位时才有东西可重解析补齐
+        //（其余入口无原文，不传 → 弹窗不挂补齐入口）
+        SqlPreviewService.showResult(
+            project,
+            result,
+            autoParseOnPaste = autoReparse,
+            sourceText = inputEditor.text,
+        )
     }
 
     /**
@@ -512,6 +603,8 @@ class SqlStandalonePreviewPanel(
             // 是编辑器流的语义，搬过来是假承诺（本类已接管该键，但「选中代码」在工作台不成立）。
             emptyHint = MpSqlVisualizerBundle.message("standalone.preview.emptyHint"),
         )
+        // T-PreviewActionRow D-5：把「补齐」注入面板（面板只有渲染后 SQL，重解析要原文）
+        panel.missingFragmentFillHandler = { refid -> fillMissingFragment(refid) }
         if (!previewPanelRegistered) {
             Disposer.register(this, panel)
             previewPanelRegistered = true
@@ -521,6 +614,7 @@ class SqlStandalonePreviewPanel(
         previewHolder.revalidate()
         previewHolder.repaint()
         previewPanel = panel
+        refreshBottomActions()
         return panel
     }
 
@@ -528,7 +622,6 @@ class SqlStandalonePreviewPanel(
         resolveGeneration++
         fragmentOverrides.clear()
         loadedFileName = null
-        missingFragmentLabel.isVisible = false
         inputEditor.setSql("")
         previewPanel?.let {
             previewHolder.removeAll()
@@ -540,6 +633,7 @@ class SqlStandalonePreviewPanel(
         }
         previewPanel = null
         previewPanelRegistered = false
+        refreshBottomActions()
         setStatus(" ")
     }
 
@@ -569,6 +663,22 @@ class SqlStandalonePreviewPanel(
     /** 测试缝：输入工具栏动作序列（简单类名）——钉住「从文件加载」真的挂在工具栏上。 */
     internal fun inputToolbarActionNamesForTest(): List<String> = inputActions.map { it.javaClass.simpleName }
 
+    /** 测试缝：底部动作行动作序列（简单类名）——钉住「复制 SQL」等确实在底部那一排。 */
+    internal fun bottomActionNamesForTest(): List<String> = bottomActions.map { it.javaClass.simpleName }
+
+    /** 测试缝：底部按钮 enable（按动作简单类名；不存在返回 null）。 */
+    internal fun bottomButtonEnabledForTest(actionSimpleName: String): Boolean? {
+        val index = bottomActions.indexOfFirst { it.javaClass.simpleName == actionSimpleName }
+        return if (index < 0) null else bottomButtons.getOrNull(index)?.isEnabled
+    }
+
+    /** 测试缝：内嵌面板的缺失片段提示行组件（派发真实点击，覆盖「面板 → 工作台」回调链）。 */
+    internal fun embeddedMissingFragmentLabelForTest(): javax.swing.JLabel? =
+        previewPanel?.missingFragmentLabelForTest()
+
+    /** 测试缝：内嵌面板实例（断言复制通知动作集合等面板态）。 */
+    internal fun embeddedPanelForTest(): SqlPreviewPanel? = previewPanel
+
     /** 测试缝：内嵌预览面板当前生效的空态提示（证工作台专用文案真的接上了）。 */
     internal fun embeddedPreviewHintForTest(): String = ensurePreviewPanel().previewEmptyHintForTest()
 
@@ -591,6 +701,9 @@ class SqlStandalonePreviewPanel(
 
     companion object {
         private const val TOOLBAR_ID = "SqlStandalonePreviewPanelToolbar"
+
+        /** 底部主行动下标（顺序见 [bottomActions]）：复制 SQL——与弹窗「复制 SQL 并关闭」同一取走口径。 */
+        private const val PRIMARY_BOTTOM_INDEX = 1
 
         /**
          * 重新解析快捷键：与 plugin.xml 里 ConvertToSql 的双 keymap 登记同源（Win/Linux `alt shift Q`，

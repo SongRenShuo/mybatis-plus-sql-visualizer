@@ -235,6 +235,17 @@ data class PreviewResult(
      * 在后台线程执行。返回 null = 该档位不可用（链/表不可解析）。
      */
     val statementTypeSwitch: ((ConsumptionKind) -> PreviewResult?)? = null,
+    /**
+     * T-PreviewActionRow D-4：本次 XML 预览里**引用但未定义**的 `<sql id>` 片段（按 id 排序）。
+     *
+     * 由文本来源解析链（[cn.song.mybatisplus.visualizer.ui.standalone.StandaloneSqlSourceResolver]）
+     * 在解析时算出，面板据此在结果区给「缺少片段：X —— 点此补上内容」入口（T-PreviewActionRow D-5）。
+     *
+     * 为什么放在载荷里而不是让面板自己扫：面板只有**渲染后的 SQL**（include 已被展开成 TODO 占位），
+     * 原始 XML 只在产出侧手里；缺失事实必须随产物一起走，弹窗与工作台才能同源展示。
+     * 空表 = 无缺失（真实文件来源通常由跨命名空间解析补齐，默认空表 ⇒ 既有链路零感知）。
+     */
+    val missingFragmentIds: List<String> = emptyList(),
 ) {
     val effectiveDialect: Dialect? get() = previewModel?.dialect ?: batchModel?.dialect ?: renderedDialect
 }

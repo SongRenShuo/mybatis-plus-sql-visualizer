@@ -96,11 +96,24 @@ object StandaloneSqlSourceResolver {
         if (input.isEmpty() || input.length > MAX_TEXT_LENGTH) return null
         val decoded = decodeXmlEntitiesIfEscaped(input)
         if (STATEMENT_TAG_REGEX.containsMatchIn(decoded)) {
-            return resolveAsXml(input, decoded)
+            return resolveAsXml(input, decoded)?.let { withMissingFragments(it, decoded) }
         }
         // 非 SQL 的 XML（pom 片段等）：以 `<` 开头但检测门未命中 → 不硬塞纯 SQL 解析（A-7 降级）
         if (input.startsWith("<") || decoded.startsWith("<")) return null
-        return resolveAsPlainSql(input)
+        return withMissingFragments(resolveAsPlainSql(input), decoded)
+    }
+
+    /**
+     * T-PreviewActionRow D-4：把「引用但未定义」的片段 id 挂到产物上，供面板给补齐入口。
+     *
+     * 用 `decoded` 而不是原文：粘贴的是网页复制的转义形态（`&lt;include refid=…&gt;`）时，
+     * 只有解码后才是真 XML，正则才看得见 include；普通文本两者相同，无额外代价。
+     * 无缺失时不 copy（载荷零变化）。
+     */
+    private fun withMissingFragments(resolved: Resolved, decoded: String): Resolved {
+        val missing = MissingSqlFragmentSupport.missingRefids(decoded)
+        if (missing.isEmpty()) return resolved
+        return resolved.copy(result = resolved.result.copy(missingFragmentIds = missing))
     }
 
     /**
