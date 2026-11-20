@@ -14,7 +14,10 @@ import cn.song.mybatisplus.visualizer.log.logTimeParamSignature
 import cn.song.mybatisplus.visualizer.log.stampLogTime
 import cn.song.mybatisplus.visualizer.util.FatalErrors
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
@@ -248,6 +251,12 @@ class AgentManager(private val project: Project) : Disposable {
      * internal 为同模块守护测试缝；生产链路勿直接读写。
      */
     internal val premainChannels = CopyOnWriteArrayList<PremainChannel>()
+
+    /**
+     * T-OldJvmPremainGuard 券01：已提示过的「目标 JDK 过老」版本串（同一版本只报一次，防反复 Run 刷屏）。
+     * 随 project 级 service 生命周期回收；internal 为测试缝。
+     */
+    internal val targetJvmNotifiedVersions: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     // ---------- T-PS4-03 测试缝：去抖窗与时间源可注入（生产链路勿改默认值） ----------
 
@@ -844,25 +853,38 @@ class AgentManager(private val project: Project) : Disposable {
 
     /**
      * premain 注入准备（`PremainRunConfigurationExtension.updateJavaParameters` 的唯一入口）：
-     * 过三道闸门 → 产出 `-javaagent:…` VM 选项字符串，null = 本次不注入。
+     * 过四道闸门 → 产出 `-javaagent:…` VM 选项字符串，null = 本次不注入。
      *
-     * 闸门顺序与副作用解耦（零劣化的关键）：开关为假时**不提取 jar、不协商端口**——
-     * 这两步在未开启态纯属浪费（且端口协商会开 ServerSocket）。判定本身走纯函数
+     * 闸门顺序与副作用解耦（零劣化的关键）：开关为假、或目标 JVM 太老时**不提取 jar、不协商端口**
+     * ——这两步在未开启/注定无效时纯属浪费（且端口协商会开 ServerSocket）。判定本身走纯函数
      * [PremainInjection.decide]，此处只负责按序求值事实与打日志。
      *
      * T-EnhancedCaptureDefaultOn（2026-10-19）：注入确认闸门已移除——开关打开即注入，
      * 不再有 confirmed 前置条件，也不再有弹窗与 EDT 依赖。
+     *
+     * T-OldJvmPremainGuard（2026-11-20）：[targetJvmMaxMajor] 是目标 JVM 的类版本上限（探测失败
+     * 传 null = 未知放行）。低于 agent 产物（major 52）时跳过注入并给一次性提示——JDK 6/7 上
+     * `-javaagent` 载不动入口类，JVM 会直接终止，用户的应用根本起不来。
      */
-    internal fun preparePremainVmOption(): String? {
+    internal fun preparePremainVmOption(targetJvmMaxMajor: Int? = null): String? {
         val enabled = isEnhancedEnabled()
         if (!enabled) {
             val reason = (PremainInjection.decide(false) as PremainInjection.Decision.Skip).reason
             LOG.info("premain 注入跳过：$reason（不提取 jar、不协商端口）")
             return null
         }
+        if (!PremainInjection.targetJvmSupported(targetJvmMaxMajor)) {
+            LOG.warn(
+                "premain 注入跳过：${PremainInjection.REASON_TARGET_JVM_TOO_OLD}" +
+                    "（目标 JDK 判定值 $targetJvmMaxMajor < agent 产物 ${PremainInjection.MIN_TARGET_CLASS_MAJOR}）" +
+                    "——不提取 jar、不协商端口，回落 attach/桥（零劣化）",
+            )
+            notifyTargetJvmUnsupported(targetJvmMaxMajor)
+            return null
+        }
         val jar = extractPremainAgentJar()
         val port = if (jar != null) openPremainChannel() else null
-        return when (val decision = PremainInjection.decide(true, jar != null, port)) {
+        return when (val decision = PremainInjection.decide(true, jar != null, port, targetJvmMaxMajor)) {
             is PremainInjection.Decision.Inject -> {
                 LOG.info("premain 注入：端口 ${decision.port} 已前置协商（agent 回连前不阻塞用户 Run）")
                 // T-StackHoverUi：-javaagent 选项随带调用栈快照帧数预算（premain 场景无 attach 二次下发）
@@ -876,6 +898,32 @@ class AgentManager(private val project: Project) : Disposable {
                 LOG.warn("premain 注入跳过：${decision.reason}——回落 attach/桥（零劣化）")
                 null
             }
+        }
+    }
+
+    /**
+     * T-OldJvmPremainGuard 券01：目标 JDK 过老的一次性提示（同一 Java 版本只报一次）。
+     *
+     * 为什么必须提示：跳过注入后增强捕获在该应用上等于沉默失效，用户只会觉得「勾了没反应」；
+     * 而这条限制是产品面的（agent 需要 JDK 8+），必须让用户看到原因与可行替代（控制台日志仍可捕获）。
+     * 去重按判定值（同一目标 JDK 反复 Run 不刷屏），集合随本 project 级 service 生命周期走。
+     * 文案不报具体 JDK 版本：探测来自 rt.jar 兜底时给的是「自带类库编译目标」（实测 JDK 6 为 49），
+     * 拿它说「你的 JDK 是 1.5」会误导——只如实说「低于 8」。
+     */
+    private fun notifyTargetJvmUnsupported(maxMajor: Int?) {
+        val key = maxMajor?.toString() ?: "unknown"
+        if (!targetJvmNotifiedVersions.add(key)) return
+        ApplicationManager.getApplication().invokeLater {
+            runCatching {
+                NotificationGroupManager.getInstance()
+                    .getNotificationGroup(AGENT_NOTIFICATION_GROUP_ID)
+                    .createNotification(
+                        MpSqlVisualizerBundle.message("agent.targetJvm.title"),
+                        MpSqlVisualizerBundle.message("agent.targetJvm.content"),
+                        NotificationType.WARNING,
+                    )
+                    .notify(project)
+            }.onFailure { LOG.warn("目标 JDK 过老提示发送失败（零劣化）", it) }
         }
     }
 

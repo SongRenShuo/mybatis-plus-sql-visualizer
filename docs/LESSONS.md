@@ -1093,6 +1093,25 @@ expected 10 was 12）与分片 2（`SqlLogPanelFocusTabTest` expected 4 was 6）
 
 **Seen 1× (2026-11-20)**
 
+### L93 premain 的入口类本身也得被目标 JVM 加载得了——类版本失配在 attach 只失败一次，在 premain 是杀死宿主
+
+**规则**：`-javaagent` 的 `Premain-Class` 若加载失败（最常见是类文件 major 高于目标 JVM 上限：JDK 6/7 只有
+50/51），JVM 会判为 agent 处理失败并**直接终止启动**（`FATAL ERROR in native method: processing of -javaagent failed`，
+主类一行都不跑）；同一个 jar 走 `loadAgent` 只抛 `AgentInitializationException`，目标进程照常运行。所以只要产品
+会在别人的 JVM 里注入，就必须有两道防线：① 注入前判定目标 JVM 认不认我们的字节码（拿不到就放行，别把能力关掉）；
+② 入口类做成**低版本引导类**（编译目标压到最老要支持的 major，只用对应年代的 API），由它在运行期判阈、再反射加载
+真正的 agent，并整段 `catch (Throwable)`。判据：`java.class.version` 就是该 JVM 的类版本上限（JDK 6 上是 `50.0`）。
+类内部的 `catch(Throwable)`（L7 那类兜底）管不到「类根本不加载」，别拿它当免责。
+**证据**：T-OldJvmPremainGuard（2026-11-20，计划 `docs/开发计划/20261120-1530-T-OldJvmPremainGuard-*`）：真机 Zulu
+JDK 1.6.0_119 上跑真实 `mps-sql-agent.jar`——`-javaagent` 报 `Unsupported major.minor version 52.0` + `FATAL ERROR`
++ 退出码 1、主类未执行；同 jar `loadAgent` 只失败一次、宿主跑到 `finished normally`。引导类原型（major 50，JDK 6
+javac 原生编）在 1.6 上 `skipped` 且应用正常起、在 1.8 上正常委托（`sqlvis.agent.active=port=1`）。
+**正例**：入口类按「最老要支持的 JDK」定 major，并用守卫测试钉住（读 jar 内字节断言 major + 常量池无 indy/Java7+ 类型）；
+**反例**：入口直接指生产类，靠「产品只支持 JDK 8+」的假设兜——一次真实用户的老项目就把宿主打死，且报错在用户的应用
+控制台里，看起来像插件崩了。
+
+**Seen 1× (2026-11-20)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |

@@ -63,6 +63,25 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
         manager.shutdownAll()
     }
 
+    /**
+     * T-OldJvmPremainGuard 券01：目标 JDK 载不动 agent 字节码时跳过注入，且通道/端口零副作用。
+     *
+     * 反向验证：把 [AgentManager.preparePremainVmOption] 里的 `targetJvmSupported` 分支摘掉，
+     * 本用例第一条断言必红（会真的注入一条把 JDK 6 应用打死的 `-javaagent`）。
+     */
+    fun test目标JDK过老_不注入不协商端口且提示只记一次() {
+        enableCapture()
+        assertNull("JDK 6（major 50）不得注入", manager.preparePremainVmOption(50))
+        assertTrue("老 JVM 上不得协商端口", manager.premainChannels.isEmpty())
+        assertEquals("应记一条判定值 50 的一次性提示", setOf("50"), manager.targetJvmNotifiedVersions)
+        assertNull("重复准备仍不注入", manager.preparePremainVmOption(50))
+        assertEquals("同一版本只提示一次", 1, manager.targetJvmNotifiedVersions.size)
+        // 未知（null）与达标（52）照常注入——闸门只拦「确定太老」
+        assertNotNull("未知版本应放行（由 agent 侧引导类兜底）", manager.preparePremainVmOption(null))
+        assertNotNull("JDK 8 应放行", manager.preparePremainVmOption(52))
+        manager.shutdownAll()
+    }
+
     // ---------- 注入产物 ----------
 
     fun test已确认_注入_端口协商与jar落盘同在位() {
