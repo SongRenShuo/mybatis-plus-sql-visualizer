@@ -6,6 +6,8 @@ import cn.song.mybatisplus.visualizer.ui.standalone.MissingSqlFragmentSupport
 import cn.song.mybatisplus.visualizer.ui.standalone.StandaloneSqlSourceResolver
 import cn.song.mybatisplus.visualizer.ui.standalone.StandaloneWarningText
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.util.Disposer
@@ -92,8 +94,8 @@ class SqlPreviewDialog(
      */
     private var lastSourceText: String? = null
 
-    /** 补齐重解析的代次守卫（只应用最后一次请求；弹窗 dispose 后不再回填）。 */
-    private var fillGeneration = 0L
+    /** 解析代次守卫：只应用最后一次请求（贴入停手与补齐重解析竞态时保最后一次；dispose 后不回填）。 */
+    private var resolveGeneration = 0
 
     init {
         title = MpSqlVisualizerBundle.message("dialog.preview.title")
@@ -205,21 +207,40 @@ class SqlPreviewDialog(
         val text = draftTextProvider()?.takeIf { it.isNotBlank() } ?: return
         // 记一手原文：识别成功后草稿文本变成渲染结果，补齐片段还得靠这段输入
         lastSourceText = text
-        val fresh = resolveForDisplay(text) ?: return
+        resolveOffEdt({ text }) { panel.showResult(it) }
         stopPasteReparse()
-        panel.showResult(fresh)
     }
 
-    /** 解析一段原文并映射成面板载荷（失败时带结构化四段文案，与工作台同源）。 */
-    private fun resolveForDisplay(text: String): PreviewResult? =
-        runCatching { StandaloneSqlSourceResolver.resolve(text) }.getOrNull()?.let { resolved ->
-            resolved.failure?.let { failure ->
-                resolved.result.copy(
-                    warning = StandaloneWarningText.failure(failure),
-                    informationalWarning = false,
-                )
-            } ?: resolved.result
+    /**
+     * 唯一的解析出口：池线程解析原文，回 EDT 按代次守卫应用（失败文案同源 [StandaloneWarningText]）。
+     *
+     * 识别（[StandaloneSqlSourceResolver]）是纯文本链（零 PSI/索引），最坏多次 DOM 解析、
+     * 输入上限 100k 字符时 EDT 直跑可停数百毫秒——故统一挪池线程。只应用最后一次请求
+     * （[resolveGeneration]），弹窗已释放则丢弃迟到产物。
+     */
+    private fun resolveOffEdt(textSource: () -> String?, applyOnEdt: (PreviewResult) -> Unit) {
+        val generation = ++resolveGeneration
+        val app = ApplicationManager.getApplication()
+        app.executeOnPooledThread {
+            val fresh = runCatching {
+                textSource()?.let { StandaloneSqlSourceResolver.resolve(it) }
+            }.getOrNull()?.let { resolved ->
+                resolved.failure?.let { failure ->
+                    resolved.result.copy(
+                        warning = StandaloneWarningText.failure(failure),
+                        informationalWarning = false,
+                    )
+                } ?: resolved.result
+            }
+            app.invokeLater(
+                {
+                    if (isDisposed || generation != resolveGeneration) return@invokeLater
+                    fresh?.let(applyOnEdt)
+                },
+                ModalityState.nonModal(),
+            )
         }
+    }
 
     /**
      * T-PreviewActionRow D-6/D-7：补齐一个缺失片段 → 用原文重解析 → 就地回填面板。
@@ -235,17 +256,8 @@ class SqlPreviewDialog(
         val content = missingFragmentPrompt(refid)
         if (!MissingFragmentFillFlow.record(refid, content, fragmentOverrides)) return
         stopPasteReparse()
-        val text = MissingSqlFragmentSupport.withFragments(source, fragmentOverrides)
-        val generation = ++fillGeneration
-        com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
-            val fresh = resolveForDisplay(text)
-            com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater(
-                {
-                    if (isDisposed || generation != fillGeneration || fresh == null) return@invokeLater
-                    panel.showResult(fresh)
-                },
-                com.intellij.openapi.application.ModalityState.nonModal(),
-            )
+        resolveOffEdt({ MissingSqlFragmentSupport.withFragments(source, fragmentOverrides) }) {
+            panel.showResult(it)
         }
     }
 
