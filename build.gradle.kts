@@ -78,6 +78,10 @@ dependencies {
     // compileOnly(libs.lombok)
     // annotationProcessor(libs.lombok)
     testImplementation(libs.junit)
+    // T-SyncK2JMaster180：D239 壳类测试（McpToolsetShellFactoryTest）用 kotlin-reflect 读
+    // shell.kotlin.declaredFunctions——master 侧由平台传递依赖提供，k2j 测试 JVM 显式声明
+    //（缺位时三例以 KotlinReflectionNotSupportedError 点名失败，CI run 44641384387 test(4)）。
+    testImplementation(kotlin("reflect"))
     // T-M23.13：真实 MP jar 进测试 classpath（Heavy 语义黄金用例——方法签名/注解元数据可解析；
     // 仅测试依赖，插件运行时零依赖不变；MPJ 1.5.x 不在 Central，暂不加）
     testImplementation(libs.mp.core)

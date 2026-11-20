@@ -763,6 +763,10 @@ public final class SqlPreviewPanelSqlViewKt {
         p.previousSql = null;
         // T-PreviewDisplayMode：显示模式随面板清空复位（与其余会话状态一致，不跨预览残留）
         p.displayMode = SqlPreviewPanel.PreviewDisplayMode.NORMAL;
+        // T-DegradedPreviewUx P1（T-SyncK2JMaster180 行为回填）：清空即停降级宽限定时器——
+        // 面板清空后「上一轮超时」的宽限期已无意义，迟到到点弹横幅反而误报（与 dispose
+        // 收口同构；master 侧依赖重预热装配链的时序巧合，本侧直给收口消除时序依赖）。
+        SqlPreviewPanelEditorLifecycleKt.cancelDegradedGraceTimer(p);
         SqlPreviewPanelEditorLifecycleKt.releaseEditor(p);
         p.editorHolder.removeAll();
         p.metaLabel.setText("");

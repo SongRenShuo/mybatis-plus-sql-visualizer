@@ -63,7 +63,7 @@ class SqlPreviewPanelDegradedUxTest : BasePlatformTestCase() {
         mapOf(),
         null,
         null,
-        null,
+        emptyList(),    // paramHints（master 默认参 emptyList()，null 会撞渲染链 hints.size() NPE）
         listOf(),
         null,
         null,
@@ -125,7 +125,7 @@ class SqlPreviewPanelDegradedUxTest : BasePlatformTestCase() {
                 ConditionView("c1", "station_id = 2", "false", false),
             ),
         ),
-        null,           // paramHints
+        emptyList(),    // paramHints（master 默认参 emptyList()，null 会撞渲染链 hints.size() NPE）
         listOf(),       // candidateTables
         null,           // batchModel
         null,           // xmlModel

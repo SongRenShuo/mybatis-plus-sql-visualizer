@@ -91,18 +91,25 @@ class McpToolsetShellFactoryTest {
         assertEquals("sqlv_check_sql", ann!!.name)
         // D239 三轮：必须复制 Metadata——没有它 kotlin-reflect 走 Java 视图，委托方法的
         // Continuation 会当成普通参数，平台 CallableBridge 直接判不可序列化。
-        assertNotNull("壳类应复制 kotlin.Metadata（suspend 语义来源）", shell.getAnnotation(Metadata::class.java))
+        // k2j 结构性差异（T-SyncK2JMaster180 登记）：k2j 生产树 100% Java，tool 源类是 .java
+        //（本就无 kotlin.Metadata），shellBytes 的 Metadata 复制链无源可读、壳亦不含 Metadata；
+        // 平台对 Java 壳走 Java 反射面（declaredMethods + 注解扫描），不依赖 Metadata——
+        // 本断言随之改约为「源无 Metadata → 壳无 Metadata 且委托/注解面完整」（上方两断言覆盖）。
+        assertNull(
+            "k2j 源类是 Java（无 Metadata 可复制），壳不应凭空携带 Metadata",
+            shell.getAnnotation(Metadata::class.java),
+        )
         // 委托目标可达：new 实例 + 调用转发方法（suspend 形态直接传 null Continuation 会 NPE，
         // 故只断言方法存在与注解正确，不做真实调用）
     }
 
     /**
-     * D239 三轮：壳类在 kotlin-reflect 眼里必须保留 **suspend 语义**。
+     * D239 三轮：壳类工具方法必须「平台可序列化」——真机失败条件是 Continuation 被当成普通参数。
      *
-     * 真机 2026-11-19 17:37 实证：无 `kotlin.Metadata` 时 kotlin-reflect 走 Java 视图，
-     * 委托方法的 `Continuation` 被当成普通参数（`arg4`），平台 `CallableBridge.ensureSerializable`
-     * 直接抛 `Type kotlin.coroutines.Continuation<...> is not serializable` → toolset 加载失败。
-     * 本用例把那条真机失败条件钉在单测层。
+     * master 形态：源 .kt 类有 kotlin.Metadata，壳复制后 kotlin-reflect 认出 suspend。
+     * **k2j 结构性差异（T-SyncK2JMaster180 登记）**：k2j 生产树 100% Java——源 tool 类本就是
+     * Java 方法（无 suspend/Continuation 形态），壳是 Java 字节码、平台走 Java 反射面，
+     * 序列化安全的等价断言 = 壳方法参数表**不含 kotlin.coroutines.Continuation**。
      */
     @Test
     fun `壳类工具方法在 kotlin-reflect 里保留 suspend 语义`() {
@@ -113,24 +120,23 @@ class McpToolsetShellFactoryTest {
             shellName,
         )
         val shell = McpToolsetDynamicRegistrar.ShellClassLoader.INSTANCE.define(shellName, bytes)
-        val fn = shell.kotlin.declaredFunctions.firstOrNull { it.name == "sqlv_check_sql" }
-        assertNotNull("kotlin-reflect 应能看到壳类自己声明的工具方法", fn)
+        val m = shell.declaredMethods.firstOrNull { it.name == "sqlv_check_sql" }
+        assertNotNull("壳类应声明工具方法", m)
         assertTrue(
-            "工具方法必须被识别为 suspend（否则 Continuation 进参数表、平台序列化失败）",
-            fn!!.isSuspend,
-        )
-        assertTrue(
-            "参数表不得含 Continuation，实际：${fn.parameters.map { it.name }}",
-            fn.parameters.none { it.type.classifier == kotlin.coroutines.Continuation::class },
+            "壳方法参数表不得含 Continuation（平台序列化失败的等价条件），实际：${m!!.parameterTypes.map { it.name }}",
+            m.parameterTypes.none { kotlin.coroutines.Continuation::class.java.isAssignableFrom(it) },
         )
     }
 
     /**
-     * D239 三轮：**全部 11 个**壳类的工具方法都必须被 kotlin-reflect 认成 suspend。
+     * D239 三轮：**全部壳类**的工具方法都必须「平台可序列化」。
      *
      * 真机 2026-11-19 17:47 实测：只有第一个 toolset 出工具，其余 10 个仍报
-     * `Continuation ... of parameter 'argN' is not serializable`——说明部分壳类的
-     * `kotlin.Metadata` 没能把委托方法解析成 Kotlin 函数。本用例逐个跑，失败时直接点名是哪个。
+     * `Continuation ... of parameter 'argN' is not serializable`。
+     *
+     * **k2j 结构性差异（T-SyncK2JMaster180 登记）**：k2j 生产树 100% Java——源 tool 类是 Java
+     * 方法（无 suspend 形态），壳是 Java 字节码。序列化安全的等价断言 = 逐壳的 @McpTool
+     * 委托方法**参数表不含 kotlin.coroutines.Continuation**（master 的 isSuspend 断言的 Java 形态）。
      *
      * k2j 适配：TOOL_CLASSES 为 private——走 toolClassesForTest() 只读访问器（master internal 语义）。
      */
@@ -141,26 +147,23 @@ class McpToolsetShellFactoryTest {
             val shellName = "cn.song.mybatisplus.visualizer.mcp.gen.ProbeAll${index}_" + System.nanoTime()
             val bytes = McpToolsetDynamicRegistrar.shellBytes(toolClass, FakeToolset::class.java, shellName)
             val shell = McpToolsetDynamicRegistrar.ShellClassLoader.INSTANCE.define(shellName, bytes)
-            val meta = shell.getAnnotation(Metadata::class.java)
-            val fn = runCatching { shell.kotlin.declaredFunctions }.getOrElse { e ->
-                failures.add("${toolClass.simpleName}: kotlin-reflect 抛 ${e.javaClass.simpleName}: ${e.message}")
-                return@forEachIndexed
-            }.firstOrNull { it.annotations.any { a -> a.annotationClass.simpleName == "McpTool" } }
-            if (meta == null) {
-                failures.add("${toolClass.simpleName}: 壳类没有 Metadata")
-            } else if (fn == null) {
-                failures.add(
-                    "${toolClass.simpleName}: kotlin-reflect 里找不到带 @McpTool 的函数，" +
-                        "declared=${runCatching { shell.kotlin.declaredFunctions.map { it.name } }.getOrNull()}",
-                )
-            } else if (!fn.isSuspend) {
-                failures.add(
-                    "${toolClass.simpleName}: ${fn.name} 未被识别为 suspend，" +
-                        "参数=${fn.parameters.map { it.name }}",
-                )
+            val toolMethods = shell.declaredMethods.filter {
+                it.getAnnotation(com.intellij.mcpserver.annotations.McpTool::class.java) != null
+            }
+            if (toolMethods.isEmpty()) {
+                failures.add("${toolClass.simpleName}: 壳类没有带 @McpTool 的委托方法")
+            } else {
+                toolMethods.forEach { m ->
+                    if (m.parameterTypes.any { kotlin.coroutines.Continuation::class.java.isAssignableFrom(it) }) {
+                        failures.add(
+                            "${toolClass.simpleName}: ${m.name} 参数表含 Continuation，" +
+                                "参数=${m.parameterTypes.map { it.name }}",
+                        )
+                    }
+                }
             }
         }
-        assertTrue("以下壳类的 suspend 语义丢失：\n" + failures.joinToString("\n"), failures.isEmpty())
+        assertTrue("以下壳类的工具方法序列化安全断言失败：\n" + failures.joinToString("\n"), failures.isEmpty())
     }
 
     /**
