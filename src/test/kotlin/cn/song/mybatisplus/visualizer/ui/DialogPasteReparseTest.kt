@@ -1,7 +1,9 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.standalone.StandaloneSqlSourceResolver
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import com.intellij.util.ui.UIUtil
 
 /**
  * 「先开弹窗、后贴内容」重识别测试（T-DialogPasteReparse）。
@@ -43,6 +45,30 @@ class DialogPasteReparseTest : BasePlatformTestCase() {
         runCatching { dialog.doDispose() }
     }
 
+    /**
+     * 识别挪池线程后回 EDT 应用 → 断言面板结果必须**有界轮询泵 EDT**（对齐仓内既有
+     * `awaitDialog`/`awaitStatus` 写法：dispatchAllInvocationEvents + sleep + deadline），
+     * 不能瞬时直读（空结果构造期 `panel.current` 已非 null，只等 non-null 会拿到旧值）。
+     *
+     * `predicate` 判「真正落定」的形态（如 `ibatisParamModel != null`），等不到时返回最后一次读数，
+     * 由调用方断言失败——不放宽断言。
+     */
+    private fun awaitCurrent(
+        dialog: SqlPreviewDialog,
+        timeoutMs: Long = 5_000,
+        predicate: (PreviewResult) -> Boolean = { true },
+    ): PreviewResult? {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        var last: PreviewResult? = null
+        while (System.currentTimeMillis() < deadline) {
+            UIUtil.dispatchAllInvocationEvents()
+            last = dialog.panelForTest()?.current
+            if (last != null && predicate(last)) return last
+            Thread.sleep(10)
+        }
+        return last
+    }
+
     /** 空弹窗待命 + 贴入 iBatis 片段 → 重识别出参数与条件行。 */
     fun test先开弹窗后贴入iBatis片段_能识别出参数与条件行() {
         val dialog = newDialog(autoParse = true)
@@ -51,12 +77,12 @@ class DialogPasteReparseTest : BasePlatformTestCase() {
 
             dialog.draftTextProvider = { ibatisFragment }
             dialog.reparseDraftFromEditor()
+            assertFalse("命中一次后必须交还手动（否则会与后续编辑打架）", dialog.pasteReparseArmedForTest())
 
-            val current = dialog.panelForTest()!!.current
+            val current = awaitCurrent(dialog) { it.ibatisParamModel != null }
             assertNotNull("重识别后面板应有结果", current)
             assertNotNull("iBatis 片段应产出条件/参数模型", current!!.ibatisParamModel)
             assertEquals("两个条件行", 2, current.ibatisParamModel!!.conditionRows.size)
-            assertFalse("命中一次后必须交还手动（否则会与后续编辑打架）", dialog.pasteReparseArmedForTest())
         } finally {
             closeDialog(dialog)
         }
@@ -68,7 +94,7 @@ class DialogPasteReparseTest : BasePlatformTestCase() {
         try {
             dialog.draftTextProvider = { ibatisFragment }
             dialog.reparseDraftFromEditor()
-            val first = dialog.panelForTest()!!.current
+            val first = awaitCurrent(dialog) { it.ibatisParamModel != null }
             assertNotNull(first)
 
             dialog.draftTextProvider = { "SELECT 1 FROM DUAL" }
