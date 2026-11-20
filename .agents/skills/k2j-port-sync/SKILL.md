@@ -45,6 +45,15 @@ master 的 .kt 一行都不进 k2j 生产树；共享文件（构建链/bundle/p
   （`git merge-file`，base 取锚点 blob、current 取 `git show HEAD:<file>` 禁取工作树文件、tmp 按册隔离）。
   **直取后必须全量对账**：`git diff <master-tip> --name-only` 逐件判向，抓回被直取误冲的 k2j 专属行
   （索引行/专属文档，136 轮抓回 9 条）。
+  **两道对账都要跑，缺一不可**（180 轮两次咬出缺口后固化）：
+  1. **delta 面**（本轮增量逐件有 k2j 承载）：`git diff <锚点>..<master-tip> --name-status` 的每一件都要在 k2j 找到
+     落点（.kt → 同名 .java / `XxxKt` 门面 / 双 provider 拆分形态都算承载）。
+  2. **全树面**（锚点外历轮遗留缺口）：`comm -13 <(git ls-files | sort) <(git ls-tree -r <master-tip> --name-only | sort)`，
+     排除 `src/main/kotlin`、`src/test/kotlin`（k2j 本就不该有的 Kotlin 源树）后**必须为零**。
+     只看 delta 会永远漏掉「锚点前就存在、k2j 从没取过」的资产面——180 轮实测两处：`gradle/plugin-change-notes.html`
+     （gate build 腿 C4/C5 红）与整棵 `database-lab/vendor/` + `dev-support/reverse-probes/` + `.github/workflows/nightly-full.yml`
+     （36 件，agent:test 厂商字节层用例红）。资产/工具面（`database-lab/`、`dev-support/`、`.github/`、`gradle/`、根级 md）
+     **不是可选面**，它们是门禁判据与夹具的载体。
 - **波次 D（主控，单路）**：全量门禁 → 修红 → 收官。
 
 ## 3. 翻译硬规则速查（每轮必踩的互操作形态）
