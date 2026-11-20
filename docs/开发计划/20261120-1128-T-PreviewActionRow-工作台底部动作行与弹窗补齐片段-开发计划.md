@@ -5,7 +5,7 @@
   1. 「sql预览这个tab下面 缺少下方的四个按钮吧」（附工作台截图：底部只有「缺少片段…」与「识别为 mapper XML 语句块」两行，没有动作按钮）
   2. 「我用弹框预览 xml 的内容没地方补充了 看看怎么优化下更合适」（附弹窗截图：`/* TODO: missing <sql id="Base_Column_List"> */` 占位在，但弹窗里没有任何补内容入口）
 - 关联：`20261120-1022-T-LoadFilePlacement`（上一轮把「从文件加载」从弹窗移到工作台，是问题二的叠加成因）、`20261118-1653-T-PreviewPolish`（补齐片段框 A 券立项处）
-- 状态：**仅立项，未动 `src/main`**
+- 状态：**已实施（master `81ebb4720`），待 GUI 验收**
 
 ## 一、问题一：工作台没有「产物动作行」，复制 SQL 在页签里根本不可达
 
@@ -169,4 +169,56 @@
 
 ## 九、实施记录
 
-（待实施后回填）
+实施于 2026-11-20，master 提交 `81ebb4720`（代码+测试），本文与 `CHANGELOG.md` 由随后一笔文档提交回填。
+
+### 9.1 逐项落点
+
+- **D-1/D-2（问题一）**：`SqlStandalonePreviewPanel` 新增 `bottomActions`（`executeAction / copySqlAction /
+  openInDialogAction / clearAction`）与手工 `JButton` 底部行（文字按钮；`复制 SQL` 走
+  `applyPrimaryButtonStyle` 作主行动）。**为什么手工 JButton 而非 ActionToolbar**：工具窗工具栏在图标
+  模式下只画图标，平台没有稳定的"强制文字"入口，而这一排要与弹窗底部同手感。enable 复用动作自身
+  `update()` 的 presentation（单一判定来源），在 `ensurePreviewPanel()` 与 `clear()` 两处刷新。
+  顶部 `inputActions` 收敛为 `resolve / format / loadFile`。
+  - `CopySqlAction` 调 `copySql(offerClosePanelAction = false)`——默认值会在通知里挂一条
+    「关闭 SQL 面板」死链接（`onClosePanelRequested` 只有弹窗注入），已按 P-2 规避并加用例钉住。
+- **D-4（问题二）**：`PreviewResult.missingFragmentIds`（默认空表）+ `StandaloneSqlSourceResolver.withMissingFragments`
+  在 `resolve()` 收口处按 `decoded` 文本填（转义形态的 `&lt;include&gt;` 只有解码后才看得见）。
+- **D-5**：`SqlPreviewPanel` 新增 `missingFragmentLabel`（挂 `northHost` 的 SOUTH 栈，即降级横幅同族）
+  + `missingFragmentFillHandler`（setter 即时刷新）+ `refreshMissingFragmentHint(ids)`；**双条件可见**
+  （载荷有缺失 && 已注入回调），缺一即隐藏、不占高度。`updateMeta` 与本类 `clear()` 各驱动一次。
+- **D-6**：新增 `MissingFragmentFillFlow`（`promptViaDialog` + 纯函数 `record`）；工作台 `promptMissingFragment`
+  删除，改 `fillMissingFragment`（内容来自 `missingFragmentPrompt` 注入缝 → `record` → `resolveFromInput`）。
+- **D-7**：`SqlPreviewService.showResult(..., sourceText)` → `SqlPreviewDialog(sourceText)`；弹窗本地
+  `fragmentOverrides` + `lastSourceText`（贴入路径），`fillMissingFragment` 先 `stopPasteReparse()` 再用原文
+  重解析并 `panel.showResult`（不重开弹窗）。工作台 `openDialogWith` 传 `sourceText = inputEditor.text`。
+- **D-8**：新增 `standalone.action.copySql(.description)` / `standalone.status.copy.noPreview` /
+  `panel.missingFragment.label`；删 `standalone.missingFragment.label`（提示行改由面板渲染），中英同步。
+
+### 9.2 读数
+
+- 定向（平台桶，6 类）：**38 例 0 红**——`SqlPreviewDialogTest` 16 / `SqlPreviewPanelMissingFragmentHintTest` 5 /
+  `SqlStandaloneActionRowTest` 4 / `SqlStandalonePreviewPanelDialogTest` 6 / `SqlStandaloneLoadFileTest` 4 /
+  `SqlStandaloneExecuteActionTest` 3。
+- **面板全家桶（P-1 排查）**：`SqlPreviewPanel*` + `SqlPreviewTopRowLayoutTest` 共 **31 类 280 例 0 红** ——
+  新提示行的挂载没有撞既有结构断言。
+- 快桶（3 类）：**51 例 0 红**——`StandaloneSqlSourceResolverTest` 36（含新增 5 例缺失片段用例）/
+  `MissingSqlFragmentFillFlowTest` 4 / `MissingSqlFragmentSupportTest` 11。
+- 反向验证（逐个单独打，恢复后复跑全绿；`grep RED PROBE` 为空）：
+  1. 面板去掉 handler 门控（`if (first == null)`）→ `test有缺失但无补齐回调时隐藏提示行` 1 红；
+  2. 弹窗无条件注册 handler → `test弹窗没有原文时不显示补齐入口` 1 红；
+  3. 底部 `bottomActions` 去掉 `copySqlAction` → 动作序列 + enable 两条 **2 红**；
+  4. 工作台 `openDialogWith` 不传 `sourceText` → `test在弹框中打开_缺片段时弹窗内出现补齐入口` 1 红。
+
+### 9.3 过程中的坑（已入 LESSONS）
+
+- **首轮把四条探针一起打时只红了 4 条（预期 5）**：`不传 sourceText` 那条被"面板去掉 handler 门控"掩盖——
+  门控一去掉，可见性不再由 handler 决定，「有原文才显示」这整类断言恒绿。探针是**串联门控**，必须逐个打。
+  记 **L91**。
+- `SqlPreviewPanel` 的构造器/扩展函数分布（`toolbar()` 在 ResultView、`clear()` 在 SqlView）导致新行要跨
+  两个扩展文件各改一处；`updateMeta` 的四处调用点都传同一份 `result`，不需要粘性字段（已在计划 P-x 核对）。
+
+### 9.4 遗留
+
+- A-1~A-7 的 **GUI 验收待用户**（尤其 A-4：工作台开窗后在弹窗里点补齐、A-5：gutter 来源弹窗不出现该行）。
+- 方案 C（拖放）仍不进本轮；`copyExecutableSql()`（参数化可执行复制）依旧没有 UI 入口，单独评估。
+
