@@ -149,4 +149,50 @@ M-1 是平台惯例问题：`FileChooser.chooseFile(descriptor, project, parentC
 
 ## 八、实施记录
 
-（待实施后回填）
+实施于 2026-11-20（master `54af4e9f3`，含测试契约修正的后续笔）。
+
+### 8.1 逐项落点
+
+- **D-1（问题一）**：`MapperFileLoader.chooseFile(project, titleKey, parentComponent)` —— 改走**带父组件**的
+  `FileChooser.chooseFile(descriptor, parent, project, null)` 重载；补齐框传 `window ?: contentPane`，
+  工作台「从文件加载…」传面板自身。`pickFromFile` 的「选 → 后台读 → 回 EDT 回填」三段与
+  `loadFileGeneration`/`isDisposed` 守卫保持原样（本项只改选择器的归属窗口）。
+- **D-2（问题二）**：`metaCoreText = meta`（不再拼 `warningLine`）；**`warningLine` 单独补进
+  `metaTooltipCore`**，悬停仍能看完整原因。横幅、`metaLabel` 变红、`errorCopyButton` 可见性、
+  `currentWarning` 的全部消费点未变。
+- **D-3（问题三）**：新增 `perfLabel` + `perfRow`（`northHost` 内、`topRow` 正下方），
+  `applyPerfRow()` 按**行自身宽度**预算着色与「丢尾段 + …」；无建议时整行 `isVisible=false`；
+  `applyMetaTruncation` 只做 meta 单行（`fullDisplayText()` 退化为 `metaLineText`）；`clear()` 同步复位。
+- **D-5（测试）**：新增 `SqlPreviewPanelInfoLayoutTest`（4 例：警告只在横幅 / 性能建议独占整行 /
+  无建议隐藏 / 清空复位）；同步更新 `SqlPreviewTopRowLayoutTest`、`SqlPreviewPanelJpaBehaviorTest`、
+  `XmlPreviewPanelTest`、`SqlStandaloneActionRowTest` 的契约断言。
+- **用户口头追加（工具栏分区二次调整）**：清空与在弹框中打开**回到顶部图标区**，底部只留
+  「执行 SQL / 复制 SQL」——按「同一动作不两处重复」+「用户按位置记忆随时可用的操作」取舍。
+- **未做（待拍板）**：**P-2**（meta 是否保留「⚠ 有警告」极简标记）、**P-3**（横幅是否追加
+  「可用下方补齐片段」）、**D-4**（依赖 P-3）。D-6 bundle 未新增键——本次没有新增面向用户的文案串
+  （性能建议行沿用既有 `perf.*` 文案，无「性能建议：」前缀）。
+
+### 8.2 读数
+
+- 定向（10 类）：**99 例 0 红**——`SqlPreviewPanelInfoLayoutTest` 4 / `SqlPreviewTopRowLayoutTest` 9 /
+  `SqlPreviewPanelMetaHintTooltipTest` 7 / `SqlPreviewPanelJpaBehaviorTest` 4 / `XmlPreviewPanelTest` 16 /
+  `ParamImportDialogTest` 15 / `SqlPreviewPanelStackDigestTest` 18 / `SqlStandaloneActionRowTest` 4 /
+  `SqlStandaloneLoadFileTest` 6 / `SqlPreviewDialogTest` 16。
+- 面板全家桶：`SqlPreviewPanel*` + `SqlPreviewTopRowLayoutTest` + `SqlPreviewDialogTest` + `standalone.*`
+  共 **389 例，首跑 1 红**：`SqlPreviewPanelBindStateTest.test指示行迁顶栏更多按钮下方` —— 断言
+  「工具栏行与指示行同一个父容器」，而本轮在两者之间插入了性能建议行（层级多一层）。
+  **处置＝改判据不改结构**：改成「指示行仍挂北区宿主 CENTER」「工具栏仍在 NORTH 槽位内
+  （`SwingUtilities.isDescendingFrom`）」——保住原意（指示行紧跟工具栏区、不回参数区），
+  且不再对中间插一层容器过敏。
+- **反向验证**（逐个打、各自还原）：
+  1. `metaCoreText = meta + warningLine` → `test警告只在横幅_meta可见行不再重复` **1 红**（贴出读数：
+     meta 行出现「⚠ Include refid 'Cols' not found…」）；
+  2. 把 perf 塞回 `metaLabel` 的 `<br>` 第二行并停掉 `applyPerfRow()` → **2 红**
+     （`test性能建议独立整行_不参与meta宽度预算`、`test清空后performance行复位`）。
+
+### 8.3 遗留
+
+- **A-1 / A-2 只能真机验**：`FileChooser` 的归属窗口在 headless 里无法断言（没有真实模态窗口栈），
+  需在沙盒里点一次「从文件选择…」与「从文件加载…」，确认选择器弹在**前台**可选。
+- P-2 / P-3 / D-4 待用户拍板；若采纳 P-3，改动落在横幅文案（`panel.banner.renderFailed` 的调用点）与 bundle 中英各一条。
+- `SqlPreviewPanelBindStateTest` 的判据放宽属**有意的契约调整**，已在提交信息与本记录写明，不是被顺手改绿的。
