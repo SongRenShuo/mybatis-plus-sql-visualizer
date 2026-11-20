@@ -179,6 +179,24 @@ class SqlPreviewPanel(
     internal var lastMetaBudget: Int = -1
 
     /**
+     * T-PreviewInfoLayout D-3：性能建议**独立整行**（topRow 正下方、横幅之上）。
+     *
+     * 为什么从 meta 第二行搬出来：原实现把 perf 渲染成 `metaLabel` 的 `<br>` 第二行，预算 = topRow 宽 −
+     * 工具栏理想宽 − 边距；工具栏常态 7 个按钮，工作台侧栏一窄就只能分到几十像素，结果被逐段丢尾，
+     * 用户看到的是「…集，建议添加 LIMIT」这种残句（2026-11-20 沙盒截图）。整行宿主不受工具栏挤压。
+     */
+    internal val perfLabel = JBLabel().apply {
+        border = JBUI.Borders.empty(0, 8, 2, 8)
+        isVisible = false
+    }
+
+    /** perf 行宿主（布局断言与宽度预算用）。构造期即建成，`applyPerfRow` 可在任何初始化路径安全调用。 */
+    internal val perfRow = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+        isOpaque = false
+        add(perfLabel, BorderLayout.CENTER)
+    }
+
+    /**
      * T-DialectStatusLiveRefresh：当前方言决策（初值来自 [PreviewResult.dialectDecision]）。
      * 执行/绑定后可重算升级；meta 行只重组方言段，不重跑 [updateMeta] 的警示/横幅全链。
      */
@@ -937,7 +955,15 @@ class SqlPreviewPanel(
         // 不随参数区重建（常驻语义不再依赖参数区是否建行），refreshBindStateRow 单点刷新链不变。
         val northHost = JBPanel<JBPanel<*>>(BorderLayout()).apply {
             isOpaque = false
-            add(topRow, BorderLayout.NORTH)
+            add(
+                JBPanel<JBPanel<*>>(BorderLayout()).apply {
+                    isOpaque = false
+                    add(topRow, BorderLayout.NORTH)
+                    // T-PreviewInfoLayout D-3：topRow 下方紧贴性能建议整行（不参与 meta 的宽度预算）
+                    add(perfRow, BorderLayout.CENTER)
+                },
+                BorderLayout.NORTH,
+            )
             add(buildBindStateRow(), BorderLayout.CENTER)
             // T-DmlImpactProminence：降级横幅与影响行数结果横幅上下各占一行（并存不抢位）
             dmlImpactBanner.add(dmlImpactBannerLabel, BorderLayout.CENTER)
@@ -957,6 +983,11 @@ class SqlPreviewPanel(
         topRow.addComponentListener(object : java.awt.event.ComponentAdapter() {
             override fun componentResized(e: java.awt.event.ComponentEvent) = applyMetaTruncation()
             override fun componentShown(e: java.awt.event.ComponentEvent) = applyMetaTruncation()
+        })
+        // T-PreviewInfoLayout D-3：perf 行整行重算（它有自己的宽度，不再受工具栏挤压）
+        perfRow.addComponentListener(object : java.awt.event.ComponentAdapter() {
+            override fun componentResized(e: java.awt.event.ComponentEvent) = applyPerfRow()
+            override fun componentShown(e: java.awt.event.ComponentEvent) = applyPerfRow()
         })
         // T-ParamNameTruncation：左栏视口宽度变化（拖分隔条 / 拉窗口 / 首显）→ 标签列宽原地重算。
         // 旧实现只在 rebuildLeftPanel 那一瞬间算一次，宽面板里仍按窄列宽截断参数名。
@@ -1350,6 +1381,18 @@ class SqlPreviewPanel(
      * 悬停内容契约（真实悬停动作本身不在自动化范围）。
      */
     internal fun metaTooltipForTest(): String? = metaLabel.toolTipText
+
+    /** T-PreviewInfoLayout D-3：性能建议整行的可见文本（headless 未布局时为全文 HTML）。 */
+    internal fun perfLabelForTest(): String = perfLabel.text
+
+    /** T-PreviewInfoLayout D-3：性能建议整行是否可见（无建议即隐藏，不占高度）。 */
+    internal fun perfLabelVisibleForTest(): Boolean = perfLabel.isVisible
+
+    /** T-PreviewInfoLayout D-3：性能建议行 tooltip（恒全文，纯文本）。 */
+    internal fun perfLabelTooltipForTest(): String? = perfLabel.toolTipText
+
+    /** T-PreviewInfoLayout D-3：性能建议行宿主（布局断言用）。 */
+    internal fun perfRowForTest(): JBPanel<JBPanel<*>> = perfRow
 
     /** T-StackHoverUi：当前喂给悬停弹层的栈快照（接线断言用——tooltip 不再承载栈文本）。 */
     internal fun stackDigestForTest(): String? = stackHover.currentDigestForTest()

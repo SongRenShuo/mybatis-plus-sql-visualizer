@@ -74,16 +74,18 @@ class SqlStandaloneActionRowTest : BasePlatformTestCase() {
     // D-1/D-2：动作分区
     // ------------------------------------------------------------------
 
-    fun test顶部只留输入侧三项_底部是产物侧四项() {
+    fun test顶部五个图标_底部只留执行与复制() {
         val p = newPanel()
+        // T-PreviewActionRow 二轮（用户反馈）：清空 / 在弹框中打开 回到顶部——它们是按位置记忆的
+        // 「随时可用」操作；底部只保留两个真正新增的产物出口（执行 SQL / 复制 SQL），不做两处重复。
         assertEquals(
-            "顶部工具栏应只剩输入侧动作（解析 / 格式化 / 从文件加载）",
-            listOf("ResolveAction", "FormatAction", "LoadFileAction"),
+            "顶部工具栏应为 解析 / 格式化 / 从文件加载 / 清空 / 在弹框中打开",
+            listOf("ResolveAction", "FormatAction", "LoadFileAction", "ClearAction", "OpenInDialogAction"),
             p.inputToolbarActionNamesForTest(),
         )
         assertEquals(
-            "底部动作行应为 执行 / 复制 / 在弹框中打开 / 清空",
-            listOf("ExecuteAction", "CopySqlAction", "OpenInDialogAction", "ClearAction"),
+            "底部动作行应只剩 执行 / 复制",
+            listOf("ExecuteAction", "CopySqlAction"),
             p.bottomActionNamesForTest(),
         )
     }
@@ -92,8 +94,6 @@ class SqlStandaloneActionRowTest : BasePlatformTestCase() {
         val p = newPanel()
         assertEquals("未解析时执行应禁用", false, p.bottomButtonEnabledForTest("ExecuteAction"))
         assertEquals("未解析时复制应禁用", false, p.bottomButtonEnabledForTest("CopySqlAction"))
-        assertEquals("清空恒可用", true, p.bottomButtonEnabledForTest("ClearAction"))
-        assertEquals("在弹框中打开恒可用", true, p.bottomButtonEnabledForTest("OpenInDialogAction"))
 
         p.setInputTextForTest("SELECT id FROM t_user WHERE name = ?")
         p.resolveFromInput()

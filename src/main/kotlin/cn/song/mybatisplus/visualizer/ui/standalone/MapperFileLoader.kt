@@ -40,12 +40,21 @@ internal object MapperFileLoader {
      * 由调用方在后台线程执行——选文件与读文件在两处，各自放在对的线程上。
      *
      * @param titleKey 选择框标题的 bundle 键（两个入口文案不同，但行为同一）。
+     * @param parentComponent 选择器的**父组件**。从模态框里调用时**必须**传当前框自己的窗口，
+     *   否则选择器解析不到 owner：会被压在模态框后面或干脆不显示，用户观感是「点了没反应」
+     *   （T-PreviewInfoLayout 问题一：补齐框是 `DialogWrapper(project, true)` 模态框，两处原先都传 null）。
      */
-    fun chooseFile(project: Project?, titleKey: String): VirtualFile? {
+    fun chooseFile(
+        project: Project?,
+        titleKey: String,
+        parentComponent: java.awt.Component? = null,
+    ): VirtualFile? {
         val descriptor = FileChooserDescriptorFactory
             .createSingleFileDescriptor("xml")
             .withTitle(MpSqlVisualizerBundle.message(titleKey))
-        return FileChooser.chooseFile(descriptor, project, null)
+        // 平台 243 的「带父组件」重载是 (descriptor, parent, project, toSelect)——注意 parent 在前；
+        // 若走 (descriptor, project, toSelect) 那条，模态框里没有 owner，选择器会被挡住/不显示。
+        return FileChooser.chooseFile(descriptor, parentComponent, project, null)
     }
 
     /**

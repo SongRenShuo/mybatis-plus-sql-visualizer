@@ -10,6 +10,7 @@ import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.ui.components.JBLabel
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -389,7 +390,15 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         panel.showResult(result)
         assertNotNull("编辑器应正常显示 SQL", panel.editorForTest())
-        assertTrue("渲染错误应显示在元信息警示", panel.metaLabelForTest().contains("⚠"))
+        // T-PreviewInfoLayout D-2：警告正文不再进 meta 可见行（与黄色横幅重复），改由横幅承载；
+        // 这里同时钉住「警告没有丢」——currentWarning 与横幅仍在。
+        assertFalse("meta 行不应再承载警告正文", panel.metaLabelForTest().contains("⚠"))
+        assertNotNull("渲染错误必须仍被记录为当前警告", panel.currentWarning)
+        assertEquals(
+            "警告应由横幅承载",
+            DegradationBanner.Kind.RENDER_WARNING,
+            panel.degradationBannerForTest().kindForTest(),
+        )
         panel.clear()
     }
 

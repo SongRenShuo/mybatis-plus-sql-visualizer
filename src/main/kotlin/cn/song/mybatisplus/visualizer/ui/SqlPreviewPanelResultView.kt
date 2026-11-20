@@ -871,11 +871,14 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
     // T-DialectStatusLiveRefresh：方言决策与其余分段分开缓存——执行/绑定后只重组方言段
     // （recomposeDialectStatusText），不重跑本函数的警示/横幅/错误按钮全链。
     currentDialectDecision = result.dialectDecision
-    metaCoreText = meta + warningLine
+    // T-PreviewInfoLayout D-2：meta 行**不再拼警告正文**——同一句 warning 已在黄色横幅里（含 tooltip、
+    // 点击看全文、「复制错误信息」），meta 再贴一份只会跟表名/判型依据抢那点可见宽度，还会被截成半句。
+    // 悬停仍要看得到完整原因：warningLine 单独补进 tooltip（见下 metaTooltipCore）。
+    metaCoreText = meta
     metaLineDigest = stackInline
     metaPerfSegments = buildPerfSegments(result)
     // T-PreviewStmtTypeScope：判型依据的「全部候选」进悬停（可见行只留命中的那一条，避免挤掉表名）
-    metaTooltipCore = metaCoreText + metaPerfSegments.joinToString("；") { it.text } +
+    metaTooltipCore = meta + warningLine + metaPerfSegments.joinToString("；") { it.text } +
         stmtTypeCandidatesSection(result)
     // T-PreviewStmtTypeScope D-3：同步「预览目标」切换入口（多档可见，单档隐藏）
     updateStmtTypeSwitch(result)
@@ -949,12 +952,14 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
  * T-PreviewTopOverlap F3：元信息宽度预算截断。
  *
  * 预算 = topRow 宽 − 工具栏理想宽 − topRow 边距 − metaLabel 左右边距；未布局（width<=0）跳过，
- * 等组件首显/拉伸时由 ComponentListener 触发。超预算时 meta 行中段省略（复用 T-M26.3 ellipsize），
- * perf 行丢尾段加省略号（HTML 标签外截断）；tooltip 恒全文。宽度未变短路防重算抖动。
+ * 等组件首显/拉伸时由 ComponentListener 触发。超预算时 meta 行中段省略（复用 T-M26.3 ellipsize）。
+ * T-PreviewInfoLayout D-2/D-3：meta 只剩单行（不含警告、不含性能建议），第二行的宽度问题整体消失。
  */
 
 internal fun SqlPreviewPanel.applyMetaTruncation() {
-    if (metaLineText.isEmpty() && metaPerfSegments.isEmpty()) return
+    // T-PreviewInfoLayout D-3：性能建议有自己的整行，先刷新它（与 meta 预算互不牵连）
+    applyPerfRow()
+    if (metaLineText.isEmpty()) return
     val width = topRow.width
     if (width <= 0) {
         // 未布局（showResult 先于首帧布局 / headless 测试）：先展示全文，布局后由 ComponentListener 按预算重截
@@ -967,21 +972,42 @@ internal fun SqlPreviewPanel.applyMetaTruncation() {
     lastMetaBudget = budget
     val metrics = metaLabel.getFontMetrics(metaLabel.font)
     val widthOf = { s: String -> metrics.stringWidth(s) }
-    val line1 = metaLineWithinBudget(metaLineText, metaLineHead, metaLineDigest, widthOf, budget)
-    metaLabel.text = if (metaPerfSegments.isEmpty()) {
-        line1
-    } else {
-        "<html>$line1<br>${perfLineHtml(budget, metrics)}</html>"
+    metaLabel.text = metaLineWithinBudget(metaLineText, metaLineHead, metaLineDigest, widthOf, budget)
+}
+
+/**
+ * T-PreviewInfoLayout D-3：刷新性能建议整行。
+ *
+ * 宿主是 `northHost` 里 topRow 正下方的独立行，宽度＝面板宽（不再减去工具栏），所以同样的建议
+ * 不会再被截成「…集，建议添加 LIMIT」。预算按行自身宽度算，放不下时沿用 [perfLineHtml] 的
+ * 「丢尾段 + …」策略；tooltip 恒全文。
+ */
+internal fun SqlPreviewPanel.applyPerfRow() {
+    if (metaPerfSegments.isEmpty()) {
+        perfLabel.isVisible = false
+        perfLabel.text = ""
+        perfLabel.toolTipText = null
+        return
     }
+    val plain = metaPerfSegments.joinToString("；") { it.text }
+    perfLabel.isVisible = true
+    perfLabel.toolTipText = plain
+    val rowWidth = perfRow.width
+    if (rowWidth <= 0) {
+        // 未布局：先给全文（含原着色），布局后由 perfRow 的 ComponentListener 按预算重截
+        perfLabel.text = "<html>" + metaPerfSegments.joinToString("；") {
+            "<font color=\"${it.color}\">${it.text}</font>"
+        } + "</html>"
+        return
+    }
+    val insets = perfRow.insets.let { it.left + it.right } + perfLabel.insets.let { it.left + it.right }
+    val budget = (rowWidth - insets).coerceAtLeast(MIN_META_BUDGET_PX)
+    perfLabel.text = "<html>${perfLineHtml(budget, perfLabel.getFontMetrics(perfLabel.font))}</html>"
 }
 
-/** F3：全文展示文本（未布局/预算充裕时）——meta 行 + perf 行原着色 markup，与 T-SqlPerf 原渲染一致。 */
+/** F3：全文展示文本（未布局/预算充裕时）——meta 行单行；性能建议走 [applyPerfRow]。 */
 
-internal fun SqlPreviewPanel.fullDisplayText(): String {
-    if (metaPerfSegments.isEmpty()) return metaLineText
-    val markup = metaPerfSegments.joinToString("；") { "<font color=\"${it.color}\">${it.text}</font>" }
-    return "<html>$metaLineText<br>   $markup</html>"
-}
+internal fun SqlPreviewPanel.fullDisplayText(): String = metaLineText
 
 /** F3：perf 行预算内重拼——逐段（含「；」分隔宽）按像素累计，放得下保留原着色；放不下丢尾段并加省略号。 */
 

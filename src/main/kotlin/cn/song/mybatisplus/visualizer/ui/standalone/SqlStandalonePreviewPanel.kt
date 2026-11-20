@@ -151,9 +151,11 @@ class SqlStandalonePreviewPanel(
     private val openInDialogAction = OpenInDialogAction()
 
     /**
-     * 输入侧动作（T-PreviewActionRow D-2）：解析 / 格式化 / 从文件加载——都只影响**输入区**。
+     * 顶部工具栏（图标）：解析 / 格式化 / 从文件加载 / 清空 / 在弹框中打开。
      *
-     * 产物侧（执行 / 复制 / 在弹框中打开 / 清空）已下沉到底部动作行，见 [bottomActions]。
+     * T-PreviewActionRow 二轮（用户 2026-11-20 反馈「清空与在弹框中打开这两个按钮需要保留」）：
+     * 这两项回到顶部——它们是用户按位置记忆的「随时可用」操作；底部只留两个真正新增的产物出口
+     * （执行 SQL / 复制 SQL），同一动作不再两处重复。
      */
     private val inputActions: List<AnAction> = listOf(
         resolveAction,
@@ -161,14 +163,14 @@ class SqlStandalonePreviewPanel(
         // 读文件是**输入源**能力，只挂在有输入区的工作台上；通用预览弹窗
         //（22 个文件 / 53 处调用点共用、只展示已渲染 SQL）不再拥有它。
         LoadFileAction(),
+        clearAction,
+        openInDialogAction,
     )
 
-    /** 产物侧动作（顺序即底部按钮顺序；enable 由 [refreshBottomActions] 统一刷新）。 */
+    /** 底部动作行（顺序即按钮顺序；enable 由 [refreshBottomActions] 统一刷新）。 */
     private val bottomActions: List<AnAction> = listOf(
         executeAction,
         copySqlAction,
-        openInDialogAction,
-        clearAction,
     )
 
     /** 底部按钮（与 [bottomActions] 下标一一对应）。 */
@@ -400,7 +402,12 @@ class SqlStandalonePreviewPanel(
         override fun actionPerformed(e: AnActionEvent) {
             // 一、选文件（EDT）：FileChooser 是 UI 操作，测试缝可替换
             val file = fileChooserForTest?.invoke()
-                ?: MapperFileLoader.chooseFile(project, "standalone.action.loadFile.title")
+                // parent 传本面板：选择器归属工具窗，不落到主窗口后面（T-PreviewInfoLayout 问题一）
+                ?: MapperFileLoader.chooseFile(
+                    project,
+                    "standalone.action.loadFile.title",
+                    parentComponent = this@SqlStandalonePreviewPanel,
+                )
                 ?: return
             // 二、读前粗筛（EDT，零成本）：UTF-8 单字符最多 4 字节，字节数 > 4×字符上限
             //      ⇒ 字符数必超上限，直接拒绝——避免把极端大文件整份读进内存再被精确判据丢弃。

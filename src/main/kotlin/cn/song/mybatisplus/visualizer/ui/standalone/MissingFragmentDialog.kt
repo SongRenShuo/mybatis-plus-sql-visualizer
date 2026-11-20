@@ -76,7 +76,13 @@ class MissingFragmentDialog(
      * `isDisposed` 守卫丢弃用户已关框后晚到的读取结果。
      */
     private fun pickFromFile() {
-        val file = MapperFileLoader.chooseFile(project, "standalone.missingFragment.fromFile.title") ?: return
+        // T-PreviewInfoLayout 问题一：本框是模态框，选择器必须挂在它自己的窗口上——
+        // parent 传 null 时选择器解析不到 owner，会被压在模态框后面/不显示（点了没反应）。
+        val file = MapperFileLoader.chooseFile(
+            project,
+            "standalone.missingFragment.fromFile.title",
+            parentComponent = window ?: contentPane,
+        ) ?: return
         val app = ApplicationManager.getApplication()
         app.executeOnPooledThread {
             val text = MapperFileLoader.loadText(file) ?: return@executeOnPooledThread

@@ -745,6 +745,10 @@ internal fun SqlPreviewPanel.clear() {
     metaLineDigest = ""
     metaPerfSegments = emptyList()
     lastMetaBudget = -1
+    // T-PreviewInfoLayout D-3：性能建议整行随清空收起（下次 updateMeta 重建）
+    perfLabel.text = ""
+    perfLabel.toolTipText = null
+    perfLabel.isVisible = false
     // T-DialectStatusLiveRefresh：方言决策与分段缓存同源复位，不跨预览残留
     currentDialectDecision = null
     metaCoreText = ""
