@@ -922,6 +922,16 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "调用面期望计数同步防扫面失明空绿。判定内核与自证用例同文件：" +
                     "`守卫自证_未收敛调用点必红_收敛豁免与注释形态各归其位`（六组合成样本双向判别）。",
             ),
+            // ---- T-SyncK2JMaster180：CI 关键测试腿接线契约（2026-11-20） ----
+            GuardEntry(
+                "convention/CiWorkflowCoverageGuardTest.kt",
+                listOf(DecisionFn("violationsIn", FnKind.VIOLATIONS)),
+                "CI 关键测试腿接线契约守卫：build-plugin gate 必须有独立 agenttest job 跑 " +
+                    ":sql-visualizer-agent:test（且打包命令行不得串入该腿，防回退拖长关键路径）、nightly 必须" +
+                    "有 :sql-visualizer-agent:test 与 :testExternal、push-test 必须有 :testShard，凡跑 agent 腿" +
+                    "的命令行必须带 -PagentTestExclude（真库用例剔除口径一致）。判定内核 violationsIn 返回" +
+                    "违规说明集合；自证=缺腿与串行回退的合成样本必被抓出 + 完整样本放行两用例。",
+            ),
 
             GuardEntry(
                 "convention/DialogWrapperInitOrderGuardTest.kt",
