@@ -62,7 +62,7 @@ OpenJDK Runtime Environment (Zulu 6.22.0.3-win64) (build 1.6.0-119-b119)
 
 运行期类版本上限实测：JDK 6 `java.class.version=50.0`，JDK 8 `52.0`，agent 产物 `52`——差值就是这次故障的全部。
 
-测试程序用 **JDK 6 自己的 javac** 编（`-source 1.6 -target 1.6`，否则程序本身也起不来），载体是**真实产出的 `mps-sql-agent.jar`**。复现产物在 `%TEMP%\mpsv-jdk6-repro\`。
+测试程序用 **JDK 6 自己的 javac** 编（`-source 1.6 -target 1.6`，否则程序本身也起不来），载体是**真实产出的 `mps-sql-agent.jar`**。复现产物的临时目录（`%TEMP%\mpsv-jdk6-repro\`，含包拷贝与打补丁脚本）验收后已清理，按本节命令可随时重建；真 JDK 6 保留在 `D:\HuanJing\Java\jdk1.6.0_119`。
 
 ### 3.2 三组读数
 
