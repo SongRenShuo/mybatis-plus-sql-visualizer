@@ -272,6 +272,12 @@ object ExplainJsonPlanTree {
      * PEV-03 起 internal 并带 [depth]（根层 0，`Plans` 子计划逐层 +1）——时间统计的层级聚合
      * 与 unaccounted 计算共用本遍历（单一来源，禁复制第二套塌缩语义）。R61 的
      * [flattenPlanNodes] 消费方忽略 depth，行为不变。
+     *
+     * UI-001：EXPLAIN **ANALYZE** 档顶层是双键 `{"Plan": {…}, "Planning Time": 0.xxx}`
+     * （还可能带 "Triggers"/"JIT" 等键）——单键塌缩不命中曾让统计遍历一无所获。放宽：非单键
+     * 且自身非计划节点的对象逐 entry 下钻——值为含 `"Node Type"` 的对象、或键名为
+     * `"Plan"`/`"Plans"` 且值为对象/数组。depth 传递语义不变：包装层不加 depth，只有真正
+     * 计划节点 sink 后其 `"Plans"` 子计划才 +1。
      */
     internal fun collectPlanObjects(el: JsonElement, depth: Int, sink: (com.google.gson.JsonObject, Int) -> Unit) {
         when {
@@ -283,6 +289,12 @@ object ExplainJsonPlanTree {
                     obj.get("Plans")?.let { plans -> collectPlanObjects(plans, depth + 1, sink) }
                 } else if (obj.size() == 1) {
                     collectPlanObjects(obj.entrySet().first().value, depth, sink)
+                } else {
+                    obj.entrySet().forEach { (key, value) ->
+                        val drill = (value.isJsonObject && value.asJsonObject.get("Node Type") != null) ||
+                            ((key == "Plan" || key == "Plans") && (value.isJsonObject || value.isJsonArray))
+                        if (drill) collectPlanObjects(value, depth, sink)
+                    }
                 }
             }
             else -> Unit

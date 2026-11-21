@@ -75,4 +75,45 @@ class ExplainPlanStatsTest {
         // 两个互不相干的叶子根：无内节点 → 无 unaccounted
         assertTrue(stats.unaccounted.isEmpty())
     }
+
+    // ---------- UI-001：EXPLAIN ANALYZE 档顶层双键形态（真机 PG16 实证） ----------
+
+    @Test
+    fun `ANALYZE档顶层双键_统计条恢复`() {
+        // 真机形态：EXPLAIN (FORMAT JSON, ANALYZE) 顶层是 {"Plan": …, "Planning Time": 0.xxx}
+        // 双键——单键塌缩不命中曾整块丢失统计条（UI-001）
+        val json = """
+            [{"Plan": {"Node Type": "Aggregate", "Plan Rows": 1, "Actual Rows": 1, "Actual Total Time": 6.078, "Plans": [
+                {"Node Type": "Seq Scan", "Relation Name": "pev_big", "Plan Rows": 10000, "Actual Rows": 12000, "Actual Total Time": 230.0}
+            ]}, "Planning Time": 0.3}]
+        """.trimIndent()
+        val stats = ExplainPlanStats.analyze(rowsOf(json))!!
+        // byNodeType 按总耗时降序：Seq Scan 230.0 > Aggregate 6.078
+        assertEquals(listOf("Seq Scan", "Aggregate"), stats.byNodeType.map { it.label })
+        assertEquals(listOf("pev_big"), stats.byTable.map { it.label })
+        // 根总时＝depth0 节点之和：只有 Aggregate（包装层不加 depth，真计划节点才在根层）
+        assertEquals(6.078, stats.rootTotalMs!!, 1e-9)
+        // 全节点时间和（含子层 Seq Scan）：6.078 + 230.0
+        assertEquals(236.078, stats.byNodeType.sumOf { it.totalMs }, 1e-9)
+        // Aggregate 自身时间 6.078 − 230.0 < 0 → 不报（unaccounted 空）
+        assertTrue(stats.unaccounted.isEmpty())
+    }
+
+    @Test
+    fun `顶层含Triggers键_容忍`() {
+        // ANALYZE 档可能还带 "Triggers"/"JIT" 等顶层键——不下钻不误收（键名非 Plan/Plans 且
+        // 数组元素无 "Node Type"）
+        val json = """
+            [{"Plan": {"Node Type": "Nested Loop", "Actual Total Time": 100.0, "Plans": [
+                {"Node Type": "Seq Scan", "Relation Name": "t1", "Actual Total Time": 10.0}
+            ]}, "Triggers": [{"Trigger Name": "trg", "Relation": "t2", "Time": 1.5}]}]
+        """.trimIndent()
+        val stats = ExplainPlanStats.analyze(rowsOf(json))!!
+        assertEquals(listOf("Nested Loop", "Seq Scan"), stats.byNodeType.map { it.label })
+        assertTrue("Triggers 数据不得混入节点聚合", stats.byNodeType.none { it.label.contains("trg") })
+        assertEquals(100.0, stats.rootTotalMs!!, 1e-9)
+        // 内节点自身时间 100 − 10 = 90 → 90% ≥ 25% 照常上报（主链路未受额外键干扰）
+        assertEquals(1, stats.unaccounted.size)
+        assertEquals(90.0, stats.unaccounted[0].ownMs, 1e-9)
+    }
 }

@@ -147,6 +147,36 @@ class ExplainJsonPlanTreeTest {
         assertTrue(ExplainJsonPlanTree.flattenPlanNodes(listOf(listOf("""[{"x": 1}]"""))).isEmpty())
     }
 
+    @Test
+    fun `ANALYZE双键_flatten收集计划节点`() {
+        // UI-001 真机 PG16 形态：EXPLAIN (FORMAT JSON, ANALYZE) 顶层 {"Plan": …, "Planning Time": …}
+        // 双键——放宽后的 collectPlanObjects 应收到全部计划节点，matchKey 口径与单键形态一致
+        val json = """
+            [{"Plan": {"Node Type": "Aggregate", "Plan Rows": 1, "Actual Rows": 1, "Actual Total Time": 6.078, "Plans": [
+                {"Node Type": "Seq Scan", "Relation Name": "pev_big", "Plan Rows": 10000, "Actual Rows": 12000, "Actual Total Time": 230.0}
+            ]}, "Planning Time": 0.3}]
+        """.trimIndent()
+        val nodes = ExplainJsonPlanTree.flattenPlanNodes(listOf(listOf(json)))
+        assertEquals(2, nodes.size)
+        assertEquals("Aggregate#0", nodes[0].matchKey)
+        assertEquals("Seq Scan on pev_big#0", nodes[1].matchKey)
+        assertEquals(listOf("0", "1"), nodes.map { it.path })
+        assertEquals(230.0, nodes[1].extras["Actual Total Time"]?.toDoubleOrNull()!!, 1e-9)
+    }
+
+    @Test
+    fun `ANALYZE多顶层键_Triggers与JIT不误收`() {
+        // 顶层额外键（Triggers 数组/JIT 对象）既非 Plan/Plans 也无 Node Type——不下钻不产出
+        val json = """
+            [{"Plan": {"Node Type": "Seq Scan", "Relation Name": "t", "Plan Rows": 1},
+              "Triggers": [{"Trigger Name": "trg", "Time": 1.5}],
+              "JIT": {"Functions": [], "Timing": {"Total": 0.5}}}]
+        """.trimIndent()
+        val nodes = ExplainJsonPlanTree.flattenPlanNodes(listOf(listOf(json)))
+        assertEquals(1, nodes.size)
+        assertEquals("Seq Scan on t#0", nodes[0].matchKey)
+    }
+
     // ---------- PEV-02：估算偏差徽章（对称倍数 + 豁免带） ----------
 
     private fun badgeOf(plan: Long, actual: Long?): ExplainJsonPlanTree.EstimationBadge? {
