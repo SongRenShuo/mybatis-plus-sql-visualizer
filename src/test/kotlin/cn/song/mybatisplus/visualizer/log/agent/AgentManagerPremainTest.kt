@@ -71,11 +71,16 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
      */
     fun test目标JDK过老_不注入不协商端口且提示只记一次() {
         enableCapture()
+        assertFalse("闸门命中前不得置位跳过标志", manager.targetJvmSkipDetected.get())
         assertNull("JDK 6（major 50）不得注入", manager.preparePremainVmOption(50))
         assertTrue("老 JVM 上不得协商端口", manager.premainChannels.isEmpty())
         assertEquals("应记一条判定值 50 的一次性提示", setOf("50"), manager.targetJvmNotifiedVersions)
         assertNull("重复准备仍不注入", manager.preparePremainVmOption(50))
         assertEquals("同一版本只提示一次", 1, manager.targetJvmNotifiedVersions.size)
+        // T-AgentStatusOldJvm：命中闸门即粘性置位——状态行据此切到「已跳过注入」。
+        // 本类是平台测试（状态行会话态被同类回连用例污染、bundle 随 locale 变），manager 层只钉
+        // 「事实标志」这条接线；「标志 → 文案」的映射由 AgentStatusTextTest（纯函数、zh 兜底）覆盖。
+        assertTrue("targetJvmSkipDetected 应粘性置位", manager.targetJvmSkipDetected.get())
         // 未知（null）与达标（52）照常注入——闸门只拦「确定太老」
         assertNotNull("未知版本应放行（由 agent 侧引导类兜底）", manager.preparePremainVmOption(null))
         assertNotNull("JDK 8 应放行", manager.preparePremainVmOption(52))

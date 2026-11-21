@@ -26,5 +26,7 @@
 | 项 | 状态 | 提交 | 读数 |
 |---|---|---|---|
 | 计划 | 已完成 2026-11-21 | — | — |
-| 实施 | 待开工 | — | — |
-| 反向（git 补丁） | 待开工 | — | — |
+| 实施 | 已完成 2026-11-21 | `05fd3dff1` | `AgentStatusTextTest` 16/0（补 3 例 + 互不重复收编）、`AgentManagerPremainTest` 16/0（补标志置位断言） |
+| 反向（git 补丁） | 已完成 2026-11-21 | 补丁 `%TEMP%\mpsv-status-reverse.patch` | apply 后 `AgentStatusTextTest` **2 红**（新态用例 + 互不重复）→ `git checkout --` 还原 → 复跑 16/0；全程未手改代码 |
+
+实施期踩坑两条（已改测试口径）：① 平台测试里 bundle 按 IDE locale 解析，中文特征串断言随 locale 翻红——manager 层断言改钉「事实标志」，文案映射留给纯函数测试（zh 兜底环境）；② 同类回连用例的会话态粘性污染 statusSummary，状态行文案断言在 manager 层不可靠，同样收窄到标志层。

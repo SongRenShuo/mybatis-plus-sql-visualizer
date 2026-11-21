@@ -28,9 +28,11 @@ class AgentStatusTextTest {
         firstHeartbeatPending: Boolean = false,
         heartbeatWindowSeconds: Long = 30L,
         activityFallbackActive: Boolean = false,
+        targetJvmUnsupported: Boolean = false,
     ) = AgentStatusSnapshot(
         enabled, livePids, everAttached, heartbeatExpired,
         firstHeartbeatPending, heartbeatWindowSeconds, activityFallbackActive,
+        targetJvmUnsupported,
     )
 
     @Test
@@ -51,6 +53,31 @@ class AgentStatusTextTest {
         val text = agentStatusText(snap(everAttached = false))
         assertTrue("应含「已开启」：$text", text!!.contains("已开启"))
         assertTrue("应提示等待应用进程启动：$text", text.contains("等待应用进程启动"))
+    }
+
+    // ---------- T-AgentStatusOldJvm：目标 JDK 过老被闸门跳过的一态 ----------
+
+    @Test
+    fun test目标JDK过老显示已跳过注入不再等待挂载() {
+        val text = agentStatusText(snap(targetJvmUnsupported = true))!!
+        assertTrue("应如实说明已跳过注入：$text", text.contains("已跳过注入"))
+        assertTrue("应说明回落控制台捕获：$text", text.contains("回落控制台捕获"))
+        assertFalse("不得再显示「等待挂载」（该项目永远等不到）：$text", text.contains("等待应用进程启动"))
+    }
+
+    @Test
+    fun test真实挂载优先于JDK过老叙事() {
+        // targetJvmUnsupported 粘性置位，但只要真实挂上了就以挂载叙事为准（更高优先级分支在前）
+        val text = agentStatusText(snap(livePids = listOf(33L), targetJvmUnsupported = true))!!
+        assertTrue("挂载事实优先：$text", text.contains("已挂载 pid=33"))
+        assertFalse("挂载态不得混入跳过叙事：$text", text.contains("已跳过注入"))
+    }
+
+    @Test
+    fun test曾挂载后JDK过老标记不改写回落叙事() {
+        // everAttached 分支在 JDK 态之前：挂过又断的回落叙事不被粘性标记改写
+        val text = agentStatusText(snap(everAttached = true, targetJvmUnsupported = true))
+        assertEquals("连接中断，已回落控制台捕获", text)
     }
 
     @Test
@@ -128,6 +155,7 @@ class AgentStatusTextTest {
             agentStatusText(snap(everAttached = true)),
             agentStatusText(snap(everAttached = true, heartbeatExpired = true)),
             agentStatusText(snap(everAttached = true, firstHeartbeatPending = true)),
+            agentStatusText(snap(targetJvmUnsupported = true)),
         )
         val nonNull = texts.filterNotNull()
         assertEquals("五个非空态文案应互不相同（防两态收敛成同一句）", nonNull.size, nonNull.toSet().size)

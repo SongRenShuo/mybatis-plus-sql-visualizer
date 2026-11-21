@@ -58,6 +58,13 @@ internal data class AgentStatusSnapshot(
      * 桥已恢复解析。状态行必须如实披露（用户看到「已挂载」却零条目时，这句是唯一解释）。
      */
     val activityFallbackActive: Boolean = false,
+    /**
+     * T-AgentStatusOldJvm（2026-11-21）：本会话曾因目标 JVM 类版本低于 agent 产物（major 52，
+     * 即 JDK 低于 8）被注入闸门拦下。这类项目永远等不到挂载，若照旧落进「等待挂载」态，
+     * 用户读作「勾着、在等、像坏了」——必须如实改说「已跳过注入（回落控制台捕获）」。
+     * 粘性置位（本会话曾命中即真）；真实挂载后由更高优先级分支覆盖叙事。
+     */
+    val targetJvmUnsupported: Boolean = false,
 )
 
 /**
@@ -110,6 +117,12 @@ internal fun agentStatusText(s: AgentStatusSnapshot): String? {
                 "settings.enhancedCapture.status.fellBack"
             },
         )
+    }
+    // T-AgentStatusOldJvm：目标 JVM 低于 agent 字节码要求时注入已被闸门跳过——该项目永远等不到
+    // 挂载，「等待挂载」是错叙事；放在「从未挂载」分支之前（真实挂载了就走上面的高优先级分支）。
+    // 【反向验证实验摘除点】git 补丁摘掉本分支 → 新用例必红（回落「等待挂载」文案）
+    if (s.targetJvmUnsupported) {
+        return MpSqlVisualizerBundle.message("settings.enhancedCapture.status.targetJvmTooOld")
     }
     return MpSqlVisualizerBundle.message("settings.enhancedCapture.status.authorizedWaiting")
 }
