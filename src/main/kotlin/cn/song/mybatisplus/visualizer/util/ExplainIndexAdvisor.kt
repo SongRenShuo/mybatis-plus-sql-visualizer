@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.util
 
 import cn.song.mybatisplus.visualizer.sql.ExplainOutputFormat
 import cn.song.mybatisplus.visualizer.sql.ExplainSupport
+import cn.song.mybatisplus.visualizer.ui.ExplainTextPlanTree
 
 /**
  * EXPLAIN 计划「索引缺失」建议识别器（T-ExplainIndex T-EI-02，全景审计 N-23）。
@@ -28,11 +29,35 @@ import cn.song.mybatisplus.visualizer.sql.ExplainSupport
  * `[{"Plan":{"Node Type":"Seq Scan",…,"Relation Name":"bench_items",…,"Plan Rows":10000,…}}]`）。
  * 现按格式分派：JSON → [adviseJsonPlan]，TABLE → [adviseMysql]，TEXT → [advisePlanText]；
  * R23 增 XML（SQL Server）→ 有意不解析（计划 XML 是附加结果集，本通道不采集，勿硬解析）。
+ *
+ * PEV-04（计划警示徽章族扩展，postgres-explain-visualizer 精华吸收计划册 §一.4）：在索引缺失一族外
+ * 扩三条计划警示——HEAP_FETCHES（bitmap 回表超阈）、HASH_BATCHES（哈希表溢盘）、HIGH_FILTER_RATIO
+ * （Filter 高过滤比）。规则单源：[PlanNodeSnapshot] 是唯一判定输入，JSON 档（[walkJsonPlan]）与
+ * text 档（[cn.song.mybatisplus.visualizer.ui.ExplainTextPlanTree] 解析成功路径）两路各自解析、
+ * 汇到同一组 [emitPlanWarnings] 判定——禁第二套规则；PEV-02 的估算偏差判定也并入本单源
+ * （主控车道实施），本 object 是全部计划警示的唯一出口。
  */
 object ExplainIndexAdvisor {
 
     /** 全表扫描行数阈值（低于此不提示——小表全扫常是更优计划，阈值一刀切会噪音）。 */
     const val ROWS_THRESHOLD = 10_000
+
+    // ---------- PEV-04：计划警示阈值（规则单源；初始值取 pev2 徽章分档中档起步线，真机采样后钉终值） ----------
+
+    /**
+     * Heap Fetches 占比阈值（%）：heap fetches ÷（actual rows×loops + rows removed by filter/join filter）。
+     * pev2 三档着色 >0/>40/>90，提示取中档起步线 40——低于此不提示（不噪音）。
+     */
+    const val HEAP_FETCHES_RATIO_THRESHOLD_PERCENT = 40.0
+
+    /** Hash Batches 溢盘阈值：>1 即哈希表分批溢盘（pev2 单档判据 >1 着色）。 */
+    const val HASH_BATCHES_SPILL_THRESHOLD = 1L
+
+    /**
+     * Filter 过滤比阈值（%）：rows removed ÷（rows removed + actual rows×loops）。
+     * pev2 两档着色 >50/>90，提示取中档起步线 50——低于此不提示（不噪音）。
+     */
+    const val FILTER_RATIO_THRESHOLD_PERCENT = 50.0
 
     /** 单条建议（纯数据；advice 为英文短句——MCP 输出口径，不进 bundle）。 */
     data class Hint(val rule: String, val target: String, val advice: String)
@@ -142,6 +167,9 @@ object ExplainIndexAdvisor {
         RuleInfo("TEMPORARY_TABLE", "GROUP BY/DISTINCT spills to a temp table (Using temporary)"),
         RuleInfo("SEQ_SCAN", "sequential scan on a large table (PostgreSQL/KingBase)"),
         RuleInfo("TABLE_FULL_SCAN", "full table scan in the OceanBase ASCII plan tree (TABLE SCAN / TABLE FULL SCAN)"),
+        RuleInfo("HEAP_FETCHES", "bitmap heap scan re-reads many heap tuples (Heap Fetches ratio over threshold, ANALYZE only)"),
+        RuleInfo("HASH_BATCHES", "hash table spilled to disk (Batches over 1)"),
+        RuleInfo("HIGH_FILTER_RATIO", "a high share of rows removed by Filter (poor filter selectivity, ANALYZE only)"),
     )
 
     /** 体检规则清单（R45；空实现无——清单恒非空，供面板「体检规则」说明栏与文档生成）。 */
@@ -156,17 +184,28 @@ object ExplainIndexAdvisor {
                     adviseObPlanText(cell, out)
                     continue
                 }
-                // PG 文本树：`Seq Scan on big_table  (cost=… rows=…)`
-                val m = SEQ_SCAN_ON.find(cell) ?: continue
-                val rowsN = PLAN_TEXT_ROWS.find(cell)?.groupValues?.get(1)?.toLongOrNull()
-                if (rowsN == null || rowsN >= ROWS_THRESHOLD) {
-                    out += Hint(
-                        rule = "SEQ_SCAN",
-                        target = m.groupValues[1],
-                        advice = "Sequential scan" +
-                            (rowsN?.let { " over ~$it rows" } ?: "") +
-                            " — consider adding an index on the filter columns",
-                    )
+                // PG 文本树：`Seq Scan on big_table  (cost=… rows=… width=…)`
+                val m = SEQ_SCAN_ON.find(cell)
+                if (m != null) {
+                    val rowsN = PLAN_TEXT_ROWS.find(cell)?.groupValues?.get(1)?.toLongOrNull()
+                    if (rowsN == null || rowsN >= ROWS_THRESHOLD) {
+                        out += Hint(
+                            rule = "SEQ_SCAN",
+                            target = m.groupValues[1],
+                            advice = "Sequential scan" +
+                                (rowsN?.let { " over ~$it rows" } ?: "") +
+                                " — consider adding an index on the filter columns",
+                        )
+                    }
+                }
+                // PEV-04：PG 族文本树走结构化解析器（ExplainTextPlanTree）套计划警示三规则。
+                // 解析失败静默——上面的 SEQ_SCAN 正则路径已兜住基本形态，此处只做增量判定；
+                // 「解析不出就降级」红线在解析器内表达（失败返回结构化原因），此处不猜不重试。
+                // 非 PG 族文本（DM8/H2/SQLite）无 cost 节点头 → 解析器失败 → 天然零命中（不噪音）。
+                when (val parsed = ExplainTextPlanTree.parse(cell)) {
+                    is ExplainTextPlanTree.Result.Success ->
+                        parsed.planNodes.forEach { emitPlanWarnings(textSnapshot(it), out) }
+                    is ExplainTextPlanTree.Result.Failure -> Unit
                 }
             }
         }
@@ -296,6 +335,8 @@ object ExplainIndexAdvisor {
                 val relation = stringOf(obj, KEY_RELATION) ?: stringOf(obj, KEY_ALIAS)
                 val planRows = longOf(obj, KEY_PLAN_ROWS) ?: longOf(obj, KEY_ACTUAL_ROWS)
                 emitSeqScanHint(stringOf(obj, KEY_NODE_TYPE), relation, planRows, out)
+                // PEV-04：计划警示三规则（JSON 档与 text 档同一套 emitPlanWarnings，规则单源）
+                planSnapshotFromJson(obj)?.let { emitPlanWarnings(it, out) }
                 obj.entrySet().forEach { walkJsonPlan(it.value, out) }
             }
             else -> Unit
@@ -304,6 +345,12 @@ object ExplainIndexAdvisor {
 
     private fun stringOf(obj: com.google.gson.JsonObject, key: String): String? =
         obj.get(key)?.takeIf { it.isJsonPrimitive }?.let { runCatching { it.asString }.getOrNull() }
+
+    /** 数值容忍（浮点）：actual rows 在 JSON 里可为小数（并行/均值节点）。 */
+    private fun doubleOf(obj: com.google.gson.JsonObject, key: String): Double? =
+        obj.get(key)?.takeIf { it.isJsonPrimitive }?.let {
+            runCatching { it.asDouble }.getOrNull() ?: runCatching { it.asString.trim().toDoubleOrNull() }.getOrNull()
+        }
 
     /** 数值容忍：PG 出数字字面量，某些驱动/版本可能把数字包成字符串。 */
     private fun longOf(obj: com.google.gson.JsonObject, key: String): Long? =
@@ -341,6 +388,120 @@ object ExplainIndexAdvisor {
                 " — consider adding an index on the filter columns",
         )
     }
+
+    // ---------- PEV-04：计划警示徽章族（规则单源——JSON 与 text 两路解析后都汇到这里） ----------
+
+    /** 计划警示单节点快照（JSON 与 text 两路解析后的统一判定输入——规则只认快照，不认格式）。 */
+    data class PlanNodeSnapshot(
+        /** 节点标识（JSON 档 `Node Type on Relation`；text 档节点描述原文）。 */
+        val label: String,
+        /** actual rows（ANALYZE 档；null = 未出现——三条规则全部要求分母在场才判，缺数据不猜）。 */
+        val actualRows: Double?,
+        val actualLoops: Long?,
+        val heapFetches: Long?,
+        val rowsRemovedByFilter: Long?,
+        val rowsRemovedByJoinFilter: Long?,
+        val rowsRemovedByIndexRecheck: Long?,
+        /** Hash 节点 Buckets 行的批次数（text 档由解析器从 `Buckets: N Batches: B …` 行提取）。 */
+        val hashBatches: Long?,
+        /** HashAggregate 独立 `Batches: N Memory Usage: ..kB` 行的批次数。 */
+        val hashaggBatches: Long?,
+    )
+
+    private fun textSnapshot(n: ExplainTextPlanTree.TextPlanNodeInfo) = PlanNodeSnapshot(
+        label = n.label,
+        actualRows = n.actualRows,
+        actualLoops = n.actualLoops,
+        heapFetches = n.heapFetches,
+        rowsRemovedByFilter = n.rowsRemovedByFilter,
+        rowsRemovedByJoinFilter = n.rowsRemovedByJoinFilter,
+        rowsRemovedByIndexRecheck = n.rowsRemovedByIndexRecheck,
+        hashBatches = n.hashBatches,
+        hashaggBatches = n.hashaggBatches,
+    )
+
+    private fun planSnapshotFromJson(obj: com.google.gson.JsonObject): PlanNodeSnapshot? {
+        val nodeType = stringOf(obj, KEY_NODE_TYPE) ?: return null
+        val relation = stringOf(obj, KEY_RELATION) ?: stringOf(obj, KEY_ALIAS)
+        return PlanNodeSnapshot(
+            label = buildString {
+                append(nodeType)
+                if (relation != null) append(" on ").append(relation)
+            },
+            actualRows = doubleOf(obj, "Actual Rows"),
+            actualLoops = longOf(obj, "Actual Loops"),
+            heapFetches = longOf(obj, "Heap Fetches"),
+            rowsRemovedByFilter = longOf(obj, "Rows Removed by Filter"),
+            rowsRemovedByJoinFilter = longOf(obj, "Rows Removed by Join Filter"),
+            rowsRemovedByIndexRecheck = longOf(obj, "Rows Removed by Index Recheck"),
+            hashBatches = longOf(obj, "Hash Batches"),
+            hashaggBatches = longOf(obj, "HashAgg Batches"),
+        )
+    }
+
+    /**
+     * 计划警示三规则（单源判定；无命中零产出）：
+     *  1. HEAP_FETCHES——bitmap 回表超阈：Heap Fetches 占比 ≥ [HEAP_FETCHES_RATIO_THRESHOLD_PERCENT]
+     *     （占比 = heap fetches ÷（actual×loops + rows removed by filter/join filter），pev2
+     *     heapFetchesClass 口径；actual×loops 即 pev2 的 revised actual——rows 是单圈均值）。
+     *     分母缺项不判：无 actual rows 即非 ANALYZE 档，无从谈起（诚实降级）。
+     *  2. HASH_BATCHES——哈希表溢盘：Batches > [HASH_BATCHES_SPILL_THRESHOLD]（Hash 节点 Buckets 行
+     *     或 HashAggregate 独立 Batches 行，pev2 bucketsBatchesClass 口径）。与 actual rows 无关
+     *     （估算档即可判）。
+     *  3. HIGH_FILTER_RATIO——Filter 高过滤比：removed ÷（removed + actual×loops）
+     *     ≥ [FILTER_RATIO_THRESHOLD_PERCENT]（pev2 rowsRemovedPercent 口径；removed 取
+     *     Filter / Join Filter / Index Recheck 三键按序首个在场者，与 pev2 rowsRemovedProp 优先序一致）。
+     */
+    private fun emitPlanWarnings(s: PlanNodeSnapshot, out: MutableList<Hint>) {
+        val revisedActual = s.actualRows?.let { it * (s.actualLoops ?: 1L).coerceAtLeast(0L) }
+        // 1) Heap Fetches（bitmap 回表——可见性图陈旧或索引选择性差）
+        val heapFetches = s.heapFetches
+        if (heapFetches != null && heapFetches > 0 && revisedActual != null) {
+            val denominator = revisedActual +
+                (s.rowsRemovedByFilter ?: 0L) + (s.rowsRemovedByJoinFilter ?: 0L)
+            if (denominator > 0) {
+                val pct = heapFetches * 100.0 / denominator
+                if (pct >= HEAP_FETCHES_RATIO_THRESHOLD_PERCENT) {
+                    out += Hint(
+                        rule = "HEAP_FETCHES",
+                        target = s.label,
+                        advice = "heap fetches=$heapFetches (~${percentText(pct)} of rows visited) — " +
+                            "bitmap heap scan re-reads many heap tuples; " +
+                            "consider VACUUM (stale visibility map) or a more selective index",
+                    )
+                }
+            }
+        }
+        // 2) Hash Batches（溢盘）
+        val batches = s.hashBatches ?: s.hashaggBatches
+        if (batches != null && batches > HASH_BATCHES_SPILL_THRESHOLD) {
+            out += Hint(
+                rule = "HASH_BATCHES",
+                target = s.label,
+                advice = "hash batches=$batches (>1) — hash table spilled to disk; " +
+                    "consider raising work_mem or reducing the hashed input",
+            )
+        }
+        // 3) Filter 高过滤比
+        val removed = s.rowsRemovedByFilter ?: s.rowsRemovedByJoinFilter ?: s.rowsRemovedByIndexRecheck
+        if (removed != null && revisedActual != null) {
+            val denominator = removed + revisedActual
+            if (denominator > 0) {
+                val pct = removed * 100.0 / denominator
+                if (pct >= FILTER_RATIO_THRESHOLD_PERCENT) {
+                    out += Hint(
+                        rule = "HIGH_FILTER_RATIO",
+                        target = s.label,
+                        advice = "~${percentText(pct)} of rows removed by filter — " +
+                            "consider adding an index on the filter columns",
+                    )
+                }
+            }
+        }
+    }
+
+    /** 百分比展示（pev2 口径：≥99.5 显示 ">99" 防 100% 假象，其余截断到整数）。 */
+    private fun percentText(pct: Double): String = if (pct >= 99.5) ">99" else "${pct.toInt()}"
 
     /** 建议节渲染（MCP explain 输出承载位；空清单返回空串——输出零差异硬门禁）。 */
     fun formatHints(hints: List<Hint>): String {
