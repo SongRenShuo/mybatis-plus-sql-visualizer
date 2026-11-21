@@ -57,12 +57,18 @@ class ExplainPlanResultView(
     /** JSON 格式的树模型（其他格式 null）。 */
     private val treeModel: TreeModel?
 
+    /** PEV-06：JSON 档的树组件（其他格式 null——收拢状态断言用）。 */
+    private var jsonTree: JTree? = null
+
     private val hintsLabel: JBLabel
     private val compareLabel: JBLabel?
     private val backButton: JButton
     private val headerLabel: JBLabel
     private val baselineSelector = javax.swing.JComboBox<String>()
     private val historyStatusLabel = JBLabel()
+
+    /** PEV-03：时间统计条（ANALYZE 档才有数据；null=整块不占位）。 */
+    private val statsLabel: JBLabel?
 
     init {
         border = JBUI.Borders.empty()
@@ -139,6 +145,14 @@ class ExplainPlanResultView(
         historyStatusLabel.isVisible = historyStatus != null
         historyStatusLabel.border = JBUI.Borders.empty(1, 4)
 
+        // PEV-03：时间统计条（形态照抄索引建议条；null=整块不占位——非 ANALYZE 档不虚标）
+        statsLabel = buildStatsText(ExplainPlanStats.analyze(raw.rows))?.let { text ->
+            JBLabel(text).apply {
+                foreground = JBColor.namedColor("Label.infoForeground", JBColor.GRAY)
+                border = JBUI.Borders.empty(1, 4)
+            }
+        }
+
         val north = JBPanel<JBPanel<*>>(BorderLayout()).apply {
             isOpaque = false
             border = JBUI.Borders.empty()
@@ -173,6 +187,7 @@ class ExplainPlanResultView(
                 add(baselineRow)
             }
             add(historyStatusLabel)
+            statsLabel?.let { add(it) }
             compareLabel?.let { add(it) }
         }
         add(northStrip, BorderLayout.NORTH)
@@ -202,6 +217,11 @@ class ExplainPlanResultView(
                 JTree(tree).apply {
                     isRootVisible = false
                     showsRootHandles = true
+                    // PEV-02/06：偏差徽章色阶 + 收拢规模提示走自定义渲染（LAF namedColor，不硬编码色值）
+                    cellRenderer = ExplainPlanTreeRenderer()
+                    javax.swing.ToolTipManager.sharedInstance().registerComponent(this)
+                    collapseMarkedSubtrees(this)
+                    jsonTree = this
                 }
             }
             else -> JBLabel(MpSqlVisualizerBundle.message("panel.explain.structured.unsupportedFormat"))
@@ -224,9 +244,57 @@ class ExplainPlanResultView(
     }
 
     private fun toSwingNode(node: ExplainJsonPlanTree.Node): DefaultMutableTreeNode {
-        val swing = DefaultMutableTreeNode(node.label)
+        // PEV-02/06：userObject 从 label 字符串换成 Node 本体——渲染器需要徽章/收拢规模字段
+        val swing = DefaultMutableTreeNode(node)
         node.children.forEach { swing.add(toSwingNode(it)) }
         return swing
+    }
+
+    /** PEV-06：对打了收拢标记的节点执行默认收拢（JTree 默认全展开；用户手动展开不受限）。 */
+    private fun collapseMarkedSubtrees(tree: JTree) {
+        val model = tree.model
+        fun walk(node: Any, path: javax.swing.tree.TreePath) {
+            for (i in 0 until model.getChildCount(node)) {
+                val child = model.getChild(node, i)
+                val childPath = path.pathByAddingChild(child)
+                val payload = (child as? DefaultMutableTreeNode)?.userObject
+                if (payload is ExplainJsonPlanTree.Node && payload.initiallyCollapsed) {
+                    tree.collapsePath(childPath)
+                }
+                walk(child, childPath)
+            }
+        }
+        walk(model.root, javax.swing.tree.TreePath(model.root))
+    }
+
+    /**
+     * PEV-03：四象限时间统计条（ANALYZE 档才有数据——整块不占位；形态照抄索引建议条）。
+     */
+    private fun buildStatsText(stats: ExplainPlanStats.Stats?): String? {
+        if (stats == null) return null
+        fun entries(labelKey: String, list: List<ExplainPlanStats.Entry>, cap: Int): String? {
+            if (list.isEmpty()) return null
+            val head = list.take(cap).joinToString(" · ") {
+                MpSqlVisualizerBundle.message("panel.explain.stats.entry", it.label, String.format(java.util.Locale.ROOT, "%.1f", it.totalMs))
+            }
+            return MpSqlVisualizerBundle.message(labelKey) + " " + head
+        }
+        val parts = listOfNotNull(
+            entries("panel.explain.stats.byTable", stats.byTable, 3),
+            entries("panel.explain.stats.byIndex", stats.byIndex, 3),
+            entries("panel.explain.stats.byFunction", stats.byFunction, 3),
+            entries("panel.explain.stats.byNodeType", stats.byNodeType, 3),
+            stats.unaccounted.firstOrNull()?.let {
+                MpSqlVisualizerBundle.message(
+                    "panel.explain.stats.unaccounted",
+                    String.format(java.util.Locale.ROOT, "%.0f", it.share * 100),
+                    it.label,
+                )
+            },
+        )
+        if (parts.isEmpty()) return null
+        return "<html><b>" + MpSqlVisualizerBundle.message("panel.explain.stats.title") + "</b> " +
+            parts.joinToString("<br>") + "</html>"
     }
 
     /**
@@ -278,4 +346,58 @@ class ExplainPlanResultView(
     internal fun compareTextForTest(): String? = compareLabel?.text
     internal fun baselineSelectorForTest(): javax.swing.JComboBox<String> = baselineSelector
     internal fun historyStatusForTest(): String = historyStatusLabel.text
+
+    /** PEV-03 测试缝：统计条文本（null=无统计条——非 ANALYZE 档不占位）。 */
+    internal fun statsTextForTest(): String? = statsLabel?.takeIf { it.isVisible }?.text
+
+    /** PEV-06 测试缝：JSON 档树组件（其他格式 null）。 */
+    internal fun jsonTreeForTest(): JTree? = jsonTree
+}
+
+/**
+ * PEV-02/06：计划树渲染器——估算偏差徽章色阶（LAF namedColor，不硬编码颜色）与收拢规模提示。
+ * userObject 为 [ExplainJsonPlanTree.Node]；非 Node 载荷（根占位）按字符串直出。
+ */
+private class ExplainPlanTreeRenderer : com.intellij.ui.ColoredTreeCellRenderer() {
+    override fun customizeCellRenderer(
+        tree: javax.swing.JTree,
+        value: Any,
+        selected: Boolean,
+        expanded: Boolean,
+        leaf: Boolean,
+        row: Int,
+        hasFocus: Boolean,
+    ) {
+        val payload = (value as? DefaultMutableTreeNode)?.userObject as? ExplainJsonPlanTree.Node
+        if (payload == null) {
+            append(value?.toString().orEmpty(), com.intellij.ui.SimpleTextAttributes.REGULAR_ATTRIBUTES)
+            return
+        }
+        append(payload.label, com.intellij.ui.SimpleTextAttributes.REGULAR_ATTRIBUTES)
+        var tip: String? = null
+        payload.estimationBadge?.let { badge ->
+            val factorText = String.format(java.util.Locale.ROOT, "%.1f", badge.factor)
+            append(
+                "  ⚠ ×$factorText",
+                com.intellij.ui.SimpleTextAttributes(
+                    com.intellij.ui.SimpleTextAttributes.STYLE_BOLD,
+                    tierColor(badge.tier),
+                ),
+            )
+            tip = MpSqlVisualizerBundle.message("panel.explain.estimation.tip", factorText)
+        }
+        if (payload.initiallyCollapsed && payload.collapsedChildCount > 0) {
+            append("  (+${payload.collapsedChildCount})", com.intellij.ui.SimpleTextAttributes.GRAYED_ATTRIBUTES)
+            val collapsedTip = MpSqlVisualizerBundle.message("panel.explain.estimation.collapsed.tip", payload.collapsedChildCount)
+            tip = if (tip.isNullOrBlank()) collapsedTip else "$tip — $collapsedTip"
+        }
+        toolTipText = tip
+    }
+
+    /** 色阶循 LAF namedColor 纪律：浅色/深色双默认值（自绘组件不硬编码颜色）。 */
+    private fun tierColor(tier: ExplainJsonPlanTree.Tier): java.awt.Color = when (tier) {
+        ExplainJsonPlanTree.Tier.WARN -> JBColor.namedColor("MpSqlVisualizer.explain.estimation.warn", JBColor(0x8A6D00, 0xC9B458))
+        ExplainJsonPlanTree.Tier.HIGH -> JBColor.namedColor("MpSqlVisualizer.explain.estimation.high", JBColor(0xB25000, 0xE08A3C))
+        ExplainJsonPlanTree.Tier.CRITICAL -> JBColor.namedColor("MpSqlVisualizer.explain.estimation.critical", JBColor(0xC00B00, 0xFF6B62))
+    }
 }

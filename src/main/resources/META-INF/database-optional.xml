@@ -88,5 +88,23 @@
                 icon="/icons/sqlGutter.svg">
             <add-to-group group-id="DatabaseViewPopupMenu" anchor="last"/>
         </action>
+        <!-- PEV-05：控制台选中语句直出结构化执行计划（继承平台 ExplainActionBase.Ui 白拿选区与
+             控制台；isSupported 按 dbms 收敛到结构化两族：PG=JSON 档、MySQL=TABLE 档，其余方言
+             保持禁用走原生 EXPLAIN——双通道并存不收窄）。放本文件：动作类直引 DatabaseTools 类，
+             Community 下不注册（优雅降级，GenerateCrudSqlFromDbTable 同款形态）。 -->
+        <action id="cn.song.mybatisplus.visualizer.VisualizeExplainPlan"
+                class="cn.song.mybatisplus.visualizer.actions.VisualizeExplainPlanAction"
+                text="action.cn.song.mybatisplus.visualizer.VisualizeExplainPlan.text"
+                description="action.cn.song.mybatisplus.visualizer.VisualizeExplainPlan.description"
+                icon="/icons/sqlGutter.svg">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+        <action id="cn.song.mybatisplus.visualizer.VisualizeExplainPlanAnalyze"
+                class="cn.song.mybatisplus.visualizer.actions.VisualizeExplainPlanAnalyzeAction"
+                text="action.cn.song.mybatisplus.visualizer.VisualizeExplainPlanAnalyze.text"
+                description="action.cn.song.mybatisplus.visualizer.VisualizeExplainPlanAnalyze.description"
+                icon="/icons/sqlGutter.svg">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
     </actions>
 </idea-plugin>

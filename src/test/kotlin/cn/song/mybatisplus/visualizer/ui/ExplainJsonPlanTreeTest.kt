@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -144,5 +145,80 @@ class ExplainJsonPlanTreeTest {
         assertTrue(ExplainJsonPlanTree.flattenPlanNodes(emptyList()).isEmpty())
         // 非计划对象（无 Node Type）不下钻产出
         assertTrue(ExplainJsonPlanTree.flattenPlanNodes(listOf(listOf("""[{"x": 1}]"""))).isEmpty())
+    }
+
+    // ---------- PEV-02：估算偏差徽章（对称倍数 + 豁免带） ----------
+
+    private fun badgeOf(plan: Long, actual: Long?): ExplainJsonPlanTree.EstimationBadge? {
+        val actualPart = actual?.let { ", \"Actual Rows\": $it" }.orEmpty()
+        return ExplainJsonPlanTree.build(
+            listOf(listOf("""[{"Node Type": "Seq Scan", "Relation Name": "t", "Plan Rows": $plan$actualPart}]""")),
+        )!![0].estimationBadge
+    }
+
+    @Test
+    fun `估算徽章_三档分级`() {
+        assertEquals(ExplainJsonPlanTree.Tier.WARN, badgeOf(1000, 25000)!!.tier)        // ×25
+        assertEquals(ExplainJsonPlanTree.Tier.HIGH, badgeOf(1000, 250000)!!.tier)       // ×250
+        assertEquals(ExplainJsonPlanTree.Tier.CRITICAL, badgeOf(1000, 2500000)!!.tier)  // ×2500
+    }
+
+    @Test
+    fun `估算徽章_豁免带与零行不标`() {
+        assertNull("小样本豁免带内不标", badgeOf(8, 8000))
+        assertNull("零行无法判倍数不标", badgeOf(100, 0))
+        assertNull("无 Actual Rows（非 ANALYZE 档）不标", badgeOf(10000, null))
+    }
+
+    @Test
+    fun `估算徽章_对称方向同倍数`() {
+        // 高估与低估同倍数同档（吸收源 pev2 只看 actual/plan 单向，此为我方改进）
+        val under = badgeOf(1000, 25000)!!
+        val over = badgeOf(25000, 1000)!!
+        assertEquals(under.tier, over.tier)
+        assertEquals(under.factor, over.factor, 1e-9)
+    }
+
+    // ---------- PEV-06：大计划首屏收拢 ----------
+
+    @Test
+    fun `收拢标记_宽父超线默认收拢`() {
+        val children = (1..40).joinToString(",") { """{"Node Type": "Seq Scan", "Relation Name": "t$it"}""" }
+        // 根节点豁免——宽父包在 Gather 之下（深度 1）才判收拢
+        val roots = ExplainJsonPlanTree.build(
+            listOf(listOf("""[{"Plan": {"Node Type": "Gather", "Plans": [{"Node Type": "Nested Loop", "Plans": [$children]}]}}]""")),
+        )!!
+        assertFalse("根节点豁免收拢", roots[0].initiallyCollapsed)
+        val wide = roots[0].children[0]
+        assertTrue("宽父（40 子 > 12）应标记收拢", wide.initiallyCollapsed)
+        assertEquals("收拢规模=子树节点数−自身", 40, wide.collapsedChildCount)
+    }
+
+    @Test
+    fun `收拢标记_深子树超阈`() {
+        // 33 节点子链挂在根下：链根（深度 1）超阈 30 收拢
+        fun chain(depth: Int): String =
+            if (depth == 0) """{"Node Type": "Seq Scan", "Relation Name": "leaf"}"""
+            else """{"Node Type": "Nested Loop", "Plans": [${chain(depth - 1)}]}"""
+        val roots = ExplainJsonPlanTree.build(listOf(listOf("""[{"Plan": {"Node Type": "Gather", "Plans": [${chain(32)}]}}]""")))!!
+        val deepRoot = roots[0].children[0]
+        assertTrue("33 节点子树应被标记收拢", deepRoot.initiallyCollapsed)
+        assertFalse("根节点豁免", roots[0].initiallyCollapsed)
+    }
+
+    @Test
+    fun `收拢标记_全量超规模自适应收紧`() {
+        // 两个单元格：2010 节点宽根（拉高全量计数）+ 12 节点深链（默认阈值 30 不收拢、收紧到 10 收拢）
+        val leaves = (1..2010).joinToString(",") { """{"Node Type": "Seq Scan"}""" }
+        fun chain(depth: Int): String =
+            if (depth == 0) """{"Node Type": "Seq Scan", "Relation Name": "leaf"}"""
+            else """{"Node Type": "Nested Loop", "Plans": [${chain(depth - 1)}]}"""
+        val roots = ExplainJsonPlanTree.build(
+            listOf(
+                listOf("""[{"Plan": {"Node Type": "Gather", "Plans": [$leaves]}}]"""),
+                listOf("""[${chain(11)}]"""),
+            ),
+        )!!
+        assertTrue("全量 2022 > 2000 → 阈值收紧到 10，12 节点链的子层应收拢", roots[1].children[0].initiallyCollapsed)
     }
 }

@@ -364,4 +364,66 @@ class ExplainPlanResultViewUiTest : BasePlatformTestCase() {
         val labels = parent.components.filterIsInstance<JBLabel>().map { it.text }
         assertTrue("同一行应有基线说明标签", labels.any { it.isNotBlank() })
     }
+
+    // ---------- PEV-02/03/06：估算偏差徽章、时间统计条与首屏收拢 ----------
+
+    private fun analyzeJson(): String = """
+        [{"Plan": {"Node Type": "Limit", "Plan Rows": 1, "Actual Rows": 1, "Actual Total Time": 100.0, "Plans": [
+            {"Node Type": "Seq Scan", "Relation Name": "t1", "Plan Rows": 100, "Actual Rows": 5000, "Actual Total Time": 10.0}
+        ]}}]
+    """.trimIndent()
+
+    private fun jsonView(json: String): ExplainPlanResultView = ExplainPlanResultView(
+        dialectName = "PostgreSQL",
+        dataSourceName = "pg@local",
+        elapsedMs = 9L,
+        raw = McpExplainFormatter.RawResult(listOf("QUERY PLAN"), listOf(listOf(json))),
+        format = ExplainOutputFormat.JSON,
+    )
+
+    fun testStats条_ANALYZE数据显示表名与未解释占比() {
+        val view = jsonView(analyzeJson())
+        val stats = view.statsTextForTest()
+        assertNotNull("ANALYZE 档应显示统计条", stats)
+        assertTrue("统计条应含表名", stats!!.contains("t1"))
+        assertTrue("根节点自身时间 90% 应进未解释统计", stats.contains("90"))
+    }
+
+    fun testStats条_无ANALYZE数据不占位() {
+        val view = jsonView("""[{"Plan": {"Node Type": "Seq Scan", "Relation Name": "t", "Plan Rows": 10000}}]""")
+        assertNull("非 ANALYZE 档整块不占位", view.statsTextForTest())
+    }
+
+    fun testJSON树_徽章挂在节点模型不改标签() {
+        val view = jsonView(analyzeJson())
+        val model = view.treeModelForTest() as javax.swing.tree.DefaultTreeModel
+        val root = model.root as javax.swing.tree.DefaultMutableTreeNode
+        val limit = (root.getChildAt(0) as javax.swing.tree.DefaultMutableTreeNode).userObject as ExplainJsonPlanTree.Node
+        assertEquals("Limit (rows=1)", limit.label)
+        // 模型 userObject 即 Node 本体（渲染器从它读徽章/收拢字段）；Actual Total Time 是标量叶，
+        // 子节点按标签寻址（firstOrNull 会先撞到时间叶）
+        val seq = (limit.children.firstOrNull { it.label.startsWith("Seq Scan") } ?: error("Seq Scan 子节点缺失"))
+        assertNotNull("plan 100 vs actual 5000（×50）应出偏差徽章", seq.estimationBadge)
+        // 标签保持既有口径（徽章由渲染器叠加，不进标签文本）
+        assertEquals("Seq Scan on t1 (rows=100)", seq.label)
+        assertEquals(ExplainJsonPlanTree.Tier.WARN, seq.estimationBadge!!.tier)
+    }
+
+    fun testJSON树_宽父默认收拢() {
+        val children = (1..40).joinToString(",") { """{"Node Type": "Seq Scan", "Relation Name": "t$it"}""" }
+        val view = jsonView("""[{"Plan": {"Node Type": "Gather", "Plans": [{"Node Type": "Nested Loop", "Plans": [$children]}]}}]""")
+        val model = view.treeModelForTest() as javax.swing.tree.DefaultTreeModel
+        val root = model.root as javax.swing.tree.DefaultMutableTreeNode
+        val gather = (root.getChildAt(0) as javax.swing.tree.DefaultMutableTreeNode).userObject as ExplainJsonPlanTree.Node
+        assertFalse("根节点豁免收拢", gather.initiallyCollapsed)
+        val wide = (gather.children.firstOrNull() ?: error("Nested Loop 子节点缺失"))
+        assertTrue("40 子宽父应带收拢标记", wide.initiallyCollapsed)
+        assertEquals(40, wide.collapsedChildCount)
+        // JTree 初始态：宽父路径已收拢（用户展开不受限）
+        val tree = view.jsonTreeForTest()!!
+        val widePath = javax.swing.tree.TreePath(root.getPath())
+            .pathByAddingChild(root.getChildAt(0))
+            .pathByAddingChild((root.getChildAt(0) as javax.swing.tree.DefaultMutableTreeNode).getChildAt(0))
+        assertTrue("宽父路径初始应收拢", tree.isCollapsed(widePath))
+    }
 }
