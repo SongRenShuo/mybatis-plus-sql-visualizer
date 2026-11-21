@@ -80,7 +80,7 @@
 
 ## §八 实施记录（2026-11-21）
 
-- **实施修正一条（如实登记）**：§三.3 的「新增 11 键 + 双语文案草案」**未落盘**——实施时发现 bundle 已有同一用途的键 `settings.mcp.tool.desc.<尾段>`（`McpConfigurable.checkBoxText` 门控区在用，11 键中英双语对称、`_zh` 1224~1234 / base 1254~1264）。改为**复用既有键**（更精炼、已被设置页 UI 验证），键派生规则＝`removePrefix("sqlv_").replace("_", "")`（全局去下划线）。计划意图（灰字有双语描述）不变，文案采既有短文案而非本册草案。
+- **实施修正一条（如实登记）**：§三.3 草拟的「新增 11 键 + 双语文案」**不需要发生**——实施时发现 bundle 早已存在同一用途的键 `settings.mcp.tool.desc.<尾段>`（T-McpToolset2 时代随门控区落盘，`McpConfigurable.checkBoxText` 在用，11 键中英双语对称、`_zh` 1224~1234 / base 1254~1264）。本任务交付＝**把既有键接入新消费面**（平台设置页灰字，原只门控区一处在用），键派生规则＝`removePrefix("sqlv_").replace("_", "")`（全局去下划线）。计划意图（灰字有双语描述）已由既有键完整达成，无缺交付物；文案采既有短文案而非本册草案（更精炼、已被设置页 UI 验证）。
 - **改动面**（分支 `t-mcp-tool-display-desc`，基于 master `9f4937fb8`）：
   - `McpToolsetSupport`：两钩子改读 bundle（`displayDescription(fallback)` 缺键回落 fallback、无参版缺键空串）；companion 提取 `toolDescKey` 单一派生源；
   - `McpConfigurable.checkBoxText` 改引 `toolDescKey`（防两处内联漂移）；
