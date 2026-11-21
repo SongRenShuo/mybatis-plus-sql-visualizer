@@ -258,6 +258,13 @@ class AgentManager(private val project: Project) : Disposable {
      */
     internal val targetJvmNotifiedVersions: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
+    /**
+     * T-AgentStatusOldJvm（2026-11-21）：本会话是否曾因目标 JVM 类版本过低被注入闸门拦下。
+     * 粘性置位（不随单次运行清除）：状态行在「从未挂载」分支用它改说「已跳过注入」；
+     * 真实挂载后由更高优先级分支覆盖叙事，无需反向清除。internal 为同模块测试缝。
+     */
+    internal val targetJvmSkipDetected = java.util.concurrent.atomic.AtomicBoolean(false)
+
     // ---------- T-PS4-03 测试缝：去抖窗与时间源可注入（生产链路勿改默认值） ----------
 
     /** attach 排队去抖窗（默认 [DEFAULT_ATTACH_DEBOUNCE_MS]；测试注入短窗驱动去抖语义）。 */
@@ -879,6 +886,9 @@ class AgentManager(private val project: Project) : Disposable {
                     "（目标 JDK 判定值 $targetJvmMaxMajor < agent 产物 ${PremainInjection.MIN_TARGET_CLASS_MAJOR}）" +
                     "——不提取 jar、不协商端口，回落 attach/桥（零劣化）",
             )
+            // T-AgentStatusOldJvm：粘性置位——状态行据此显示「已跳过注入」而不是「等待挂载」
+            // （本项目永远等不到挂载，气球通知错过后就只剩状态行这一个自解释面）。
+            targetJvmSkipDetected.set(true)
             notifyTargetJvmUnsupported(targetJvmMaxMajor)
             return null
         }
@@ -1430,6 +1440,8 @@ class AgentManager(private val project: Project) : Disposable {
             heartbeatWindowSeconds = heartbeatWindowMs / 1000,
             // T-CaptureCatchAll 券02：活性回落解封态——设置页状态行如实披露「已回退控制台解析」
             activityFallbackActive = CaptureActivityFallback.isActive(),
+            // T-AgentStatusOldJvm：曾因目标 JDK 过老被闸门跳过——状态行改说「已跳过注入」而非「等待挂载」
+            targetJvmUnsupported = targetJvmSkipDetected.get(),
         ),
     )
 
