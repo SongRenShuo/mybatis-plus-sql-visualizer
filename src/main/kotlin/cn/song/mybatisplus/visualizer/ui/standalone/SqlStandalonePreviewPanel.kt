@@ -135,6 +135,16 @@ class SqlStandalonePreviewPanel(
     /** 载入文件的代次守卫：晚到的后台读取结果不得触碰已清空/已释放/已被新一次加载取代的 UI。 */
     private var loadFileGeneration = 0L
 
+    /**
+     * 测试缝：替代真实剪贴板的「粘贴计划」文本来源（headless 不能依赖系统剪贴板；
+     * 对齐 [missingFragmentPrompt]/[fileChooserForTest] 注入点惯例）。
+     * 生产默认 null → 读系统剪贴板（读取失败按空处理，不炸）。
+     */
+    internal var planClipboardForTest: (() -> String?)? = null
+
+    /** 测试缝：替代真实弹窗的「粘贴计划」视图打开通道（headless 只认登记事实，对齐 DialogTest 口径）。 */
+    internal var pasteDialogInvoker: ((cn.song.mybatisplus.visualizer.ui.ExplainPlanResultView) -> Unit)? = null
+
     private var disposed = false
 
     /** 解析预览动作实例（字段化：构造期就要注册组件级快捷键，不能每次建工具栏都新建一个）。 */
@@ -150,8 +160,11 @@ class SqlStandalonePreviewPanel(
 
     private val openInDialogAction = OpenInDialogAction()
 
+    /** 粘贴执行计划（PEV-01）：从剪贴板读计划文本/JSON，直出结构化计划视图弹窗。 */
+    private val pastePlanAction = PastePlanAction()
+
     /**
-     * 顶部工具栏（图标）：解析 / 格式化 / 从文件加载 / 清空 / 在弹框中打开。
+     * 顶部工具栏（图标）：解析 / 格式化 / 从文件加载 / 粘贴计划 / 清空 / 在弹框中打开。
      *
      * T-PreviewActionRow 二轮（用户 2026-11-20 反馈「清空与在弹框中打开这两个按钮需要保留」）：
      * 这两项回到顶部——它们是用户按位置记忆的「随时可用」操作；底部只留两个真正新增的产物出口
@@ -160,9 +173,10 @@ class SqlStandalonePreviewPanel(
     private val inputActions: List<AnAction> = listOf(
         resolveAction,
         FormatAction(),
-        // 读文件是**输入源**能力，只挂在有输入区的工作台上；通用预览弹窗
-        //（22 个文件 / 53 处调用点共用、只展示已渲染 SQL）不再拥有它。
+        // 读文件与粘贴计划都是**输入源**能力，只挂在有输入区的工作台上；通用预览弹窗
+        //（22 个文件 / 53 处调用点共用、只展示已渲染 SQL）不再拥有它们。
         LoadFileAction(),
+        pastePlanAction,
         clearAction,
         openInDialogAction,
     )
@@ -432,6 +446,127 @@ class SqlStandalonePreviewPanel(
                 )
             }
         }
+    }
+
+    /**
+     * 粘贴执行计划（PEV-01）：剪贴板里的 EXPLAIN 文本/JSON → 结构化计划视图弹窗。
+     *
+     * 路由：JSON 形态（可解析）→ 走 [ExplainPlanResultView] 既有 JSON 管线（徽章/收拢/统计
+     * 随 ANALYZE JSON 自动生效）；其余 → [ExplainTextPlanTree.parse]（失败按结构化 reason
+     * 出状态行提示，不猜格式——诚实降级红线）。text 档建议走 [ExplainIndexAdvisor.adviseText]
+     * 单一来源；徽章/统计对 text 档不做（其行数字段不在 JSON 徽章判定位，v1 如实不做）。
+     */
+    internal inner class PastePlanAction : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = MpvsIcons.MapperXml
+            e.presentation.text = MpSqlVisualizerBundle.message("standalone.action.pastePlan")
+            e.presentation.description = MpSqlVisualizerBundle.message("standalone.plan.paste.description")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            val text = (planClipboardForTest?.invoke() ?: readClipboard()).orEmpty().trim()
+            if (text.isEmpty()) {
+                setStatus(MpSqlVisualizerBundle.message("standalone.plan.paste.empty"))
+                return
+            }
+            if (text.startsWith("[") || text.startsWith("{")) {
+                if (runCatching { com.google.gson.JsonParser.parseString(text) }
+                        .getOrNull()?.let { it.isJsonObject || it.isJsonArray } == true) {
+                    // 诚实门：JSON 可解析但不含计划节点（任意 JSON 都可能被贴进来）→ 失败提示，
+                    // 不开「{plan}」废视图
+                    val hasPlanNodes = runCatching {
+                        cn.song.mybatisplus.visualizer.ui.ExplainJsonPlanTree.flattenPlanNodes(listOf(listOf(text)))
+                    }.getOrDefault(emptyList()).isNotEmpty()
+                    if (!hasPlanNodes) {
+                        setStatus(
+                            MpSqlVisualizerBundle.message(
+                                "standalone.plan.paste.failed",
+                                MpSqlVisualizerBundle.message("standalone.plan.paste.failed.jsonShaped"),
+                            ),
+                        )
+                        return
+                    }
+                    // JSON 档：raw.rows 直接进既有管线（build() 全语义：徽章/收拢/统计）
+                    openPastePlanDialog(
+                        cn.song.mybatisplus.visualizer.ui.ExplainPlanResultView(
+                            dialectName = MpSqlVisualizerBundle.message("standalone.plan.paste.dialect"),
+                            dataSourceName = null,
+                            elapsedMs = -1L,
+                            raw = cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult(
+                                listOf("QUERY PLAN"),
+                                listOf(listOf(text)),
+                            ),
+                            format = cn.song.mybatisplus.visualizer.sql.ExplainOutputFormat.JSON,
+                        ),
+                    )
+                    setStatus(MpSqlVisualizerBundle.message("standalone.plan.paste.success.json"))
+                    return
+                }
+                // 形似 JSON 但解析不出 → 按 JSON_SHAPED 失败提示（解析器也会给同款 reason）
+                setStatus(
+                    MpSqlVisualizerBundle.message(
+                        "standalone.plan.paste.failed",
+                        MpSqlVisualizerBundle.message("standalone.plan.paste.failed.jsonShaped"),
+                    ),
+                )
+                return
+            }
+            when (val parsed = cn.song.mybatisplus.visualizer.ui.ExplainTextPlanTree.parse(text)) {
+                is cn.song.mybatisplus.visualizer.ui.ExplainTextPlanTree.Result.Success -> {
+                    val view = cn.song.mybatisplus.visualizer.ui.ExplainPlanResultView(
+                        dialectName = MpSqlVisualizerBundle.message("standalone.plan.paste.dialect"),
+                        dataSourceName = null,
+                        elapsedMs = -1L,
+                        raw = cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult(
+                            listOf("QUERY PLAN"),
+                            listOf(listOf(text)),
+                        ),
+                        format = cn.song.mybatisplus.visualizer.sql.ExplainOutputFormat.JSON,
+                        prebuiltRoots = parsed.roots,
+                        hints = runCatching {
+                            cn.song.mybatisplus.visualizer.util.ExplainIndexAdvisor.adviseText(text)
+                        }.getOrDefault(emptyList()),
+                    )
+                    openPastePlanDialog(view)
+                    setStatus(MpSqlVisualizerBundle.message("standalone.plan.paste.success.text", parsed.roots.size))
+                }
+                is cn.song.mybatisplus.visualizer.ui.ExplainTextPlanTree.Result.Failure -> {
+                    setStatus(
+                        MpSqlVisualizerBundle.message(
+                            "standalone.plan.paste.failed",
+                            pasteFailureText(parsed.reason),
+                        ),
+                    )
+                }
+            }
+        }
+
+        private fun readClipboard(): String? = runCatching {
+            java.awt.Toolkit.getDefaultToolkit().systemClipboard
+                .getData(java.awt.datatransfer.DataFlavor.stringFlavor) as? String
+        }.getOrNull()
+    }
+
+    /** PEV-01：粘贴失败原因 → 状态行文案（结构化 reason 分支，不猜格式）。 */
+    private fun pasteFailureText(reason: cn.song.mybatisplus.visualizer.ui.ExplainTextPlanTree.Reason): String = when (reason) {
+        cn.song.mybatisplus.visualizer.ui.ExplainTextPlanTree.Reason.EMPTY_INPUT ->
+            MpSqlVisualizerBundle.message("standalone.plan.paste.empty")
+        cn.song.mybatisplus.visualizer.ui.ExplainTextPlanTree.Reason.JSON_SHAPED ->
+            MpSqlVisualizerBundle.message("standalone.plan.paste.failed.jsonShaped")
+        cn.song.mybatisplus.visualizer.ui.ExplainTextPlanTree.Reason.NO_PLAN_NODES ->
+            MpSqlVisualizerBundle.message("standalone.plan.paste.failed.noPlanNodes")
+        cn.song.mybatisplus.visualizer.ui.ExplainTextPlanTree.Reason.UNRECOGNIZED_NODE_LINE ->
+            MpSqlVisualizerBundle.message("standalone.plan.paste.failed.unrecognized")
+    }
+
+    /** PEV-01：粘贴计划视图弹窗（生产走 [ExplainPlanDialog]；测试缝可替换）。 */
+    private fun openPastePlanDialog(view: cn.song.mybatisplus.visualizer.ui.ExplainPlanResultView) {
+        (
+            pasteDialogInvoker
+                ?: { v: cn.song.mybatisplus.visualizer.ui.ExplainPlanResultView ->
+                    cn.song.mybatisplus.visualizer.ui.ExplainPlanDialog(project, v).show()
+                }
+            ).invoke(view)
     }
 
     /**

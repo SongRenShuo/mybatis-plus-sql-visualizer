@@ -175,6 +175,17 @@ object ExplainIndexAdvisor {
     /** 体检规则清单（R45；空实现无——清单恒非空，供面板「体检规则」说明栏与文档生成）。 */
     fun ruleInventory(): List<RuleInfo> = RULE_INVENTORY
 
+    /**
+     * PEV-01 粘贴链专用入口：对粘贴的计划文本跑 text 档规则（SEQ_SCAN 正则 + PEV-04 三规则）。
+     * 与 [advise] 的 text 分派共用 [advisePlanText] 单一来源；解析失败静默（零命中）——
+     * 失败语义由调用方经 [ExplainTextPlanTree.parse] 自行分支（提示文案按 reason 给）。
+     */
+    fun adviseText(text: String): List<Hint> {
+        val out = mutableListOf<Hint>()
+        advisePlanText(listOf(listOf(text)), out)
+        return out
+    }
+
     private fun advisePlanText(rows: List<List<String>>, out: MutableList<Hint>) {
         for (row in rows) {
             for (cell in row) {

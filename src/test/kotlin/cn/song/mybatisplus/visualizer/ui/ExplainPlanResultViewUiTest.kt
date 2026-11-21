@@ -26,7 +26,8 @@ import javax.swing.JList
  * R33 EXPLAIN 结构化渲染视图组件行为测试（渲染判别测试）。
  *
  * 覆盖：MySQL 表格格式 → 面板内只读表格（行列保真）；PG JSON 树 → 可折叠树（模型非空）；
- * 索引建议联动（有建议显示、无建议不占位）；「回到原生控制台」入口显隐与回调。
+ * 索引建议联动（有建议显示、无建议不占位）；「回到原生控制台」入口显隐与回调；
+ * PEV-02/03/06 徽章/统计/收拢；PEV-01 起主类带 prebuiltRoots 参数（粘贴链预构建根）。
  */
 class ExplainPlanResultViewUiTest : BasePlatformTestCase() {
 

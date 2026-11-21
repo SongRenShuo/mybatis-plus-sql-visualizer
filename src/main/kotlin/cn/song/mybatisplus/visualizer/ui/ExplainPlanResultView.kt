@@ -44,6 +44,11 @@ class ExplainPlanResultView(
     raw: McpExplainFormatter.RawResult,
     format: ExplainOutputFormat,
     hints: List<ExplainIndexAdvisor.Hint> = emptyList(),
+    /**
+     * PEV-01：预构建计划根（粘贴链专用——text 计划已由 [ExplainTextPlanTree.parse] 读成树，
+     * 直接进渲染；JSON 档粘贴走 raw.rows 让 build() 全管线（徽章/收拢/统计）自然生效，不传本参）。
+     */
+    prebuiltRoots: List<ExplainJsonPlanTree.Node>? = null,
     onBackToConsole: (() -> Unit)? = null,
     /** R61：与上一次结构化执行的对比（null=无基线/无可比——条不占位；isEmpty=计划无变化，显式告知）。 */
     diff: ExplainPlanDiff.PlanDiff? = null,
@@ -210,7 +215,7 @@ class ExplainPlanResultView(
                 }
             }
             ExplainOutputFormat.JSON -> {
-                val roots = ExplainJsonPlanTree.build(raw.rows).orEmpty()
+                val roots = prebuiltRoots ?: ExplainJsonPlanTree.build(raw.rows).orEmpty()
                 val rootNode = DefaultMutableTreeNode("EXPLAIN")
                 roots.forEach { r -> rootNode.add(toSwingNode(r)) }
                 tree = DefaultTreeModel(rootNode)
