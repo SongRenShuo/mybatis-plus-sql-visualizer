@@ -30,3 +30,18 @@
 | 反向（git 补丁） | 已完成 2026-11-21 | 补丁 `%TEMP%\mpsv-status-reverse.patch` | apply 后 `AgentStatusTextTest` **2 红**（新态用例 + 互不重复）→ `git checkout --` 还原 → 复跑 16/0；全程未手改代码 |
 
 实施期踩坑两条（已改测试口径）：① 平台测试里 bundle 按 IDE locale 解析，中文特征串断言随 locale 翻红——manager 层断言改钉「事实标志」，文案映射留给纯函数测试（zh 兜底环境）；② 同类回连用例的会话态粘性污染 statusSummary，状态行文案断言在 manager 层不可靠，同样收窄到标志层。
+
+## 五、追加修（2026-11-21 下午，沙盒真机复盘）：优先级遮蔽
+
+用户沙盒实测暴露：`everAttached` 是项目级粘性标志——**先跑一次 JDK 8 挂上、再跑 JDK 7 被跳过**时，
+状态行显示上一次会话的「连接中断，已回落控制台捕获」，本次「已跳过注入」的事实被遮住。
+
+修法（小刀）：`agentStatusText` 把跳过态提到「曾挂载」分支之前（优先级 =「本次挂载 > 本次跳过 >
+上次会话结局」）；`AgentManager` 两处会话建立点（attachToPid / premain 回连）清 `targetJvmSkipDetected`
+——真实挂载后不得再显示跳过叙事。premain 建立点原有注释「当前无可见后果，但任何人重排分支就会露出来」
+——本次重排后该清位从「防御」变「必然可见」，注释同步改写。
+
+| 项 | 状态 | 提交 | 读数 |
+|---|---|---|---|
+| 追加修 | 已完成 2026-11-21 | 见提交 | `AgentStatusTextTest`（优先级用例反转：everAttached+跳过 → 跳过态胜）+ `AgentManagerPremainTest`（回连建会话清标志） |
+| 反向（git 补丁） | 已完成 2026-11-21 | 补丁 | 摘掉提前的跳过分支 → 优先级用例红 → 还原绿 |

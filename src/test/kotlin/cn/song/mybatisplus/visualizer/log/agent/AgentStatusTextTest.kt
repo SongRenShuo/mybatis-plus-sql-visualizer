@@ -74,10 +74,15 @@ class AgentStatusTextTest {
     }
 
     @Test
-    fun test曾挂载后JDK过老标记不改写回落叙事() {
-        // everAttached 分支在 JDK 态之前：挂过又断的回落叙事不被粘性标记改写
-        val text = agentStatusText(snap(everAttached = true, targetJvmUnsupported = true))
-        assertEquals("连接中断，已回落控制台捕获", text)
+    fun test本次跳过优先于上次会话结局叙事() {
+        // T-AgentStatusOldJvm2（2026-11-21）：everAttached 是项目级粘性标志——先跑一次 JDK 8
+        // 挂上（会话已断）再跑 JDK 7 被跳过时，「连接中断」描述的是**上一次**会话的结局，
+        // 会遮住本次「已跳过注入」的事实。优先级 =「本次挂载 > 本次跳过 > 上次会话结局」。
+        // （会话真建立时 AgentManager 会清跳过标志，故不存在「挂载中却被说跳过」的形态。）
+        val text = agentStatusText(snap(everAttached = true, targetJvmUnsupported = true))!!
+        assertTrue("本次的跳过事实应优先：$text", text.contains("已跳过注入"))
+        assertFalse("不得再显示上次会话的「连接中断」：$text", text.contains("连接中断"))
+        assertFalse("不得回落「等待挂载」：$text", text.contains("等待应用进程启动"))
     }
 
     @Test

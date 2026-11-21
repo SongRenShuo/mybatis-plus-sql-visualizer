@@ -99,6 +99,15 @@ internal fun agentStatusText(s: AgentStatusSnapshot): String? {
             attached
         }
     }
+    // T-AgentStatusOldJvm：目标 JVM 低于 agent 字节码要求时注入已被闸门跳过——本项目永远等不到
+    // 挂载，「等待挂载」是错叙事。位置在「曾挂载」分支**之前**（T-AgentStatusOldJvm2 复盘）：
+    // everAttached 是项目级粘性标志，先跑一次 JDK 8 再跑 JDK 7 时，上次会话的「连接中断」会
+    // 遮住本次「已跳过注入」的事实——优先级必须是「本次挂载 > 本次跳过 > 上次会话结局」。
+    // AgentManager 在会话建立时清跳过标志，故「真实挂载了」不会落入本分支（且 livePids 分支更先）。
+    // 【反向验证实验摘除点】git 补丁摘掉本分支 → 优先级用例必红（回落上次会话的结局文案）
+    if (s.targetJvmUnsupported) {
+        return MpSqlVisualizerBundle.message("settings.enhancedCapture.status.targetJvmTooOld")
+    }
     if (s.everAttached) {
         // T-ReachAudit T-RA-01：心跳过期 = socket 未断而帧停，与真断连分开叙述。
         // T-AgentHeartbeat T-05：过期再分两因，且只报**可核实的事实**（已 N 秒未收到心跳）——
@@ -117,12 +126,6 @@ internal fun agentStatusText(s: AgentStatusSnapshot): String? {
                 "settings.enhancedCapture.status.fellBack"
             },
         )
-    }
-    // T-AgentStatusOldJvm：目标 JVM 低于 agent 字节码要求时注入已被闸门跳过——该项目永远等不到
-    // 挂载，「等待挂载」是错叙事；放在「从未挂载」分支之前（真实挂载了就走上面的高优先级分支）。
-    // 【反向验证实验摘除点】git 补丁摘掉本分支 → 新用例必红（回落「等待挂载」文案）
-    if (s.targetJvmUnsupported) {
-        return MpSqlVisualizerBundle.message("settings.enhancedCapture.status.targetJvmTooOld")
     }
     return MpSqlVisualizerBundle.message("settings.enhancedCapture.status.authorizedWaiting")
 }

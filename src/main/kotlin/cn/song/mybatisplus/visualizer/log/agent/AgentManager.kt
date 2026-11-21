@@ -635,6 +635,9 @@ class AgentManager(private val project: Project) : Disposable {
         heartbeatDropDetected.set(false)
         // T-AgentHeartbeat T-05：同一口径清「首条心跳未到」标记
         firstHeartbeatPending.set(false)
+        // T-AgentStatusOldJvm2：本次真挂载成功 → 清「目标 JDK 过老已跳过」标志——状态行优先级
+        // 是「本次挂载 > 本次跳过 > 上次会话结局」，真实挂载后不得再显示跳过叙事
+        targetJvmSkipDetected.set(false)
         publishStatusChanged()
         // T-FirstUsePremainConsent S2：attach 兜底挂载成功（能走到这里必非 premain 在场——
         // premain 通道在场的进程在 doAttachAsync 入口就跳过）→ 能力边界告知（每轮至多一次）
@@ -1230,9 +1233,11 @@ class AgentManager(private val project: Project) : Disposable {
             everAttached.set(true)
             // T-AgentHeartbeat T-05（独立复核补位）：与 attachToPid 对称——新会话挂上即清两类回落标记。
             // 此前只写 attachedPids 不清标记，premain 重连后状态行可能残留上一轮摘除的叙事；
-            // 当前无可见后果（agentStatusText 先判 livePids），但任何人重排分支就会露出来。
+            // T-AgentStatusOldJvm2：状态行重排后（本次跳过 > 上次会话结局）本清位已**必然可见**——
+            // 不清的话「先跑 JDK 8 挂上、再跑 JDK 7 被跳过」的场景里，重跑挂上的会话仍显示跳过叙事。
             heartbeatDropDetected.set(false)
             firstHeartbeatPending.set(false)
+            targetJvmSkipDetected.set(false)
             updateOnline()
             // T-PS5-04：premain 会话建立同 attach 链——巡检懒启 + 推断 URL 回写
             ensureMonitorStarted()

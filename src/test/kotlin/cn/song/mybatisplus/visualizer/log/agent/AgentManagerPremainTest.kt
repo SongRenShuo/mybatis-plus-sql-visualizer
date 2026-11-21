@@ -132,11 +132,15 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
         val port = portOf(option)
         val pid = 424242L
         val socket = Socket("127.0.0.1", port)
+        // T-AgentStatusOldJvm2：模拟「上一次运行命中过 JDK 闸门」——会话建立必须清掉跳过标志，
+        // 否则状态行在「本次挂载」时仍显示跳过叙事（优先级：本次挂载 > 本次跳过 > 上次会话结局）
+        manager.targetJvmSkipDetected.set(true)
         writeFrame(socket, AgentProtocol.CMD_HELLO, """{"pid":$pid}""")
 
         awaitTrue("premain 会话未建立") { manager.sessions.isNotEmpty() }
         // sessions 先入表、updateOnline/publishStatusChanged 随后，故在线态各自等一次
         awaitTrue("回连后在线态未置位") { manager.online }
+        awaitTrue("会话建立应清掉跳过标志") { !manager.targetJvmSkipDetected.get() }
         // T-AgentReconnect T-03：通道不再「accept 一次即摘除」——认领后转入等重连（绑定到本次运行），
         // 由运行结束信号/pid 消亡/TTL 回收。旧断言（通道被摘除）即 30 秒摘除后无法恢复的根因形态。
         awaitTrue("通道未认领（应留在表内等重连）") { manager.premainChannels.size == 1 && manager.premainChannels[0].claimed }
