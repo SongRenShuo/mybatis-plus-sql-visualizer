@@ -1348,6 +1348,11 @@ class AgentManager(private val project: Project) : Disposable {
         // 控制台通道照常解析兜底，两通道不并存（agent 侧已丢，无重复条目）。
         val gateNow = online && captureConfirmedActive() && !userPaused
         val gateWas = SqlCaptureGate.paused.getAndSet(gateNow)
+        // T-MultiModuleConsoleYield（2026-11-21）：与闸门同点同步「健康会话 pid 集」——控制台行级
+        // 让位归属的依据（行前缀 PID 字段 ∈ 集 → 让位；∉ 集 → 该行来自无 agent 模块，桥照常解析）。
+        // 与 paused 同点写：避免「闸门已封、pid 集陈旧」的窗口；clear + 重灌（规模=会话数，代价可忽略）。
+        SqlCaptureGate.liveSessionPids.clear()
+        sessions.forEach { if (isSessionHealthy(it)) SqlCaptureGate.liveSessionPids.add(it.pid) }
         // T-CaptureCatchAll 券02：让位起点/回落沿同步给活性回落状态机（白名单漏驱动导致的双哑
         // 由它兜底）。放在闸门写入之后：状态机的「静默计时」必须与闸门实际生效时刻对齐。
         CaptureActivityFallback.onGateChanged(gateNow)

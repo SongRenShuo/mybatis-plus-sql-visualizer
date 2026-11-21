@@ -952,6 +952,35 @@ object SqlCaptureGate {
     val paused = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /**
+     * T-MultiModuleConsoleYield（2026-11-21）：当前持有**健康 agent 会话**的目标进程 pid 集
+     * （[cn.song.mybatisplus.visualizer.log.agent.AgentManager.updateOnline] 与 `paused` 同点同步）。
+     *
+     * 让位判定的行级归属依据：控制台行前缀自带目标进程 PID（Spring Boot 标准日志格式第三段），
+     * 与 agent 会话的 pid 同源（HELLO 帧）。行可归属且 pid 不在集内 = 这行来自**没挂 agent** 的
+     * 另一模块/进程 → 桥照常解析（此前全局让位会把这类行纯丢掉）；无法归属 → 保持既有全局让位
+     * （宁丢勿重，不改未证形态）。写侧只在 updateOnline（clear + 重灌），读侧逐行查询无锁。
+     */
+    @JvmField
+    val liveSessionPids: MutableSet<Long> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /** Spring Boot 标准日志行的 PID 提取（日期 + 时间两段前缀形态）。 */
+    private val PID_WITH_DATE = Regex("""^\s*\S+\s+\S+\s+[A-Z]+\s+(\d+)\s+---""")
+
+    /** 单段时间前缀形态（无日期，如 `14:41:06.810 INFO 52324 --- ...`）。 */
+    private val PID_PLAIN = Regex("""^\s*\S+\s+[A-Z]+\s+(\d+)\s+---""")
+
+    /**
+     * 从控制台行前缀提取目标进程 pid（Spring Boot 标准格式：`… 级别 PID --- […]`）。
+     * 两种形态：日期+时间两段 / 仅时间一段；级别须全大写字母、PID 须为数字且紧跟 ` --- `。
+     * 非该形态（无法归属进程）返回 null——调用方保持既有全局让位。
+     */
+    fun logLinePid(line: String): Long? {
+        if (line.length > 400) return null // 归属只看前缀，超长行（拼接 SQL 主体）直接不提
+        val m = PID_WITH_DATE.find(line) ?: PID_PLAIN.find(line) ?: return null
+        return m.groupValues[1].toLongOrNull()
+    }
+
+    /**
      * T-PanweiInsertCapture F1：让位期间被丢弃的**可解析 SQL 行**累计。
      *
      * 口径：`processConsoleLine` 处于「paused 且活性回落未解封」时，嗅探（`sniffLogTimestamp`）
@@ -1200,7 +1229,15 @@ internal fun processConsoleLine(
     // 仍有 SQL 行」时自动解封（白名单漏驱动的双哑场景）。解封态下本函数直接走正常解析；让位态下
     // 嗅探产出的条目若恰是解封触发点，直接采用该条目（不重复喂解析器、不丢这一行）。
     if (SqlCaptureGate.paused.get()) {
-        if (!CaptureActivityFallback.isActive()) {
+        // T-MultiModuleConsoleYield（2026-11-21）：让位做**行级进程归属**——行前缀自带目标进程
+        // PID（Spring Boot 标准格式）。行可归属且该 pid **有**健康 agent 会话 = 这行的 SQL agent
+        // 已经在采（防双报）→ 既有让位；行可归属但 pid **无**会话 = 这行来自没挂 agent 的另一
+        // 模块/进程，桥照常解析（此前全局让位会把这类行纯丢掉：两模块只挂一个 agent 时，
+        // 另一模块的 MyBatis 日志全进「让位丢弃」）。行不可归属 → 保持既有全局让位（宁丢勿重）。
+        // 【反向验证实验摘除点】git 补丁摘掉归属分支（恢复无条件让位）→ 「pid ∉ 会话集」用例必红。
+        val linePid = SqlCaptureGate.logLinePid(line)
+        val suppressThisLine = linePid == null || SqlCaptureGate.liveSessionPids.contains(linePid)
+        if (suppressThisLine && !CaptureActivityFallback.isActive()) {
             val sniffed = sniffLogTimestamp(line, ctx)
             if (CaptureActivityFallback.onConsoleLine(sniffed.isNotEmpty(), CaptureActivityFallback.now())) {
                 return finishEntries(sniffed, line, ctx, timePrefix)
