@@ -40,5 +40,7 @@ if (DriverInternalSql.isInternal(event.sql)) { dropped 计数; return }
 | 项 | 状态 | 提交 | 读数 |
 |---|---|---|---|
 | 计划 | 已完成 2026-11-21 | — | — |
-| 实施 | 待开工 | — | — |
-| 反向（git 补丁） | 待开工 | — | — |
+| 实施 | 已完成 2026-11-21 | `8ef85fe56` | `DriverInternalSqlTest` 5/0 + `AgentManagerIntakeGateTest` 23/0（补过滤不入队计数、紧随业务语句照常入队两例） |
+| 反向（git 补丁） | 已完成 2026-11-21 | 补丁 `%TEMP%\mpsv-dif-reverse.patch` | apply 后 `AgentManagerIntakeGateTest` **2 红**（两个新端到端用例）→ `git checkout --` 还原 → 复跑 23/0 + 5/0；全程未手改代码 |
+
+实施坑一条：**Kotlin 块注释嵌套**——KDoc 里写字面「斜杠星号」会开出一层未闭合嵌套注释，整文件编译失败且报错点漂移（`Unclosed comment`）。注释指纹字面量提为 `CRITERION_COMMENT` 常量，文档里只描述形态不写字面。
