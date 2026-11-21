@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.mcp.GateRegistrationState
 import cn.song.mybatisplus.visualizer.mcp.McpGateFilterEpRegistrar
 import cn.song.mybatisplus.visualizer.mcp.McpSettingsOpenResult
 import cn.song.mybatisplus.visualizer.mcp.McpToolGate
+import cn.song.mybatisplus.visualizer.mcp.McpToolsetSupport
 import cn.song.mybatisplus.visualizer.mcp.findMcpToolsetClass
 import cn.song.mybatisplus.visualizer.mcp.openMcpServerSettingsPage
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -202,11 +203,9 @@ class McpConfigurable internal constructor(
         }
     }
 
-    /** 复选框文案：工具名 + 简述（双语，键按工具名尾段派生）。 */
-    private fun checkBoxText(toolName: String): String {
-        val descKey = "settings.mcp.tool.desc." + toolName.removePrefix("sqlv_").replace("_", "")
-        return toolName + " — " + MpSqlVisualizerBundle.message(descKey)
-    }
+    /** 复选框文案：工具名 + 简述（双语，键派生走 McpToolsetSupport 单一事实来源）。 */
+    private fun checkBoxText(toolName: String): String =
+        toolName + " — " + MpSqlVisualizerBundle.message(McpToolsetSupport.toolDescKey(toolName))
 
     /** 页内门控选择三态：总开关关 > 工具级有禁用 > 全启用，不代表平台调用状态。 */
     private fun refreshBannerGateLine() {

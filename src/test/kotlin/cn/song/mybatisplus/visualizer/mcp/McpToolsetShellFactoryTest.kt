@@ -384,7 +384,18 @@ class McpToolsetShellFactoryTest {
             sample.javaClass.simpleName,
             sample.displayName(),
         )
-        assertEquals("工具集描述无独立文案，给空串", "", sample.displayDescription())
-        assertEquals("带兜底的重载必须透传平台 fallback", "fb", sample.displayDescription("fb"))
+        // T-McpToolDisplayDesc（20261121 计划）：灰字描述改读 bundle 简述键（双语跟插件语言），
+        // 不再是「空串/透传 fallback」旧形态——旧断言随行为更新；缺键回落语义由
+        // McpToolsetDisplayDescriptionTest 的缺键用例钉住。
+        assertEquals(
+            "无参版 = bundle 中文简述（测试环境兜底中文）",
+            "源码位置渲染可执行 SQL",
+            sample.displayDescription(),
+        )
+        assertEquals(
+            "带参版 = bundle 简述优先，不透传平台 fallback（fallback＝工具名）",
+            "源码位置渲染可执行 SQL",
+            sample.displayDescription("sqlv_render_sql"),
+        )
     }
 }
