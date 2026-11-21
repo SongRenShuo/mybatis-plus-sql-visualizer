@@ -43,5 +43,5 @@
 
 | 项 | 状态 | 提交 | 读数 |
 |---|---|---|---|
-| 追加修 | 已完成 2026-11-21 | 见提交 | `AgentStatusTextTest`（优先级用例反转：everAttached+跳过 → 跳过态胜）+ `AgentManagerPremainTest`（回连建会话清标志） |
-| 反向（git 补丁） | 已完成 2026-11-21 | 补丁 | 摘掉提前的跳过分支 → 优先级用例红 → 还原绿 |
+| 追加修 | 已完成 2026-11-21 | `95ecbea44` | `AgentStatusTextTest`（优先级用例反转：everAttached+跳过 → 跳过态胜）+ `AgentManagerPremainTest`（回连建会话清标志） |
+| 反向（git 补丁） | 已完成 2026-11-21 | 补丁 `%TEMP%\mpsv-pri-reverse.patch` | apply 后 `AgentStatusTextTest` **3 红**（优先级用例 + 跳过态用例 + 互不重复）→ `git checkout --` 还原 → 复跑 16/0 + 16/0；全程未手改代码 |
