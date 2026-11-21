@@ -1134,6 +1134,38 @@ lambda 要调的辅助函数落独立 .kt（VerifierHomeGuard.kt，CC 可序列�
 
 **Seen 1× (2026-11-21)**
 
+### L95 Gradle console 的测试失败行不打断言消息——判失败源必须读 XML 的 `<failure>` 节点，别从「无消息」反推
+
+**规则**：`java.lang.AssertionError at X.kt:-1` 对**带消息**与**不带消息**的 AssertionError 显示完全相同——
+console 形态不含消息信息。拿「无消息」当证据去锁断言源（如「无消息⇒必是无参 assertTrue」）会走错分支；
+同理测试内 `println` 的诊断段**会**出现在 gradle 日志里（lifecycle 级可见），可作为排除项证据。判失败源
+读 `build/test-results/<task>/TEST-*.xml` 的 `<failure>` 与 `<system-out>`（含完整消息与子进程诊断全文），
+CI 上没工件时用本地定向跑（注意 `--tests` 在 testFast 上不按类过滤，实际整桶跑）。
+**证据**：run 407（2026-11-20，44723363747）O147HistoryUpgradeTest classMethod 红，console 只给
+`AssertionError at kt:-1`；按「无消息」先锁了 assertTrue 分支，后改用「exit 0 ⇔ 必打 OK」语义互斥收敛；
+本地反向跑读 XML 才拿到完整消息与 PREIMAGE 诊断（`33bc6bcb1` 之后的修复提交，见 L96 条）。
+**正例**：失败源三分支并列排查（消息断言/语义互斥/诊断段存在性），最终读 XML 定锤。
+**反例**：只看 console 一行就开写修复，改错位置再整轮 8 分钟重跑。
+
+**Seen 1× (2026-11-21)**
+
+### L96 测试基建「子进程输出走文件重定向」在 CI 有写丢/读缺瞬态面——失败断言必须带自曝现场 + 一次有界重试
+
+**规则**：子 JVM 输出重定向到文件再读回的测试链路（ProcessBuilder.redirectOutput + readText），在 CI
+runner 上存在「进程 exit 0 但读回内容缺行」的文件系统瞬态（写丢失/读不完整），形态为非确定性一红多绿。
+对策三件套：① 断言失败时打印完整现场（输出全文/文件 stat/磁盘 freeSpace/完整命令行）；② 重试一次同
+断言 fork——真缺陷（指纹不符等确定性失败）两轮同败照常暴露，仅多付一次 fork，瞬态被吸收；③ 最终失败
+的 AssertionError 带 first/second 两轮现场。注意「重试吸收」只对**断言级**失败成立——超时（check 抛
+ISE）与 fork 启动失败不重试，直接红。
+**证据**：O147HistoryUpgradeTest @AfterClass 在 CI 的第三类环境特异失败（20261024 字符集 / 20261025
+时区 / 本次 run 407 文件瞬态，同 sha 三跑 1 红 2 绿）；修复提交（2026-11-21）：反向坏指纹两轮 exit=1
+照抛带两轮现场，正向整桶 6m24s 全绿。
+**正例**：`problems` 列表归并 exit 与内容断言 → 非空即打印现场 → attempt 0 失败 retry、attempt 1 失败
+抛带双轮现场的 AssertionError。
+**反例**：裸 `assertTrue(childOutput.contains("OK"))` 无消息无重试——CI 瞬态红时只剩一行盲区堆栈。
+
+**Seen 1× (2026-11-21)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
