@@ -160,6 +160,45 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
         assertEquals("放行路径不得计数丢弃", 0L, session.intakeDropped.get())
     }
 
+    // ---------- T-DriverInternalSqlFilter：驱动内部语句（连接初始化族）不入列表 ----------
+
+    fun test驱动内部语句_过滤不入队且计数() {
+        val manager = logManager()
+        manager.entries.paused = false
+        manager.setCapturingForTest(true)
+        val beforeSize = manager.entries.size()
+        val beforeDropped = DriverInternalSql.droppedEvents()
+
+        val session = newSession(7601L)
+        session.listenActiveProvider = { true }
+        writeFrame(
+            7601L, AgentProtocol.CMD_EVENT,
+            eventBody(
+                "/* mysql-connector-java-5.1.49 (Revision: x) */" +
+                    "SELECT @@session.auto_increment_increment AS auto_increment_increment",
+            ),
+        )
+
+        awaitTrue("驱动内部语句应被过滤并计数") { DriverInternalSql.droppedEvents() == beforeDropped + 1 }
+        assertEquals("驱动内部语句不得入列表", beforeSize, manager.entries.size())
+        assertEquals("过滤不得误计入队闸门丢弃", 0L, session.intakeDropped.get())
+    }
+
+    fun test驱动内部语句过滤_紧随其后的业务语句照常入队() {
+        val manager = logManager()
+        manager.entries.paused = false
+        manager.setCapturingForTest(true)
+        val before = manager.entries.size()
+
+        val session = newSession(7602L)
+        session.listenActiveProvider = { true }
+        writeFrame(7602L, AgentProtocol.CMD_EVENT, eventBody("SELECT @@session.autocommit;"))
+        writeFrame(7602L, AgentProtocol.CMD_EVENT, eventBody("select biz_after_internal_1"))
+
+        awaitTrue("过滤不得掐断通道：业务语句应照常入队") { manager.entries.size() == before + 1 }
+        assertEquals("内部语句被过滤、业务语句入列，总增量恰为 1", before + 1, manager.entries.size())
+    }
+
     /** 默认判据（不注入 provider）必须跟随 `SqlLogManager.capturing`——闸门不能只挂在测试缝上。 */
     fun test默认判据跟随捕获态() {
         val manager = logManager()
