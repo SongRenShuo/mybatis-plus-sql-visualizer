@@ -111,6 +111,41 @@ fun seedVerifierHome(master: File, sub: File, logger: org.gradle.api.logging.Log
  * internal 包无 API 稳定性承诺（虽在 9.7 在位，javap 实证），种子是锦上添花件不值得背这个债。
  * 绝对路径去重防软链/相对路径自嵌套（按 canonicalPath 比对，异常时退 equals）。
  */
+// 20261121（IDE 同步连坐修复）：verifier-cli jar 解析收口——原三处（verifyGate / registerMarketTarget /
+// verifyMarketplaceRefresh）把「缓存缺 jar 就 error()」写在**任务配置期**，IDE Gradle 同步
+// （task model warm-up / IdeaModelBuilder 遍历全部任务触发惰性创建）撞上即整树
+// IllegalStateException，同步失败＝runIde 沙盒无法启动（用户 20261121 实测）。
+// 现配置期只扫描（缺 jar 用哨兵路径占位），失败检查收敛到执行期 requireVerifierCliJar。
+// 独立 .kt 文件理由同上方 assertNoForeignVerifier：执行期 doFirst 引用脚本顶层函数触发
+// 配置缓存「cannot serialize Gradle script object references」。
+
+/**
+ * 在 gradle 缓存 modules-2 下解析 verifier-cli fat jar（ci-seed 播种或真实依赖解析产物均可命中）。
+ * 配置期/执行期都可调用（纯 File 扫描，不触达 project/layout）；classpath 求值用它 + 哨兵占位。
+ */
+fun resolveVerifierCliJarOrNull(gradleUserHome: File): File? =
+    gradleUserHome.resolve("caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli")
+        .walkTopDown().maxDepth(4)
+        .filter { it.isFile && it.name.matches(Regex("verifier-cli-.+-all\\.jar")) }
+        .firstOrNull()
+
+/**
+ * 执行期硬校验：verifier-cli jar 必须在场，缺失即 GradleException 带播种指引。
+ * 只在 doFirst/doLast（执行期动作）内调用——配置期永远不要抛，那会连坐 IDE 同步。
+ */
+fun requireVerifierCliJar(gradleUserHome: File): File =
+    resolveVerifierCliJarOrNull(gradleUserHome)
+        ?: throw GradleException(
+            "verifier-cli jar 未在 gradle 缓存找到。\n" +
+                "本机处置：跑 dev-support/seed-verifier-cli.ps1 按 dev-support/verifier-cli-version.txt 播种。\n" +
+                "CI 无需处理：build-plugin.yml 的「播种 verifier-cli」步骤自动播种。",
+        )
+
+/**
+ * 递归目录拷贝（Kotlin stdlib 实现）——不用 org.gradle.util.internal.GFileUtils：
+ * internal 包无 API 稳定性承诺（虽在 9.7 在位，javap 实证），种子是锦上添花件不值得背这个债。
+ * 绝对路径去重防软链/相对路径自嵌套（按 canonicalPath 比对，异常时退 equals）。
+ */
 private fun copyDirRecursively(src: File, dst: File) {
     val s = runCatching { src.canonicalPath }.getOrDefault(src.absolutePath)
     val d = runCatching { dst.canonicalPath }.getOrDefault(dst.absolutePath)
