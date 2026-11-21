@@ -6,6 +6,7 @@
 
 ### Changed
 - 插件显示名更名 SQL Visualizer → MyBatis SQL Visualizer（T-D244 搜索关键词决策 B1 案）：Marketplace 后台展示名与包内 plugin.xml `<name>` 同步更名，补上名称字段对 mybatis 系搜索词的匹配缺口；插件 ID / xmlId 与界面内品牌文案（错误报告、导出头、二维码说明、设置页标题）不变
+- Marketplace 描述关键词批（D246）——首行改 40 字符关键词句，补 iBatis/GoldenDB/openGauss 词面与 slow query/execution plan/sql formatter 精确短语，随下一发行批生效（蓝本列举中的磐维 PanWeiDB 经 Dialect.kt 对账不存在该方言，按实际改列 openGauss，数字 15 不动）
 
 ## [2026.11.21] - 2026-11-21
 
