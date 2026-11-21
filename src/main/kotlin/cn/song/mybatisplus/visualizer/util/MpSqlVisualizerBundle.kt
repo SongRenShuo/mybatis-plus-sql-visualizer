@@ -70,6 +70,22 @@ object MpSqlVisualizerBundle {
     }
 
     /**
+     * T-McpToolDisplayDesc：缺键返回 **null**（不回落 key 名）——调用方自带回落语义（如
+     * `McpToolsetSupport.displayDescription` 缺键回落工具名/空串）时用本方法；`[message]`
+     * 的「缺键返回 key 本身」兜底会把键名字符串漏进 UI。
+     * 语言选择与 UTF-8 读取链与 [message] 完全一致（currentLocale / utf8Control）。
+     */
+    @JvmStatic
+    fun messageOrNull(@PropertyKey(resourceBundle = BUNDLE_NAME) key: String, vararg params: Any?): String? {
+        val pattern = runCatching {
+            ResourceBundle.getBundle(BUNDLE_NAME, currentLocale(), loader, utf8Control).getString(key)
+        }.getOrNull() ?: return null
+        return if (params.isEmpty()) pattern else runCatching {
+            MessageFormat.format(pattern, *params)
+        }.getOrDefault(pattern)
+    }
+
+    /**
      * T-McpToolset2：agent 面英文文案——MCP 工具输出的警告/指引恒英文（agent 文案英文口径），
      * 与插件语言设置无关。bundle base 文件即英文（_zh 才是中文覆盖），Locale.ROOT 直读 base，
      * **零新键**（复用既有键的英文版本）；key 缺失兜底返回 key 本身（与 [message] 同策略）。

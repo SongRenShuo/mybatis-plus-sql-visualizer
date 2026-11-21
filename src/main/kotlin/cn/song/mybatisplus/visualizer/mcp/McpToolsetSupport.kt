@@ -10,6 +10,7 @@ import cn.song.mybatisplus.visualizer.log.SqlSource
 import cn.song.mybatisplus.visualizer.log.StatementType
 import cn.song.mybatisplus.visualizer.log.formatDatabaseFragment
 import cn.song.mybatisplus.visualizer.util.FatalErrors
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import kotlin.coroutines.Continuation
@@ -91,11 +92,23 @@ abstract class McpToolsetSupport(private val toolName: String) {
      */
     fun displayName(): String = javaClass.simpleName
 
-    /** 263 新增：工具集描述（外部清单/设置页展示用）。无独立文案，给空串不参与渲染。 */
-    fun displayDescription(): String = ""
+    /**
+     * 263 新增：工具集描述（外部清单/设置页展示用）。按插件语言读 bundle（T-McpToolDisplayDesc，
+     * 20261121 计划 §三.2）；缺键给空串（维持「不参与渲染」的既有语义）。
+     */
+    fun displayDescription(): String =
+        MpSqlVisualizerBundle.messageOrNull(toolDescKey(toolName)) ?: ""
 
-    /** 263 新增重载：带兜底文案的描述——透传平台给的 fallback，不自造文案。 */
-    fun displayDescription(fallback: String): String = fallback
+    /**
+     * 263 新增重载：带兜底文案的描述。T-McpToolDisplayDesc（20261121 计划 §二）：平台把
+     * **工具名**当 fallback 传进来（ToolsetReflection_utilKt 字节码实证），此前透传导致
+     * 设置页「公开的工具」灰字＝工具名（getPresentableDescription 取 displayDescription
+     * 非空即返，不回落 @McpDescription 长文）。现按插件语言读 bundle 一行简述（与插件
+     * 设置页门控区同一组键、中英双语跟随插件语言），键缺失才回落 fallback——与外部
+     * agent 的英文长文（@McpDescription）受众分离。
+     */
+    fun displayDescription(fallback: String): String =
+        MpSqlVisualizerBundle.messageOrNull(toolDescKey(toolName)) ?: fallback
 
     // ------------------------------------------------------------------
     // 共用骨架（一期 SqlVisualizerToolset 逐行迁入）
@@ -252,6 +265,16 @@ abstract class McpToolsetSupport(private val toolName: String) {
     protected fun firstLine(text: String): String = text.lineSequence().firstOrNull { it.isNotBlank() } ?: text
 
     companion object {
+        /**
+         * T-McpToolDisplayDesc：工具简述 bundle 键派生（**单一事实来源**）——
+         * `settings.mcp.tool.desc.<尾段>`，尾段＝工具名去 `sqlv_` 前缀去下划线
+         * （与 `McpConfigurable.checkBoxText` 的既有派生规则一致；11 键双语两份
+         * properties 齐备）。键派生提取到这里，防两处内联漂移（守卫族教训：
+         * 前缀表字面量提成常量）。
+         */
+        internal fun toolDescKey(toolName: String): String =
+            "settings.mcp.tool.desc." + toolName.removePrefix("sqlv_").replace("_", "")
+
         /**
          * T-McpAuditTrail T-MAT-04：改造前的审计入参槽位字面量。保留为默认值——纯静态工具
          * （无执行面、参数面未立项）的审计行因此逐字节不变；执行类工具显式传真实摘要。
