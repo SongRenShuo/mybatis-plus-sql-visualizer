@@ -5,7 +5,6 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * T-MultiModuleConsoleYield：让位的行级进程归属（多模块并行修复）。
@@ -38,7 +37,6 @@ class MultiModuleConsoleYieldTest : BasePlatformTestCase() {
 
     // ---------- logLinePid：行前缀 PID 提取 ----------
 
-    @Test
     fun testpid提取_现场两种日志形态() {
         // 用户控制台原文形态（日期 + 时间两段前缀）
         assertEquals(
@@ -61,7 +59,6 @@ class MultiModuleConsoleYieldTest : BasePlatformTestCase() {
         )
     }
 
-    @Test
     fun testpid提取_非日志形态返回null() {
         assertNull("裸 SQL 无前缀不可归属", SqlCaptureGate.logLinePid("==>  Preparing: SELECT 1"))
         assertNull("纯文本不可归属", SqlCaptureGate.logLinePid("Started Jdk16DemoApplication in 4.297 seconds"))
@@ -119,7 +116,6 @@ class MultiModuleConsoleYieldTest : BasePlatformTestCase() {
     private fun feed(ctx: BridgeLineContext, lines: List<String>): List<LogSqlEntry> =
         lines.flatMap { processConsoleLine(it, ctx, null, {}) }
 
-    @Test
     fun test有agent会话的pid_让位丢弃并计数() {
         SqlCaptureGate.paused.set(true)
         SqlCaptureGate.liveSessionPids.clear()
@@ -136,7 +132,6 @@ class MultiModuleConsoleYieldTest : BasePlatformTestCase() {
         )
     }
 
-    @Test
     fun test无agent的pid_照常解析产出() {
         SqlCaptureGate.paused.set(true)
         SqlCaptureGate.liveSessionPids.clear()
@@ -155,7 +150,6 @@ class MultiModuleConsoleYieldTest : BasePlatformTestCase() {
         )
     }
 
-    @Test
     fun test提不出pid的行保持全局让位() {
         SqlCaptureGate.paused.set(true)
         SqlCaptureGate.liveSessionPids.clear()
