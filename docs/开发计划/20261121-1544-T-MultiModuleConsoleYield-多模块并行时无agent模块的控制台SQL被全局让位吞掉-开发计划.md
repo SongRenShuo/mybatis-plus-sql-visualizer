@@ -41,5 +41,7 @@ Spring Boot 标准日志行的前缀自带 PID 字段（`2026-11-21 15:35:42.823
 | 项 | 状态 | 提交 | 读数 |
 |---|---|---|---|
 | 计划 | 已完成 2026-11-21 | — | — |
-| 实施 | 待开工 | — | — |
-| 反向（git 补丁） | 待开工 | — | — |
+| 实施 | 已完成 2026-11-21 | `eb9711735` | `MultiModuleConsoleYieldTest` 5/0（pid 提取两形态+非日志形态 / 有会话让位计数 / 无会话产出（修复点）/ 无前缀保守面）+ 让位嗅探回归 `AgentLogTimeParityTest` 14/0、`ConsoleSettleFlushTest` 6/0、`EpBridgeSinglePathTest` 7/0 |
+| 反向（git 补丁） | 已完成 2026-11-21 | 补丁 `%TEMP%\mpsv-mmy-reverse.patch` | 摘掉行级归属（恢复无条件让位）→ 「pid ∉ 会话集」用例 **1 红** → `git checkout --` 还原 → 5/0；全程未手改代码 |
+
+实施坑两条：① 归属条件首版写反（「pid ∉ 会话集才让位」）——首跑 2 红当场暴露，测试先行的价值现场；② MyBatis 空参数行（`==> Parameters:` 空余量）不闭合条目、要等静默冲刷——测试夹具的 Parameters 行须带参数值才能行级同步闭合，断言落在行级边界而非静默冲刷。
