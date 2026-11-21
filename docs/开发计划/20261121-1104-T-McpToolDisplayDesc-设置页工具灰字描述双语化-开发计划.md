@@ -90,4 +90,4 @@
 - **定向读数（XML 核对）**：`McpToolsetDisplayDescriptionTest` 6/0 + `McpToolsetShellFactoryTest` 11/0 + `TinyClassFileWriterD239Test` 5/0 + `McpConfigurableGateTest` 13/0 ＝ **35/0**。
 - **反向验证恰红**：把 `displayDescription(fallback)` 改回透传 → 新测试恰 **2 红**（`十一工具_中文态_灰字非空且不等于工具名` / `中文态_灰字是描述不是工具名`——恰是「灰字＝工具名」断言面，其余 4 例不红不漂移）；`git checkout` 还原后 17/0 复绿。反向前先提交正向（`e6e5acee7`），探针未连坐未提交改动。
 - **待用户真机点验**（验收清单 §五 前两项）：设置页灰字中文态/英文态目视（改插件语言 → 重开「公开的工具」页）。
-- 待办：本分支合入 master 由用户点名（纪律：合流等指令）。
+- **合流与门禁（用户令「合流 清理 推送 监听」，2026-11-21）**：分支合入 master（merge `d88413eb0`，零冲突，合并树与分支 tip 一致、定向读数按复用前提沿用）；工作树与分支已删（`-d` 确认已合）；双仓 master 推送成功（push-all.ps1 令牌通路）。**CI gate run 44863040432 @ `d88413eb0` conclusion=success（16 job 全绿：build/agenttest/test 五片+fast/verify 243·253·263/marketplace 243·253·263/verifyplugin/gate；publish 在 gate 模式 skipped 属正常形态）**——本轮任务收官，剩真机灰字中文/英文两态目视由用户随手点验。
