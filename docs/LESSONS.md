@@ -1112,6 +1112,28 @@ javac 原生编）在 1.6 上 `skipped` 且应用正常起、在 1.8 上正常�
 
 **Seen 1× (2026-11-20)**
 
+### L94 构建脚本的「环境硬校验」严禁写在任务配置期——必须降到执行期，否则一次缓存变动连坐 IDE 全量同步
+
+**规则**：register 块内的 `error(...)` / `throw` 在 IDE Gradle 同步时必然被执行——同步会遍历全部任务触发惰性
+创建（task model warm-up 与 IdeaModelBuilder 两条路径）。任一任务配置期抛异常＝**整树同步失败**，IDE 里所有
+Gradle 驱动能力（runIde 沙盒、构建、测试、任务清单）全不可用。判据：配置期求值且不依赖命令行任务名的
+硬校验（缓存 jar / 发行目录 / 环境探测）就是违规形态。环境类校验一律写 doFirst（执行期）；配置期只扫描、
+可空时用哨兵值占位（classpath 接受不存在的路径，doFirst 先炸就永远走不到）。
+**证据**：2026-11-21 用户报「无法启动沙盒」，IDE 弹「Unable to warm-up Gradle task model」——根因是本机
+gradle 缓存丢 verifier-cli jar，`buildSrc/src/main/kotlin/mpv-verification.gradle.kts` 三处 classpath 扫描
+`?: error(...)` 在配置期抛 IllegalStateException（verifyGate 206 行 / registerMarketTarget 359 行 /
+verifyMarketplaceRefresh 483 行）。`33bc6bcb1` 降级修复后 `--no-configuration-cache` 实测：jar 缺失
+`gradlew help` BUILD SUCCESSFUL（修复前同路径即报障读数）；verifyGate 红在执行期 requireVerifierCliJar
+带播种指引；jar 在位时放行到既有 IDE 目录闸门。
+**正例**：配置期扫描可空 + 哨兵占位，doFirst 开头 requireVerifierCliJar（放水位闸门前，秒级红）；执行期
+lambda 要调的辅助函数落独立 .kt（VerifierHomeGuard.kt，CC 可序列化，脚本顶层函数会「cannot serialize」）；
+顺带配播种脚本 dev-support/seed-verifier-cli.ps1（照 CI 同名步骤）。
+**反例**：`classpath(扫缓存 ?: error("先跑一次 verifyPlugin 重建缓存"))`——错误信息还引导用户去跑一个
+同样会被配置期炸掉的操作，且崩溃只出现在 IDE 弹窗的堆栈里，本地命令行复现都要靠运气（CC 复用时不重跑
+配置期，反向验证必须 `--no-configuration-cache` 才算数）。
+
+**Seen 1× (2026-11-21)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
