@@ -933,12 +933,18 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
     }
     // T-DollarInjectMark：`${}` 直替信息提示（最低优先——警示/降级挂起时让位，
     // 清除后下次 updateMeta 回位；✕ 关闭后会话级记忆不再弹）。只加元数据不改渲染文本。
-    if (currentWarning == null && result.xmlModel != null && xmlDollarSubstitutions > 0 &&
-        !dollarMarkDismissedSession
-    ) {
+    // D252 T-DollarPlainSqlBanner：计数来源按形态互斥取值——XML 渲染链沿用面板渲染计数
+    // （xmlDollarSubstitutions，XML 引擎「字符串内同样计数」口径）；非 XML 形态（裸 SQL 直贴，
+    // 独立工作台/弹窗同一内嵌面板）读产物计数（dollarRawCount，string-aware 口径——字符串
+    // 字面量内的 ${} 是字面量不标记）。两链各自忠实各自引擎，不跨链统一。iBatis 链与
+    // Wrapper/JPA/日志链两计数恒 0 不挂（iBatis 可见性走 `$x$` 风险行，既有渠道）。
+    // 互斥取值而非「或」拼接：xmlDollarSubstitutions 是面板渲染态（仅 xmlModel != null 轮复位），
+    // 纯 SQL 结果读它会残留上一轮 XML 计数造成误挂。
+    val dollarBannerCount = if (result.xmlModel != null) xmlDollarSubstitutions else result.dollarRawCount
+    if (currentWarning == null && dollarBannerCount > 0 && !dollarMarkDismissedSession) {
         degradationBanner.show(
             DegradationBanner.Kind.DOLLAR_INJECT,
-            MpSqlVisualizerBundle.message("panel.banner.dollarInject", DOLLAR_TOKEN, xmlDollarSubstitutions),
+            MpSqlVisualizerBundle.message("panel.banner.dollarInject", DOLLAR_TOKEN, dollarBannerCount),
         )
     } else {
         degradationBanner.clear(DegradationBanner.Kind.DOLLAR_INJECT)

@@ -373,7 +373,6 @@ object StandaloneSqlSourceResolver {
         val sources = mutableListOf<String>()
         var qIndex = 0
         var prev = 0
-        var dollarRaw = false
         for (event in events) {
             if (event.pos < prev) continue // `#{}` 扫描与 `?` 位点在字符串/注释上口径不同，重叠事件跳过
             placeholderSql.append(input, prev, event.pos)
@@ -388,8 +387,11 @@ object StandaloneSqlSourceResolver {
             sources.add(name)
         }
         placeholderSql.append(input, prev, input.length)
-        // `${}` raw 段识别（string-aware，与 `?` 同口径——字符串字面量里的 `${}` 是字面量不是占位）
-        dollarRaw = hasDollarRawSegment(input)
+        // `${}` raw 段计数（string-aware，与 `?` 同口径——字符串字面量里的 `${}` 是字面量不是占位）。
+        // T-DollarPlainSqlBanner D252：计数随产物走（横幅据 `dollarRawCount` 显示站点数），
+        // `hasDollarRawSegments` 由计数派生——转义 `\${` 不计入后两处口径天然一致（原 Boolean
+        // 独立扫描不识别转义，与 MyBatis TokenParser「紧邻反斜杠＝转义」口径存在偏差，本处一并修正）。
+        val dollarRawCount = countDollarRawSegments(input)
         val sql = placeholderSql.toString()
         return Resolved(
             result = withPerfCheck(
@@ -400,7 +402,8 @@ object StandaloneSqlSourceResolver {
                     paramTable = ParameterReplacer.buildParamTable(sources),
                     wrapperType = null,
                     tableName = null,
-                    hasDollarRawSegments = dollarRaw,
+                    hasDollarRawSegments = dollarRawCount > 0,
+                    dollarRawCount = dollarRawCount,
                 ),
             ),
             kind = Kind.PLAIN_SQL,
@@ -454,9 +457,15 @@ object StandaloneSqlSourceResolver {
         return tokens
     }
 
-    /** `${}` raw 段检测（string-aware，口径与 [scanBracedParams] 一致）。 */
-    private fun hasDollarRawSegment(text: String): Boolean {
+    /**
+     * `${}` raw 段计数（string-aware，口径与 [scanBracedParams] 一致）：单引号字符串（`''` 转义）、
+     * `--` 行注释、块注释内的 `${}` 是字面量文本不计数；`\${` 转义形态不计数——MyBatis
+     * [org.apache.ibatis.parsing.GenericTokenParser] 同口径「紧邻反斜杠＝转义原样输出」，不参与直替。
+     * [PreviewResult.dollarRawCount] 与闸门信号（`hasDollarRawSegments`）共用本计数。
+     */
+    private fun countDollarRawSegments(text: String): Int {
         var inString = false
+        var count = 0
         var i = 0
         while (i < text.length) {
             val c = text[i]
@@ -479,12 +488,15 @@ object StandaloneSqlSourceResolver {
                         while (i + 1 < text.length && !(text[i] == '*' && text[i + 1] == '/')) i++
                         i++
                     }
-                    c == '$' && i + 1 < text.length && text[i + 1] == '{' -> return true
+                    c == '$' && i + 1 < text.length && text[i + 1] == '{' -> {
+                        if (i == 0 || text[i - 1] != '\\') count++
+                        i++ // `${` 两个字符一起跳过
+                    }
                 }
             }
             i++
         }
-        return false
+        return count
     }
 
     private data class BracedToken(val start: Int, val endExclusive: Int, val name: String)
