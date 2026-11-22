@@ -1,54 +1,54 @@
-[14ms] LISTENING 127.0.0.1:53998（等待 agent 回连；agent 在 premain 阶段即连接）
-[17ms] 
-[17ms] >>> [11] mark 0 握手
-[17ms] ======== 0 握手 ========
-[17ms] 
-[17ms] >>> [12] wait-hello 90000
-[2408ms] ACCEPT 来自 /127.0.0.1:57305（agent 回连）
-[2426ms] HELLO pid=49512 body={"pid":49512}（+ 2426ms 起连）
-[2427ms]   PASS HELLO 到达 pid=49512 (+2426ms)
-[2427ms] 
-[2427ms] >>> [13] wait-http http://localhost:8082/mpj/device/one/1 120000
-[2432ms] HEARTBEAT #1 body={"weavable":0,"woven":0,"failed":0,"matched":0,"unmodifiable":0,"matchedByInterface":0,"interfaceWoven":0,"skippedByVersion":0,"catchAll":0,"gate":0,"dropped":0,"unreg":"","blind":"","assembleFailures":0,"nestSuppressed":0,"nestStale":0,"nestMaxDepth":0,"unresolved":0}
-[4513ms]   等待应用就绪（第 1 次）：java.net.SocketTimeoutException: connect timed out
-[7541ms]   等待应用就绪（第 2 次）：java.net.SocketTimeoutException: connect timed out
-[9998ms]   PASS 应用就绪：GET http://localhost:8082/mpj/device/one/1 -> HTTP 200（第 3 次探测）
-[9999ms] 
-[9999ms] >>> [14] mark jdk 代理端点（栈含业务 $ProxyN 与 mapper $ProxyN 两类帧）
-[9999ms] ======== jdk 代理端点（栈含业务 $ProxyN 与 mapper $ProxyN 两类帧） ========
-[9999ms] 
-[9999ms] >>> [15] get http://localhost:8082/mpj/proxy/trace/jdk
-[10059ms] GET http://localhost:8082/mpj/proxy/trace/jdk -> HTTP 200 len=85 body={"id":1,"name":"张三","age":20,"sex":1,"headImg":"img/zhangsan.png","addressList":null}
-[10059ms]   PASS 业务请求 HTTP 200：http://localhost:8082/mpj/proxy/trace/jdk
-[10059ms] 
-[10059ms] >>> [16] mark cglib 代理端点（栈含 $$SpringCGLIB$$ 增强类帧）
-[10059ms] ======== cglib 代理端点（栈含 $$SpringCGLIB$$ 增强类帧） ========
-[10060ms] 
-[10060ms] >>> [17] get http://localhost:8082/mpj/proxy/trace/cglib
-[10134ms] GET http://localhost:8082/mpj/proxy/trace/cglib -> HTTP 200 len=85 body={"id":1,"name":"张三","age":20,"sex":1,"headImg":"img/zhangsan.png","addressList":null}
-[10134ms]   PASS 业务请求 HTTP 200：http://localhost:8082/mpj/proxy/trace/cglib
-[10134ms] 
-[10134ms] >>> [18] mark 等 agent 异步 flush（载荷留 6s 窗口）
-[10134ms] ======== 等 agent 异步 flush（载荷留 6s 窗口） ========
-[10134ms] 
-[10134ms] >>> [19] sleep 8000
-[10924ms] EVENT #1 sf=cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java sl=92 mk=DeviceInfoServiceImpl#joinOneAndCount sql=SELECT     t.id,t.station_id,t.share_scheme_id,t.device_name,t1.station_name,t1.…(+123) p=[[1,"1","Integer"]] u=jdbc:mysql://localhost:3306/mpj_demo?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&al…(+64)
-[10924ms]         sd=cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:74<-cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks#onExecuteExit:183<-com.mysql.cj.jdbc.ClientPreparedStatement#execute:395<-com.zaxxer.hikari.pool.ProxyPreparedStatement#execute:44<-com.zaxxer.hikari.pool.HikariProxyPreparedStatement#execute<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-java.lang.reflect.Method#invoke:498<-org.apache.ibatis.logging.jdbc.PreparedStatementLogger#invoke:59<-com.sun.proxy.$Proxy85#execute<-org.apache.ibatis.executor.statement.PreparedStatementHandler#query:64<-org.apache.ibatis.executor.statement.RoutingStatementHandler#query:79<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-<…中间省略 32 帧…><-cn.song.…(+497)
-[10925ms] EVENT #2 sf=cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java sl=94 mk=DeviceInfoServiceImpl#joinOneAndCount sql=SELECT COUNT( * ) FROM car_device_info  t    LEFT JOIN station_info t1 ON (t1.st…(+47) p=[[1,"1","Integer"]] u=jdbc:mysql://localhost:3306/mpj_demo?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&al…(+64)
-[10925ms]         sd=cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:74<-cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks#onExecuteExit:183<-com.mysql.cj.jdbc.ClientPreparedStatement#execute:395<-com.zaxxer.hikari.pool.ProxyPreparedStatement#execute:44<-com.zaxxer.hikari.pool.HikariProxyPreparedStatement#execute<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-java.lang.reflect.Method#invoke:498<-org.apache.ibatis.logging.jdbc.PreparedStatementLogger#invoke:59<-com.sun.proxy.$Proxy85#execute<-org.apache.ibatis.executor.statement.PreparedStatementHandler#query:64<-org.apache.ibatis.executor.statement.RoutingStatementHandler#query:79<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-<…中间省略 27 帧…><-com.sun.…(+490)
-[10925ms] EVENT #3 sf=cn/song/mpjdemo/controller/ProxyTraceController.java sl=52 mk=ProxyTraceController#lambda$jdk$0 sql=SELECT id,name,age,sex,head_img FROM "user" WHERE id=?  p=[[1,"1","Long"]] u=jdbc:mysql://localhost:3306/mpj_demo?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&al…(+64)
-[10925ms]         sd=cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:74<-cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks#onExecuteExit:183<-com.mysql.cj.jdbc.ClientPreparedStatement#execute:395<-com.zaxxer.hikari.pool.ProxyPreparedStatement#execute:44<-com.zaxxer.hikari.pool.HikariProxyPreparedStatement#execute<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-java.lang.reflect.Method#invoke:498<-org.apache.ibatis.logging.jdbc.PreparedStatementLogger#invoke:59<-com.sun.proxy.$Proxy85#execute<-org.apache.ibatis.executor.statement.PreparedStatementHandler#query:64<-org.apache.ibatis.executor.statement.RoutingStatementHandler#query:79<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-<…中间省略 28 帧…><-org.myba…(+492)
-[10926ms] EVENT #4 sf=cn/song/mpjdemo/service/ProxyTraceHeavyService.java sl=32 mk=ProxyTraceHeavyService#queryHeavy sql=SELECT id,name,age,sex,head_img FROM "user" WHERE id=?  p=[[1,"1","Long"]] u=jdbc:mysql://localhost:3306/mpj_demo?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&al…(+64)
-[10926ms]         sd=cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:74<-cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks#onExecuteExit:183<-com.mysql.cj.jdbc.ClientPreparedStatement#execute:395<-com.zaxxer.hikari.pool.ProxyPreparedStatement#execute:44<-com.zaxxer.hikari.pool.HikariProxyPreparedStatement#execute<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-java.lang.reflect.Method#invoke:498<-org.apache.ibatis.logging.jdbc.PreparedStatementLogger#invoke:59<-com.sun.proxy.$Proxy85#execute<-org.apache.ibatis.executor.statement.PreparedStatementHandler#query:64<-org.apache.ibatis.executor.statement.RoutingStatementHandler#query:79<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-cn.song.mpjdemo.service…(+688)
-[18135ms] 
-[18135ms] >>> [20] summary
-[18135ms] 
-[18135ms] ──────── SUMMARY ────────
-[18135ms] HELLO=pid=49512 @2426ms HEARTBEAT=1 EVENT(累计)=4 CONFIG_ACK=0 UNKNOWN_CMD=0
-[18135ms] 断言 PASS=4 FAIL=0
-[18135ms] RESULT: ALL-PASS
-[18135ms] ─────────────────────────
-[18135ms] 
-[18135ms] >>> [21] quit
+[8ms] LISTENING 127.0.0.1:53999（等待 agent 回连；agent 在 premain 阶段即连接）
+[10ms] 
+[10ms] >>> [11] mark 0 握手
+[10ms] ======== 0 握手 ========
+[10ms] 
+[10ms] >>> [12] wait-hello 90000
+[1515ms] ACCEPT 来自 /127.0.0.1:55204（agent 回连）
+[1534ms] HELLO pid=19940 body={"pid":19940}（+ 1534ms 起连）
+[1535ms]   PASS HELLO 到达 pid=19940 (+1534ms)
+[1535ms] 
+[1535ms] >>> [13] wait-http http://localhost:8082/mpj/device/one/1 120000
+[1538ms] HEARTBEAT #1 body={"weavable":0,"woven":0,"failed":0,"matched":0,"unmodifiable":0,"matchedByInterface":0,"interfaceWoven":0,"skippedByVersion":0,"catchAll":0,"gate":0,"dropped":0,"unreg":"","blind":"","assembleFailures":0,"nestSuppressed":0,"nestStale":0,"nestMaxDepth":0,"unresolved":0}
+[3612ms]   等待应用就绪（第 1 次）：java.net.SocketTimeoutException: connect timed out
+[6632ms]   等待应用就绪（第 2 次）：java.net.SocketTimeoutException: connect timed out
+[8239ms]   PASS 应用就绪：GET http://localhost:8082/mpj/device/one/1 -> HTTP 200（第 3 次探测）
+[8240ms] 
+[8240ms] >>> [14] mark jdk 代理端点（栈含业务 $ProxyN 与 mapper $ProxyN 两类帧）
+[8240ms] ======== jdk 代理端点（栈含业务 $ProxyN 与 mapper $ProxyN 两类帧） ========
+[8240ms] 
+[8241ms] >>> [15] get http://localhost:8082/mpj/proxy/trace/jdk
+[8286ms] GET http://localhost:8082/mpj/proxy/trace/jdk -> HTTP 200 len=85 body={"id":1,"name":"张三","age":20,"sex":1,"headImg":"img/zhangsan.png","addressList":null}
+[8286ms]   PASS 业务请求 HTTP 200：http://localhost:8082/mpj/proxy/trace/jdk
+[8286ms] 
+[8286ms] >>> [16] mark cglib 代理端点（栈含 $$SpringCGLIB$$ 增强类帧）
+[8286ms] ======== cglib 代理端点（栈含 $$SpringCGLIB$$ 增强类帧） ========
+[8286ms] 
+[8286ms] >>> [17] get http://localhost:8082/mpj/proxy/trace/cglib
+[8307ms] GET http://localhost:8082/mpj/proxy/trace/cglib -> HTTP 200 len=85 body={"id":1,"name":"张三","age":20,"sex":1,"headImg":"img/zhangsan.png","addressList":null}
+[8307ms]   PASS 业务请求 HTTP 200：http://localhost:8082/mpj/proxy/trace/cglib
+[8307ms] 
+[8307ms] >>> [18] mark 等 agent 异步 flush（载荷留 6s 窗口）
+[8307ms] ======== 等 agent 异步 flush（载荷留 6s 窗口） ========
+[8307ms] 
+[8307ms] >>> [19] sleep 8000
+[8817ms] EVENT #1 sf=cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java sl=92 mk=DeviceInfoServiceImpl#joinOneAndCount sql=SELECT     t.id,t.station_id,t.share_scheme_id,t.device_name,t1.station_name,t1.…(+123) p=[[1,"1","Integer"]] u=jdbc:mysql://localhost:3306/mpj_demo?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&al…(+64)
+[8817ms]         sd=cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:74<-cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks#onExecuteExit:183<-com.mysql.cj.jdbc.ClientPreparedStatement#execute:395<-com.zaxxer.hikari.pool.ProxyPreparedStatement#execute:44<-com.zaxxer.hikari.pool.HikariProxyPreparedStatement#execute<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-java.lang.reflect.Method#invoke:498<-org.apache.ibatis.logging.jdbc.PreparedStatementLogger#invoke:59<-com.sun.proxy.$Proxy85#execute<-org.apache.ibatis.executor.statement.PreparedStatementHandler#query:64<-org.apache.ibatis.executor.statement.RoutingStatementHandler#query:79<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-<…中间省略 32 帧…><-cn.song.mpjdemo.mapper.DeviceInfoMapper#selectJoinOne<-com.github.yulichang.base.JoinMapper#selectJoinMap:75<-java.lang.invoke.MethodHandle#invokeWithArguments:627<-com.baomidou.mybatisplus.core.override.MybatisMapperProxy$DefaultMethodInvoker#invoke:162<-com.baomidou.mybatisplus.core.override.MybatisMapperProxy#invoke:89<-cn.song.mpjdemo.mapper.DeviceInfoMapper#selectJoinMap<-cn.song.mpjdemo.service.impl.DeviceInfoServiceImpl#joinOneAndCount:92<-cn.song.mpjdemo.controller.DeviceInfoController#one:57
+[8818ms] EVENT #2 sf=cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java sl=94 mk=DeviceInfoServiceImpl#joinOneAndCount sql=SELECT COUNT( * ) FROM car_device_info  t    LEFT JOIN station_info t1 ON (t1.st…(+47) p=[[1,"1","Integer"]] u=jdbc:mysql://localhost:3306/mpj_demo?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&al…(+64)
+[8818ms]         sd=cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:74<-cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks#onExecuteExit:183<-com.mysql.cj.jdbc.ClientPreparedStatement#execute:395<-com.zaxxer.hikari.pool.ProxyPreparedStatement#execute:44<-com.zaxxer.hikari.pool.HikariProxyPreparedStatement#execute<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-java.lang.reflect.Method#invoke:498<-org.apache.ibatis.logging.jdbc.PreparedStatementLogger#invoke:59<-com.sun.proxy.$Proxy85#execute<-org.apache.ibatis.executor.statement.PreparedStatementHandler#query:64<-org.apache.ibatis.executor.statement.RoutingStatementHandler#query:79<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-<…中间省略 27 帧…><-com.sun.proxy.$Proxy65#selectOne<-org.mybatis.spring.SqlSessionTemplate#selectOne:160<-com.baomidou.mybatisplus.core.override.MybatisMapperMethod#execute:89<-com.baomidou.mybatisplus.core.override.MybatisMapperProxy$PlainMethodInvoker#invoke:148<-com.baomidou.mybatisplus.core.override.MybatisMapperProxy#invoke:89<-cn.song.mpjdemo.mapper.DeviceInfoMapper#selectJoinCount<-cn.song.mpjdemo.service.impl.DeviceInfoServiceImpl#joinOneAndCount:94<-cn.song.mpjdemo.controller.DeviceInfoController#one:57
+[8818ms] EVENT #3 sf=cn/song/mpjdemo/controller/ProxyTraceController.java sl=52 mk=ProxyTraceController#lambda$jdk$0 sql=SELECT id,name,age,sex,head_img FROM "user" WHERE id=?  p=[[1,"1","Long"]] u=jdbc:mysql://localhost:3306/mpj_demo?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&al…(+64)
+[8818ms]         sd=cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:74<-cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks#onExecuteExit:183<-com.mysql.cj.jdbc.ClientPreparedStatement#execute:395<-com.zaxxer.hikari.pool.ProxyPreparedStatement#execute:44<-com.zaxxer.hikari.pool.HikariProxyPreparedStatement#execute<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-java.lang.reflect.Method#invoke:498<-org.apache.ibatis.logging.jdbc.PreparedStatementLogger#invoke:59<-com.sun.proxy.$Proxy85#execute<-org.apache.ibatis.executor.statement.PreparedStatementHandler#query:64<-org.apache.ibatis.executor.statement.RoutingStatementHandler#query:79<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-<…中间省略 28 帧…><-org.mybatis.spring.SqlSessionTemplate#selectOne:160<-com.baomidou.mybatisplus.core.override.MybatisMapperMethod#execute:89<-com.baomidou.mybatisplus.core.override.MybatisMapperProxy$PlainMethodInvoker#invoke:148<-com.baomidou.mybatisplus.core.override.MybatisMapperProxy#invoke:89<-cn.song.mpjdemo.mapper.UserMapper#selectById<-cn.song.mpjdemo.controller.ProxyTraceController#lambda$jdk$0:52<-cn.song.mpjdemo.service.ProxyTraceService#queryUser<-cn.song.mpjdemo.controller.ProxyTraceController#jdk:53
+[8818ms] EVENT #4 sf=cn/song/mpjdemo/service/ProxyTraceHeavyService.java sl=32 mk=ProxyTraceHeavyService#queryHeavy sql=SELECT id,name,age,sex,head_img FROM "user" WHERE id=?  p=[[1,"1","Long"]] u=jdbc:mysql://localhost:3306/mpj_demo?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&al…(+64)
+[8818ms]         sd=cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:74<-cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks#onExecuteExit:183<-com.mysql.cj.jdbc.ClientPreparedStatement#execute:395<-com.zaxxer.hikari.pool.ProxyPreparedStatement#execute:44<-com.zaxxer.hikari.pool.HikariProxyPreparedStatement#execute<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-java.lang.reflect.Method#invoke:498<-org.apache.ibatis.logging.jdbc.PreparedStatementLogger#invoke:59<-com.sun.proxy.$Proxy85#execute<-org.apache.ibatis.executor.statement.PreparedStatementHandler#query:64<-org.apache.ibatis.executor.statement.RoutingStatementHandler#query:79<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-cn.song.mpjdemo.service.ProxyTraceHeavyService#queryHeavy:32<-<…中间省略 38 帧…><-org.springframework.transaction.interceptor.TransactionInterceptor$1#proceedWithInvocation:123<-org.springframework.transaction.interceptor.TransactionAspectSupport#invokeWithinTransaction:388<-org.springframework.transaction.interceptor.TransactionInterceptor#invoke:119<-org.springframework.aop.framework.ReflectiveMethodInvocation#proceed:186<-org.springframework.aop.framework.CglibAopProxy$CglibMethodInvocation#proceed:753<-org.springframework.aop.framework.CglibAopProxy$DynamicAdvisedInterceptor#intercept:698<-cn.song.mpjdemo.service.ProxyTraceHeavyService#queryHeavy<-cn.song.mpjdemo.controller.ProxyTraceController#cglib:61
+[16314ms] 
+[16314ms] >>> [20] summary
+[16314ms] 
+[16314ms] ──────── SUMMARY ────────
+[16314ms] HELLO=pid=19940 @1534ms HEARTBEAT=1 EVENT(累计)=4 CONFIG_ACK=0 UNKNOWN_CMD=0
+[16314ms] 断言 PASS=4 FAIL=0
+[16314ms] RESULT: ALL-PASS
+[16314ms] ─────────────────────────
+[16314ms] 
+[16314ms] >>> [21] quit
 PROBE-EXIT rc=0
-[18136ms] 连接断开/读帧结束: java.net.SocketException: Socket Closed
+[16315ms] 连接断开/读帧结束: java.net.SocketException: Socket Closed
