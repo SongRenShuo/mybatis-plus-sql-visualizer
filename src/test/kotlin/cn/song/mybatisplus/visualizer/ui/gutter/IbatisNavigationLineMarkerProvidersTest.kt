@@ -427,12 +427,12 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         )
         assertTrue(
             "命中必须记入会话级缓存",
-            IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.contains("user|selectById"),
+            IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.contains(callKey("user", "selectById")),
         )
     }
 
     fun test箭头门槛_确定无调用点_摘箭头并收回缓存() {
-        IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.add("user|selectById")
+        IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.add(callKey("user", "selectById"))
         IbatisJavaCallSites.lookupOverrideForTest = { _, _, _ -> IbatisJavaCallSites.CallLookup.Absent }
         addDao()
         val sqlMap = addSqlMap()
@@ -442,12 +442,12 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         )
         assertFalse(
             "确定无调用点必须收回缓存，否则下一趟慢 pass 还会把箭头画回来",
-            IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.contains("user|selectById"),
+            IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.contains(callKey("user", "selectById")),
         )
     }
 
     fun test箭头门槛_判定未知_缓存命中仍出箭头() {
-        IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.add("user|selectById")
+        IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.add(callKey("user", "selectById"))
         IbatisJavaCallSites.lookupOverrideForTest = { _, _, _ -> IbatisJavaCallSites.CallLookup.Unknown }
         addDao()
         val sqlMap = addSqlMap()
@@ -457,7 +457,7 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         )
         assertTrue(
             "Unknown 不得动缓存",
-            IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.contains("user|selectById"),
+            IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.contains(callKey("user", "selectById")),
         )
     }
 
@@ -663,19 +663,34 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         return markers(javaToXml, dao).filter { it.element === callName || it.element?.parent === literal }
     }
 
+    /**
+     * 正缓存键测试构造（T-PerfSweep31 券04 同步）：键带 `project.locationHash` 前缀后，
+     * 断言必须与生产 [IbatisJavaToXmlLineMarkerProvider.cacheKey] 同源，不得再裸拼语句 id。
+     */
+    private fun cacheKey(statementId: String, ownerNamespace: String? = null): String =
+        IbatisJavaToXmlLineMarkerProvider.cacheKey(project, statementId, ownerNamespace)
+
+    /**
+     * 调用点缓存键测试构造（T-PerfSweep32 收口轮同步）：[IbatisXmlToJavaLineMarkerProvider]
+     * 的键同样带 `project.locationHash` 前缀，断言与生产 [IbatisXmlToJavaLineMarkerProvider.callKey]
+     * 同源——箭头门槛三态矩阵的入账/收回/命中断言不得再裸拼 `namespace|id`。
+     */
+    private fun callKey(namespace: String, statementId: String): String =
+        IbatisXmlToJavaLineMarkerProvider.callKey(project, namespace, statementId)
+
     fun testF1i_解析成功_入正缓存并产出两枚() {
         val dao = addDao()
         addSqlMap()
         assertEquals("解析成功应出两枚（跳转 + 预览）", 2, markersForCall(dao, "user.selectById").size)
         assertTrue(
             "解析成功必须记入会话级正缓存",
-            IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.contains("user.selectById"),
+            IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.contains(cacheKey("user.selectById")),
         )
     }
 
     fun testF1i_索引重建中未知_缓存命中仍产出() {
         // 冷窗形态（S2）：查询**没算完**（Unknown），不是「确定没有」——已确认过的图标必须留着。
-        IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.add("user.selectById")
+        IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.add(cacheKey("user.selectById"))
         IbatisXmlStatementTargets.lookupOverrideForTest = { _, _, _ -> IbatisXmlStatementTargets.Lookup.Unknown }
         val dao = addDao()
         assertEquals(
@@ -685,7 +700,7 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         )
         assertTrue(
             "Unknown 不得动缓存",
-            IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.contains("user.selectById"),
+            IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.contains(cacheKey("user.selectById")),
         )
     }
 
@@ -694,7 +709,7 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
      * 早期版本正缓存无失效，图标靠缓存续命——本用例钉住「确定不存在 ⇒ 摘图标 + 收回缓存」。
      */
     fun testF1i_确定不存在_摘图标并收回缓存() {
-        IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.add("user.selectById")
+        IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.add(cacheKey("user.selectById"))
         IbatisXmlStatementTargets.lookupOverrideForTest = { _, _, _ -> IbatisXmlStatementTargets.Lookup.Absent }
         val dao = addDao()
         assertEquals(
@@ -704,7 +719,7 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         )
         assertFalse(
             "确定不存在必须收回正缓存，否则下一趟慢 pass 还会把它画回来",
-            IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.contains("user.selectById"),
+            IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.contains(cacheKey("user.selectById")),
         )
     }
 
@@ -714,7 +729,7 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         assertEquals("真不存在的语句不得出图标", 0, markersForCall(dao, "user.missing").size)
         assertFalse(
             "「真没有」的负例不得污染正缓存",
-            IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.contains("user.missing"),
+            IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.contains(cacheKey("user.missing")),
         )
     }
 
@@ -751,7 +766,7 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
             )
             assertFalse(
                 "乐观产出不得污染正缓存（否则 key 会被错当成「确认存在」）",
-                IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.contains("user.missing"),
+                IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.contains(cacheKey("user.missing")),
             )
         } finally {
             IbatisJavaToXmlLineMarkerProvider.isDumbProvider = original
@@ -764,7 +779,7 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         assertEquals(2, markersForCall(dao, "selectBare").size)
         assertTrue(
             "裸 id 的缓存键必须带所属类限定名（同一裸 id 在不同 DAO 上可能偏好不同的 sqlMap 文件）",
-            IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.contains("selectBare@com.demo.UserDao"),
+            IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.contains(cacheKey("selectBare", "com.demo.UserDao")),
         )
     }
 }

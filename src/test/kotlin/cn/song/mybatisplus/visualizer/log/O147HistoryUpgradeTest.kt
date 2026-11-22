@@ -451,6 +451,9 @@ class O147HistoryUpgradeTest {
          * [O147_EXPECTED_VERIFICATIONS]——场景用例早退（fixture 断言先红）时登记缺失在此
          * 二次显红，防「子验证静默缩水」。注意：单方法过滤运行本类会因登记不全在此显红，
          * 本类按整类跑（分片/门禁口径）。
+         * 20261121：子验证失败（exit≠0 或输出缺 OK 标记）先打印完整现场并**重试一次 fork**——
+         * run 407 实测 runner 文件系统瞬态（子 JVM exit=0 但读回 log 缺 OK），失败自曝 + 重试
+         * 吸收；指纹不符类真缺陷两轮同败仍抛 AssertionError（两轮现场都在），不掩盖。
          */
         @JvmStatic
         @org.junit.AfterClass
@@ -499,33 +502,57 @@ class O147HistoryUpgradeTest {
                     O147LargeStringProbe::class.java.name) +
                     pending.flatMap { (file, fingerprint, label) -> listOf(file.path, fingerprint, label) }
                 File(root, "build/o147-string-child-command.txt").writeText(args.joinToString("\n"))
-                val process = ProcessBuilder(args).redirectErrorStream(true).redirectOutput(output).start()
-                try {
-                    // 原单文件子进程超时 90s；单 JVM 顺序解析全部登记文件（含 129MiB 大夹具），放宽到 300s。
-                    check(process.waitFor(300, java.util.concurrent.TimeUnit.SECONDS)) { "String child timeout: $output" }
-                    val childOutput = output.readText()
-                    if (process.exitValue() != 0) {
-                        // T-CiRelease（20261024 诊断自曝）：失败时原样打印子进程输出与完整命令行，终结盲猜。
-                        println("=== O147 string-child FAILED exit=${process.exitValue()} ===")
-                        println(childOutput)
-                        println("=== command ===")
-                        println(File(root, "build/o147-string-child-command.txt").readText())
-                        // T-CiRelease（20261025）：把原始 test.sql 与命令行拷进 build/o147-diag——
-                        // 失败工件上传后可拿到 runner 上的真实文件字节，供本地逐字节 diff。
-                        runCatching {
-                            val diagDir = File(root, "build/o147-diag")
-                            diagDir.mkdirs()
-                            pending.forEach { (file, _, label) ->
-                                file.copyTo(File(diagDir, "$label-${file.name}"), overwrite = true)
-                            }
-                            File(root, "build/o147-string-child-command.txt")
-                                .copyTo(File(diagDir, "string-child-command.txt"), overwrite = true)
-                        }.onFailure { println("o147-diag copy failed: $it") }
-                        println("=== end O147 string-child diag ===")
-                    }
-                    assertEquals(childOutput, 0, process.exitValue())
-                    assertTrue(childOutput.contains("O147_STRING_OK"))
-                } finally { if (process.isAlive) process.destroyForcibly() }
+                // 20261121：失败自曝 + 一次重试吸收 runner 文件系统瞬态。run 407（44723363747，
+                // 2026-11-20）实证形态：子 JVM exit=0 但读回的 output 缺 O147_STRING_OK——probe
+                // 语义上 exit 0 ⇔ 必打 OK ⇒ 文件内容与进程输出不一致＝写丢失/读不完整的瞬态
+                // （exit!=0 分支必有诊断段而日志无 ⇒ 排除；登记数断言在场景全 pass 下无成因；
+                // 同 sha 三跑 1 红 2 绿＝非确定性）。原 assertTrue 无消息，Gradle console 只给
+                // 「AssertionError at ...:-1」盲区。对策：每轮失败先打印完整现场（exit/输出全文/
+                // log stat/磁盘），第一轮失败重试一次 fork；两轮均败才抛（两轮现场都在）。指纹
+                // 不符这类真缺陷两轮同败照常暴露，仅多付一次 fork；环境瞬态被吸收。
+                var firstFailure: String? = null
+                for (attempt in 0..1) {
+                    val process = ProcessBuilder(args).redirectErrorStream(true).redirectOutput(output).start()
+                    try {
+                        // 原单文件子进程超时 90s；单 JVM 顺序解析全部登记文件（含 129MiB 大夹具），放宽到 300s。
+                        check(process.waitFor(300, java.util.concurrent.TimeUnit.SECONDS)) { "String child timeout: $output" }
+                        val childOutput = output.readText()
+                        val problems = buildList {
+                            if (process.exitValue() != 0) add("exit=${process.exitValue()}（期望 0）")
+                            if (!childOutput.contains("O147_STRING_OK")) add("输出缺 O147_STRING_OK 标记")
+                        }
+                        if (problems.isEmpty()) return
+                        val failure = "attempt ${attempt + 1}/2：${problems.joinToString("; ")}；" +
+                            "log size=${output.length()}B mtime=${output.lastModified()} " +
+                            "build/盘 free=${root.freeSpace / (1024 * 1024)}MB\n$childOutput"
+                        if (attempt == 0) {
+                            // T-CiRelease（20261024 诊断自曝）：失败时原样打印子进程输出与完整命令行，终结盲猜。
+                            println("=== O147 string-child FAILED（${problems.joinToString("; ")}）attempt 1，重试一次 ===")
+                            println(failure)
+                            println("=== command ===")
+                            println(File(root, "build/o147-string-child-command.txt").readText())
+                            // T-CiRelease（20261025）：把原始 test.sql 与命令行拷进 build/o147-diag——
+                            // 失败工件上传后可拿到 runner 上的真实文件字节，供本地逐字节 diff。
+                            runCatching {
+                                val diagDir = File(root, "build/o147-diag")
+                                diagDir.mkdirs()
+                                pending.forEach { (file, _, label) ->
+                                    file.copyTo(File(diagDir, "$label-${file.name}"), overwrite = true)
+                                }
+                                File(root, "build/o147-string-child-command.txt")
+                                    .copyTo(File(diagDir, "string-child-command.txt"), overwrite = true)
+                            }.onFailure { println("o147-diag copy failed: $it") }
+                            println("=== end O147 string-child diag ===")
+                            firstFailure = failure
+                        } else {
+                            throw AssertionError(
+                                "O147 子 JVM 验证两轮均失败（指纹不符类真缺陷两轮同败照常暴露；" +
+                                    "写丢失/读缺类 runner 瞬态已被一次重试吸收，仍败＝真异常）:\n" +
+                                    "first: $firstFailure\n\nsecond: $failure",
+                            )
+                        }
+                    } finally { if (process.isAlive) process.destroyForcibly() }
+                }
             } finally {
                 // 大夹具目录延后到子验证结束再清理（原 @After 时机，T9 改类级；券05 的防泄漏语义不变）。
                 O147_DEFERRED_DIRS.forEach { runCatching { it.deleteRecursively() } }

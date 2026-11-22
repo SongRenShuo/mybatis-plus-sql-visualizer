@@ -39,6 +39,9 @@ open class SqlVisualizerHistorySearchTool : McpToolsetSupport("sqlv_history_sear
             "are searched; pass allDates=true to search the whole history directory. Returns match summaries " +
             "(timestamp, SQL preview, source location, duration, mapper statement id) with hit counts, " +
             "newest first, bounded by maxResults (default 20, hard cap 100) — never full dumps. " +
+            "Output tier (D219): 'detail' defaults to true (one summary block per hit including the SQL " +
+            "preview, the historical contract); pass detail=false for a compact listing — header fields " +
+            "only, no SQL preview body — when scanning many hits with a tight AI context budget. " +
             "Read-only: reads history files only; never executes SQL and never writes anything.",
     )
     @McpToolHints(
@@ -54,6 +57,8 @@ open class SqlVisualizerHistorySearchTool : McpToolsetSupport("sqlv_history_sear
         sourceFile: String = "",
         allDates: Boolean = false,
         maxResults: Int? = null,
+        /** D219（T-HdAbsorb）：输出分档——null/true=摘要块含 SQL 预览（历史契约不变）；false=紧凑清单（仅头字段）。 */
+        detail: Boolean? = null,
     ): String = audit("sqlv_history_search", historySearchArgsSummary(keyword, regex, fromMs, toMs, sourceFile, allDates)) {
         val project = requireProject()
         val query = HistorySearchService.Query(
@@ -65,7 +70,7 @@ open class SqlVisualizerHistorySearchTool : McpToolsetSupport("sqlv_history_sear
             allDates = allDates,
             maxResults = maxResults ?: HistorySearchService.DEFAULT_MAX_RESULTS,
         )
-        formatResult(searchHistory(resolveHistoryDir(project), query))
+        formatResult(searchHistory(resolveHistoryDir(project), query), detail = detail)
     }
 
     /** 检索执行 + 入参异常转译（纯逻辑核之上的薄壳，普通 JUnit 可直测）。 */
@@ -80,15 +85,18 @@ open class SqlVisualizerHistorySearchTool : McpToolsetSupport("sqlv_history_sear
      * 结果格式化（agent 面向文案，英文常量不进 bundle——McpToolErrors 同口径，纯函数可测）。
      * 0 命中是合法结果：正常返回 + 指引，不走错误通道（sqlv_render_logs 同款）。
      *
-     * T-SAF-07（mcp.history_search.masking-not-applied）：sqlPreview 携带参数已回填为字面量
+     * T-SAF-07（分支侧）：sqlPreview 携带参数已回填为字面量
      * 的还原 SQL，此前该通道从不查阅 mcpMaskEnabled——「MCP 输出脱敏」不变式只在
      * sqlv_render_logs 成立，agent 可用关键字搜索历史提取敏感字面量。现与 renderLogs 同款：
      * [maskLiterals] null 读设置（服务未注册兜底关），true/false 供测试与调用方显式覆盖；
      * 打码经 [cn.song.mybatisplus.visualizer.util.DisplayMasker.maskDisplay]（双条件规则与
      * 采集 agent 同表）。
+     * D219（master 侧）：detail=false 走紧凑清单——每命中一行头字段（时间/来源/位置/耗时/库/mapper/错误），
+     * 不输出 SQL 预览正文；null/true 保持历史契约（摘要块 + 预览正文）。
      */
     internal fun formatResult(
         result: HistorySearchService.Result,
+        detail: Boolean? = null,
         /** T-SAF-07：null 读设置 mcpMaskEnabled（默认关）；测试注入 true/false 钉行为。 */
         maskLiterals: Boolean? = null,
     ): String {
@@ -119,6 +127,10 @@ open class SqlVisualizerHistorySearchTool : McpToolsetSupport("sqlv_history_sear
             }
             result.scopeStartMs?.let { append(", scope from ").append(TIMESTAMP_FMT.format(instantOf(it))) }
             append(".\n")
+            val compact = detail == false
+            if (compact) {
+                append("(compact listing — pass detail=true to include SQL previews)\n")
+            }
             result.hits.forEachIndexed { index, hit ->
                 append("\n-- #").append(index + 1)
                 append(' ').append(TIMESTAMP_FMT.format(instantOf(hit.timestamp)))
@@ -133,9 +145,11 @@ open class SqlVisualizerHistorySearchTool : McpToolsetSupport("sqlv_history_sear
                 hit.errorText?.let { append(" error=").append(it) }
                 append(" in ").append(hit.historyFile)
                 // T-SAF-07：sqlPreview 与 renderLogs 的 restoredSql 同一数据类（字面量已回填），
-                // 同一 mcpMaskEnabled 设置必须同一脱敏不变式
-                append('\n')
-                    .append(cn.song.mybatisplus.visualizer.util.DisplayMasker.maskDisplay(hit.sqlPreview, maskOn))
+                // 同一 mcpMaskEnabled 设置必须同一脱敏不变式；D219：紧凑清单不出 SQL 正文
+                if (!compact) {
+                    append('\n')
+                        .append(cn.song.mybatisplus.visualizer.util.DisplayMasker.maskDisplay(hit.sqlPreview, maskOn))
+                }
             }
         }
     }

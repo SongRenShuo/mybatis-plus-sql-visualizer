@@ -167,18 +167,19 @@ class SqlPreviewPanelStackDigestTest : BasePlatformTestCase() {
     }
 
     /**
-     * T-SAF-10 转义位置修正回归（2026-11-17，CI run 43925934655）：meta 行是 plain / <html>
-     * 双形态（perf 段在位才包 <html>）——转义必须落在 HTML 包装边界而非组装点，否则纯文本态
-     * 用户看到字面 `&lt;-`（CI 5 例 ComparisonFailure）。本用例钉 **HTML 态**：
-     * perf 警告在位 + 恶意栈帧 → 可见行（<html> 包装）不得含未转义 `<img` 活 markup，
-     * 同时 `<-` 分隔符转义后显示语义不变（用户仍见箭头而非实体）。
+     * T-SAF-10 结构性消解回归（D241 对齐轮，2026-11-22）：master T-PreviewInfoLayout（54af4e9f3，
+     * 2026-11-20）把可见行改为**恒纯文本**（性能建议独立整行，meta 行不再 <html> 包装）——
+     * 原「HTML 包装边界转义」所守的注入面结构性消除（plain label 不渲染 markup）。
+     * 本用例改钉**结构不变式**：perf 警告在位 + 恶意栈帧 → 可见行必须仍是纯文本
+     * （任何人重新引入 <html> 包装而未配转义即注入面复活，本断言必红）；恶意载荷按原文
+     * 惰性显示（不出现转义实体残渣）；完整链仍归悬停弹层。
      */
     fun testHTML包装态_恶意栈帧不进活markup且箭头转义后语义不变() {
         val panel = SqlPreviewPanel(project)
         try {
             val payload = "<img src=http://127.0.0.1:1/probe.png>"
             // 载荷放在首个「项目帧」之后——StackDigestFrames.projectExcerpt 会把头部非项目帧裁掉，
-            // 载荷须落在取景窗内才能真正测到 HTML 边界转义。
+            // 载荷须落在取景窗内才能被显示面覆盖。
             val digest = "com.corp.biz.Svc#m:1 <- $payload <- com.corp.biz.Svc#m:1"
             val result = makeResult(digest).copy(
                 perfWarnings = listOf(
@@ -195,11 +196,13 @@ class SqlPreviewPanelStackDigestTest : BasePlatformTestCase() {
             waitForEdt()
 
             val visible = panel.metaLabelForTest()
-            assertTrue("perf 段在位时可见行应为 <html> 包装态", visible.startsWith("<html>"))
-            assertFalse("可见行不得含未转义标记：$visible", visible.contains("<img"))
-            assertTrue("恶意帧应转义入行（HTML 态显示语义不变）: $visible", visible.contains("&lt;img"))
-            assertTrue("分隔符转义后显示语义不变（HTML 态用户仍见箭头）: $visible", visible.contains("&lt;-"))
-            assertFalse("可见行不得含完整链", visible.contains(digest))
+            assertFalse("可见行必须保持纯文本（<html> 包装即注入面复活且无转义防线）：$visible", visible.startsWith("<html>"))
+            assertFalse("纯文本态不得残留转义实体（双重转义即显示回归）：$visible", visible.contains("&lt;"))
+            assertTrue("恶意载荷按原文字面惰性显示（plain 渲染不执行 markup）：$visible", visible.contains("<img"))
+            assertTrue("分隔符按原文显示（用户仍见箭头）: $visible", visible.contains("<-"))
+            // 「可见行不得含完整链」断言随边界转义退役（D241 对齐轮）：旧断言实际由 HTML 转义使
+            // 原串不出现来满足，纯文本态下可见行按预算展示摘要原文（惰性、可截断），是否截到
+            // 完整链是渲染预算问题而非安全问题；「完整链归悬停弹层」不变式仍由下行钉住。
             assertEquals("完整链归悬停弹层（原文透传）", digest, panel.stackDigestForTest())
         } finally {
             panel.clear()

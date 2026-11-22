@@ -743,6 +743,8 @@ internal fun SqlPreviewPanel.clear() {
     ibatisRenderWarningIsNote = false
     currentWarning = null
     currentWarningIsNote = false
+    // T-PreviewActionRow D-5：缺失片段入口随清空隐藏（handler 保留——同一面板下次预览仍可补）
+    refreshMissingFragmentHint(emptyList())
     errorCopyButton?.isVisible = false
     toggleSelectButton = null
     batchToggleSelectButton = null
@@ -760,6 +762,10 @@ internal fun SqlPreviewPanel.clear() {
     metaLineDigest = ""
     metaPerfSegments = emptyList()
     lastMetaBudget = -1
+    // T-PreviewInfoLayout D-3：性能建议整行随清空收起（下次 updateMeta 重建）
+    perfLabel.text = ""
+    perfLabel.toolTipText = null
+    perfLabel.isVisible = false
     // T-DialectStatusLiveRefresh：方言决策与分段缓存同源复位，不跨预览残留
     currentDialectDecision = null
     metaCoreText = ""

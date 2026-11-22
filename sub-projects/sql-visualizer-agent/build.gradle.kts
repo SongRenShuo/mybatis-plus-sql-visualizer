@@ -2,6 +2,8 @@
 // 产物 mps-sql-agent.jar：Java 8 字节码（--release 8，覆盖 JDK8~26 目标应用）、ASM shade
 // relocate 到私有命名空间（RelocateAsmMain 用 ASM 自身重写 ASM——不引入 shadow 插件）、
 // manifest Premain-Class/Agent-Class 同类双入口 + Can-Redefine/Can-Retransform。
+// T-OldJvmPremainGuard（2026-11-20）：两条入口指向 AgentShim（打包时降到 major 50）——
+// 低于 JDK 8 的目标 JVM 由它静默跳过，绝不影响宿主启动；AgentMain 仍是真正的安装链。
 // 测试（JUnit 4）跑在工具链 JDK 上，产线类纯 Java 8 API。
 
 plugins {

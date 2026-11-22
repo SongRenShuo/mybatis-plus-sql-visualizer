@@ -13,7 +13,6 @@ import cn.song.mybatisplus.visualizer.ui.diagram.DiagramModel
 import cn.song.mybatisplus.visualizer.ui.diagram.nativefw.NativeJoinDiagramSupport
 import cn.song.mybatisplus.visualizer.sql.perf.PerfSeverity
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning
-import cn.song.mybatisplus.visualizer.util.HtmlEscape
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
@@ -825,16 +824,15 @@ internal fun SqlPreviewPanel.switchStmtType(kind: ConsumptionKind) {
 }
 
 internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
-    // T-SAF-10（ui.swing-html-label.unescaped-lower-trust-text）：meta 行的**数据位**——
-    // tableName（实体注解字面量）、XML statementId/parameterType（mapper XML，低信任）、
-    // 警示文本（解析/渲染错误合并）、perf 警告文案——先经 HtmlEscape.escape 再进 metaCoreText；
-    // 调用栈摘要（metaLineDigest）按纯文本组装，转义在本文件两处 <html> 包装边界对齐
-    // （2026-11-17 修正：meta 行 plain/<html> 双形态，组装点转义会让纯文本态显示字面 &lt;-）。
-    // metaPerfSegments 非空时可见行带 <html> 包装，未转义数据即活 markup，且同文经
-    // metaTooltipBase 到达 tooltip。标记包装（<font>/<br>）由下游拼装保持原样。
+    // T-SAF-10 结构性消解（D241 对齐轮）：master T-PreviewInfoLayout（54af4e9f3，2026-11-20）把
+    // 可见行与 tooltip 全线改纯文本——meta 行不再 <html> 包装，注入面结构性消除，本文件不再需要
+    // 组装点/边界转义（分支原 T-SAF-09/10 的组装点转义在纯文本态会把实体字面显示给用户——
+    // 正是分支 2026-11-17 修正日志里判定的显示回归形态，随结构升级整体退役）。低信任数据
+    // （tableName/statementId/警示/栈摘要/fragments）按原文字面惰性显示；安全不变式由
+    // SqlPreviewPanelStackDigestTest / SqlPreviewPanelMetaHintTooltipTest 钉「禁 <html> 包装重现」。
     val meta = buildList {
         result.wrapperType?.let { add("${MpSqlVisualizerBundle.message("panel.meta.type")}: ${it.name}") }
-        result.tableName?.let { add("${MpSqlVisualizerBundle.message("panel.meta.table")}: ${HtmlEscape.escape(it)}") }
+        result.tableName?.let { add("${MpSqlVisualizerBundle.message("panel.meta.table")}: ${it}") }
         // T-PagesHql：源语言非 SQL 时明示「已转换」（用户投诉的一半是「不知道插件做了什么」）
         if (result.sourceLanguage != SourceLanguage.SQL) {
             add(MpSqlVisualizerBundle.message("panel.meta.sourceLanguage", result.sourceLanguage.name))
@@ -844,8 +842,8 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
         result.decidingConsumption?.let { add(stmtTypeSourceText(it)) }
         // T-M24-04：XML 语句元信息（类型 + parameterType）
         result.xmlModel?.let { xml ->
-            add("XML ${xml.kind.name.lowercase()}: ${HtmlEscape.escape(xml.statementId)}")
-            xml.parameterType?.let { add("parameterType: ${HtmlEscape.escape(it)}") }
+            add("XML ${xml.kind.name.lowercase()}: ${xml.statementId}")
+            xml.parameterType?.let { add("parameterType: ${xml.parameterType}") }
         }
     }.joinToString("   ")
     // UI-001：告警唯一事实源分档——MyBatis XML 链维持「基线告警 + 本轮 xmlErrors」合并；
@@ -861,8 +859,12 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
             if (result.xmlModel != null) xmlErrors else emptyList(),
         )
     }
-    // T-SAF-09/10：告警文本未转义即活 markup——ℹ/⚠ 前缀为包装非数据，数据段一律过 HtmlEscape
-    val warningLine = currentWarning?.let { if (currentWarningIsNote) "   ℹ ${HtmlEscape.escape(it)}" else "   ⚠ ${HtmlEscape.escape(it)}" } ?: ""
+    // T-PreviewActionRow D-5：缺失片段补齐入口随本轮载荷刷新（无缺失 / 无注入方即隐藏，不占高度）
+    refreshMissingFragmentHint(result.missingFragmentIds)
+    // T-SAF-09/10 结构性消解（D241 对齐轮）：master T-PreviewInfoLayout（54af4e9f3，2026-11-20）把
+    // 可见行/tooltip 全线改纯文本——注入面结构性消除，原「HTML 包装边界转义」锚点退役；
+    // 低信任数据按原文字面显示，安全不变式由测试钉「禁 <html> 包装重现」（见 SqlPreviewPanelStackDigestTest）。
+    val warningLine = currentWarning?.let { if (currentWarningIsNote) "   ℹ $it" else "   ⚠ $it" } ?: ""
     // T-SourceJumpFunnel P2-2：调用栈快照并入 meta 提示行（截断展示；T-StackHoverUi 起
     // 完整链归悬停弹层）。
     // 文案组装抽为纯函数 [buildStackDigestInlineLine]（同文件顶层）——§3.3 验收项
@@ -878,11 +880,14 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
     // T-DialectStatusLiveRefresh：方言决策与其余分段分开缓存——执行/绑定后只重组方言段
     // （recomposeDialectStatusText），不重跑本函数的警示/横幅/错误按钮全链。
     currentDialectDecision = result.dialectDecision
-    metaCoreText = meta + warningLine
+    // T-PreviewInfoLayout D-2：meta 行**不再拼警告正文**——同一句 warning 已在黄色横幅里（含 tooltip、
+    // 点击看全文、「复制错误信息」），meta 再贴一份只会跟表名/判型依据抢那点可见宽度，还会被截成半句。
+    // 悬停仍要看得到完整原因：warningLine 单独补进 tooltip（见下 metaTooltipCore）。
+    metaCoreText = meta
     metaLineDigest = stackInline
     metaPerfSegments = buildPerfSegments(result)
     // T-PreviewStmtTypeScope：判型依据的「全部候选」进悬停（可见行只留命中的那一条，避免挤掉表名）
-    metaTooltipCore = metaCoreText + metaPerfSegments.joinToString("；") { it.text } +
+    metaTooltipCore = meta + warningLine + metaPerfSegments.joinToString("；") { it.text } +
         stmtTypeCandidatesSection(result)
     // T-PreviewStmtTypeScope D-3：同步「预览目标」切换入口（多档可见，单档隐藏）
     updateStmtTypeSwitch(result)
@@ -911,8 +916,15 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
         degradationBanner.show(
             DegradationBanner.Kind.RENDER_WARNING,
             bannerText,
+            // T-StandaloneHintAndWarning：横幅是单行 JLabel，超宽必被裁——tooltip 给完整文案，
+            // 与「点击横幅看全文」两条路都通（组件早就支持第三参，此前调用点漏传）。
+            bannerText,
         )
+        // T-StandaloneHintAndWarning：横幅正文可点 → 完整提示对话框（可选中/复制/滚动）。
+        // 回调只在有警示时挂，清除时摘掉（避免空点）。
+        degradationBanner.onDetailsRequested = { showWarningDetails() }
     } else {
+        degradationBanner.onDetailsRequested = null
         degradationBanner.clear(DegradationBanner.Kind.RENDER_WARNING)
     }
     // T-FullTableWriteRisk：无 WHERE 的 DELETE/UPDATE（XML 链产物随勾选实时变化，最典型是勾掉
@@ -930,12 +942,18 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
     }
     // T-DollarInjectMark：`${}` 直替信息提示（最低优先——警示/降级挂起时让位，
     // 清除后下次 updateMeta 回位；✕ 关闭后会话级记忆不再弹）。只加元数据不改渲染文本。
-    if (currentWarning == null && result.xmlModel != null && xmlDollarSubstitutions > 0 &&
-        !dollarMarkDismissedSession
-    ) {
+    // D252 T-DollarPlainSqlBanner：计数来源按形态互斥取值——XML 渲染链沿用面板渲染计数
+    // （xmlDollarSubstitutions，XML 引擎「字符串内同样计数」口径）；非 XML 形态（裸 SQL 直贴，
+    // 独立工作台/弹窗同一内嵌面板）读产物计数（dollarRawCount，string-aware 口径——字符串
+    // 字面量内的 ${} 是字面量不标记）。两链各自忠实各自引擎，不跨链统一。iBatis 链与
+    // Wrapper/JPA/日志链两计数恒 0 不挂（iBatis 可见性走 `$x$` 风险行，既有渠道）。
+    // 互斥取值而非「或」拼接：xmlDollarSubstitutions 是面板渲染态（仅 xmlModel != null 轮复位），
+    // 纯 SQL 结果读它会残留上一轮 XML 计数造成误挂。
+    val dollarBannerCount = if (result.xmlModel != null) xmlDollarSubstitutions else result.dollarRawCount
+    if (currentWarning == null && dollarBannerCount > 0 && !dollarMarkDismissedSession) {
         degradationBanner.show(
             DegradationBanner.Kind.DOLLAR_INJECT,
-            MpSqlVisualizerBundle.message("panel.banner.dollarInject", DOLLAR_TOKEN, xmlDollarSubstitutions),
+            MpSqlVisualizerBundle.message("panel.banner.dollarInject", DOLLAR_TOKEN, dollarBannerCount),
         )
     } else {
         degradationBanner.clear(DegradationBanner.Kind.DOLLAR_INJECT)
@@ -949,12 +967,14 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
  * T-PreviewTopOverlap F3：元信息宽度预算截断。
  *
  * 预算 = topRow 宽 − 工具栏理想宽 − topRow 边距 − metaLabel 左右边距；未布局（width<=0）跳过，
- * 等组件首显/拉伸时由 ComponentListener 触发。超预算时 meta 行中段省略（复用 T-M26.3 ellipsize），
- * perf 行丢尾段加省略号（HTML 标签外截断）；tooltip 恒全文。宽度未变短路防重算抖动。
+ * 等组件首显/拉伸时由 ComponentListener 触发。超预算时 meta 行中段省略（复用 T-M26.3 ellipsize）。
+ * T-PreviewInfoLayout D-2/D-3：meta 只剩单行（不含警告、不含性能建议），第二行的宽度问题整体消失。
  */
 
 internal fun SqlPreviewPanel.applyMetaTruncation() {
-    if (metaLineText.isEmpty() && metaPerfSegments.isEmpty()) return
+    // T-PreviewInfoLayout D-3：性能建议有自己的整行，先刷新它（与 meta 预算互不牵连）
+    applyPerfRow()
+    if (metaLineText.isEmpty()) return
     val width = topRow.width
     if (width <= 0) {
         // 未布局（showResult 先于首帧布局 / headless 测试）：先展示全文，布局后由 ComponentListener 按预算重截
@@ -967,27 +987,42 @@ internal fun SqlPreviewPanel.applyMetaTruncation() {
     lastMetaBudget = budget
     val metrics = metaLabel.getFontMetrics(metaLabel.font)
     val widthOf = { s: String -> metrics.stringWidth(s) }
-    val line1 = metaLineWithinBudget(metaLineText, metaLineHead, metaLineDigest, widthOf, budget)
-    metaLabel.text = if (metaPerfSegments.isEmpty()) {
-        line1
-    } else {
-        // T-SAF-10 转义位置修正（2026-11-17，CI run 43925934655）：meta 行是 plain / <html> 双形态
-        // （perf 段在位才包 <html>）。低信任数据位已在组装点转义（tableName/警示/栈摘要出处见各自
-        // 注释），本边界对**栈摘要段**（metaLineDigest，组装态纯文本、分隔符恒含 `<-`）补转义——
-        // 纯文本态按原文显示（用户见 `<-` 箭头），HTML 态转义后显示语义不变、注入被阻断。
-        // 宽度按转义前口径测量（line1 用原文），实体展开只影响 HTML 态截断保守度。
-        "<html>${metaLineWithinBudget(metaLineText, metaLineHead, HtmlEscape.escape(metaLineDigest), widthOf, budget)}<br>${perfLineHtml(budget, metrics)}</html>"
+    metaLabel.text = metaLineWithinBudget(metaLineText, metaLineHead, metaLineDigest, widthOf, budget)
+}
+
+/**
+ * T-PreviewInfoLayout D-3：刷新性能建议整行。
+ *
+ * 宿主是 `northHost` 里 topRow 正下方的独立行，宽度＝面板宽（不再减去工具栏），所以同样的建议
+ * 不会再被截成「…集，建议添加 LIMIT」。预算按行自身宽度算，放不下时沿用 [perfLineHtml] 的
+ * 「丢尾段 + …」策略；tooltip 恒全文。
+ */
+internal fun SqlPreviewPanel.applyPerfRow() {
+    if (metaPerfSegments.isEmpty()) {
+        perfLabel.isVisible = false
+        perfLabel.text = ""
+        perfLabel.toolTipText = null
+        return
     }
+    val plain = metaPerfSegments.joinToString("；") { it.text }
+    perfLabel.isVisible = true
+    perfLabel.toolTipText = plain
+    val rowWidth = perfRow.width
+    if (rowWidth <= 0) {
+        // 未布局：先给全文（含原着色），布局后由 perfRow 的 ComponentListener 按预算重截
+        perfLabel.text = "<html>" + metaPerfSegments.joinToString("；") {
+            "<font color=\"${it.color}\">${it.text}</font>"
+        } + "</html>"
+        return
+    }
+    val insets = perfRow.insets.let { it.left + it.right } + perfLabel.insets.let { it.left + it.right }
+    val budget = (rowWidth - insets).coerceAtLeast(MIN_META_BUDGET_PX)
+    perfLabel.text = "<html>${perfLineHtml(budget, perfLabel.getFontMetrics(perfLabel.font))}</html>"
 }
 
-/** F3：全文展示文本（未布局/预算充裕时）——meta 行 + perf 行原着色 markup，与 T-SqlPerf 原渲染一致。 */
+/** F3：全文展示文本（未布局/预算充裕时）——meta 行单行；性能建议走 [applyPerfRow]。 */
 
-internal fun SqlPreviewPanel.fullDisplayText(): String {
-    if (metaPerfSegments.isEmpty()) return metaLineText
-    val markup = metaPerfSegments.joinToString("；") { "<font color=\"${it.color}\">${it.text}</font>" }
-    // T-SAF-10 转义位置修正：与 applyMetaTruncation 同口径——HTML 包装态对栈摘要段转义。
-    return "<html>${metaLineHead + HtmlEscape.escape(metaLineDigest)}<br>   $markup</html>"
-}
+internal fun SqlPreviewPanel.fullDisplayText(): String = metaLineText
 
 /** F3：perf 行预算内重拼——逐段（含「；」分隔宽）按像素累计，放得下保留原着色；放不下丢尾段并加省略号。 */
 
@@ -1030,9 +1065,9 @@ internal fun SqlPreviewPanel.buildPerfSegments(result: PreviewResult): List<Meta
         val isError = warning.severity == PerfSeverity.ERROR || warning.severity == PerfSeverity.WARN
         val prefix = if (isError) "⚠ " else "ℹ "
         MetaPerfSegment(
-            // T-SAF-10：perf 警告文案含 messageArgs（低信任数据），进 <font color=...> markup
-            // 前转义（文案进可见行 <html> 包装与 tooltip）
-            text = prefix + HtmlEscape.escape(localizeWarning(warning)),
+            // T-SAF-10 结构性消解（D241 对齐轮）：perf 文案随可见行改纯文本态，组装点转义退役
+            //（同 updateMeta 处注释）；master@54af4e9f3 同形态。
+            text = prefix + localizeWarning(warning),
             // T-UN-13（T-UiNative）：HTML 段色写死 hex → namedColor 取主题色再注入（亮值不变，
             // HTML 结构与截断逻辑不动）
             color = MpvsUiColors.htmlHex(if (isError) MpvsUiColors.PERF_ERROR_TEXT else MpvsUiColors.PERF_INFO_TEXT),
