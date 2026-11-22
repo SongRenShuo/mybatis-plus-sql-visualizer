@@ -52,3 +52,60 @@
 
 - 不改 XML/iBatis 引擎链的「字符串内同样计数」口径；不改闸门/复制注释既有行为（已覆盖裸 SQL，本册只补可见性）。
 - 不动 update/、发行节奏；随下一发行批亮相（可与 D222 销账说明同批）。
+
+## 六、实施记录（2026-11-22 落地回填）
+
+### P1~P4 证伪结论
+
+| # | 结论 | 证据 |
+|---|---|---|
+| P1 | **部分证伪（已按计划意图改判落地）**：`dollarRawCount` 字段**不在** `PreviewResult` 上，而在 `IbatisRenderResult`（`IbatisModel.kt:309`，iBatis 渲染层，`SqlMapSqlRenderer.kt:152` / `IbatisXmlPreviewService.kt:213`/`:414` 在用）；`PreviewResult` 只有 Boolean `hasDollarRawSegments`（`PreviewResult.kt:87`）。计划册「字段已存在」不成立，按「字段应当存在」的意图**新增** `PreviewResult.dollarRawCount: Int = 0`（默认 0 向后兼容，全仓构造点具名零错位） | grep `dollarRawCount` 全部定义与写入点 |
+| P2 | **成立**：DegradationBanner 优先级 DEGRADED(2) > WRITE_RISK/RENDER_WARNING(1) > DOLLAR_INJECT(0)，show 低优先让位、clear 只清本类别；纯 SQL 链 `currentWarning=null`、`xmlModel=null`（无 WRITE_RISK/RENDER_WARNING 竞争），挂 DOLLAR_INJECT 无冲突，无需新 Kind/新文案键（`panel.banner.dollarInject` 带 `{1}` 计数参数，全仓仅 `SqlPreviewPanelResultView` 一处消费，无第三处拼接） | 读 DegradationBanner.kt:38-46/:126-155 + grep `dollarInject`/`xmlDollarSubstitutions` 全消费点 |
+| P3 | **成立（headless 实证）**：`confirmDollarRawSegments`（`SqlPreviewPanelExecution.kt:631`）读 `current?.hasDollarRawSegments`，裸 SQL 链已填 true——测试 `test执行_裸SQL含直替弹确认且NO中断` 断言确认弹窗正文逐字等于 `execute.confirm.dollarRaw.message` 且 NO 中止在空态。附带发现 :624 KDoc「只在 XML/注解预览链生效」是过时注释（实现读任何链），未动 | M2 headless 测试 |
+| P4 | **成立**：`StandaloneSqlSourceResolver.Kind` 只两值（XML_STATEMENT/PLAIN_SQL），消费点仅独立工作台（`SqlStandalonePreviewPanel.kt:632`）与弹窗（`SqlPreviewDialog` 同链）；主面板 preview 源（gutter/annotation → Wrapper/XML/iBatis 链）无 PLAIN_SQL flavor。横幅拓宽惠及独立工作台 + 弹窗，无主面板回归面 | grep `Kind.PLAIN_SQL` 全消费点 |
+
+### 范围改判（P1 证伪的处理依据）
+
+1. **新增字段而非复用**：`PreviewResult` 加 `dollarRawCount: Int = 0`（`PreviewResult.kt:88-96`），仅裸 SQL 链（`StandaloneSqlSourceResolver.resolveAsPlainSql`）填值；iBatis 链不填（恒 0，可见性走 `$x$` 风险行既有渠道）——横幅行为面精确限定裸 SQL，避免范围外行为变化。
+2. **`hasDollarRawSegments` 改由计数派生**（计划册允许的二选一）：原 Boolean 独立扫描**不识别转义**（`\${` 照样命中返回 true，与 XML 链 TokenParser 口径存在偏差），计数派生后转义形态两处口径天然一致。行为变化面＝含 `\${` 的裸 SQL 从「执行弹确认」变「不弹」——与 XML 链同口径（`InjectionGateTest.test信号_纯井号与转义形态为假`），且消除「横幅不显示但闸门弹」的分裂态。
+3. **横幅计数按形态互斥取值而非「或」拼接**：实施中发现 `xmlDollarSubstitutions` 是**面板渲染态**（`SqlPreviewPanel.kt:792`，仅 `xmlModel != null` 轮复位，`SqlPreviewPanelResultView.kt:229`），纯 SQL 结果读它会残留上一轮 XML 计数造成误挂——改为 `val dollarBannerCount = if (result.xmlModel != null) xmlDollarSubstitutions else result.dollarRawCount`，并加用例 `test横幅_纯SQL轮不读XML渲染态残留` 钉死。
+
+### 改动文件:行
+
+- `src/main/kotlin/.../model/PreviewResult.kt`：88-96 新增 `dollarRawCount` 字段（KDoc 写明口径分链）
+- `src/main/kotlin/.../ui/standalone/StandaloneSqlSourceResolver.kt`：`resolveAsPlainSql`（计数赋值+产物双填，原 :376/:392/:403 一带）；`hasDollarRawSegment(Boolean)` 改造为 `countDollarRawSegments(Int)`（string-aware + 转义识别，原 :457-488）
+- `src/main/kotlin/.../ui/SqlPreviewPanelResultView.kt`：`updateMeta` 横幅条件拓宽（原 :934-945 一带，现 :934-951）
+- `src/test/kotlin/.../ui/DollarPlainSqlBannerTest.kt`：新增 296 行（14 用例）
+- `CHANGELOG.md`：`[Unreleased]` 新增 `### Added` 条目
+
+### 测试读数（定向，未跑全量）
+
+```
+gradlew.bat test --tests "cn.song.mybatisplus.visualizer.ui.DollarPlainSqlBannerTest"
+  --tests "cn.song.mybatisplus.visualizer.ui.DollarInjectBannerTest"
+  --tests "cn.song.mybatisplus.visualizer.ui.InjectionGateTest"
+
+DollarPlainSqlBannerTest  => tests=14 failures=0 errors=0
+DollarInjectBannerTest    => tests=6  failures=0 errors=0   （XML 形态回归）
+InjectionGateTest         => tests=18 failures=0 errors=0   （闸门/复制链回归）
+BUILD SUCCESSFUL
+```
+
+过程记录：首轮编译失败 4 处（测试侧笔误：`updateMeta` 漏 receiver、消息文本里 `${b}`/`${}` 被当 Kotlin 模板、函数名含 `✕` 非法标识符字符）——均为新测试文件自身问题，修正后第二轮撞上 Kotlin 增量编译未重编既有测试类（`PreviewResult` 构造器 NoSuchMethodError ×10，产物错配伪故障），删 `build/classes/kotlin/test` 强制重编后全绿。
+
+### 反向验证（守卫纪律，红/绿两读数）
+
+| 步骤 | 操作 | 读数 |
+|---|---|---|
+| 红 | 临时短路 M1 拓宽分支：`val dollarBannerCount = if (result.xmlModel != null) xmlDollarSubstitutions else 0 // TEMP-PROBE` → 只跑 `DollarPlainSqlBannerTest` | `14 tests completed, 1 failed`——失败用例 `test横幅_裸SQL直替按计数显示`：`AssertionFailedError: 两处直替 → DOLLAR_INJECT 挂起 expected:<DOLLAR_INJECT> but was:<null>`（恰好命中被测分支，其余 13 例不受影响，无假红扩散） |
+| 绿 | 恢复短路（`else result.dollarRawCount`）→ 重跑定向三件套 | `DollarPlainSqlBannerTest 14/0 + DollarInjectBannerTest 6/0 + InjectionGateTest 18/0`，`BUILD SUCCESSFUL` |
+
+附带实证：红读数 `but was:<null>` 同时证明 headless 下 DEGRADED 降级横幅在该形态**未**挂起——横幅断言走的是真实装配链，未依赖降级规避分支。
+
+### 提交列表
+
+| 里程碑 | hash | 内容 |
+|---|---|---|
+| M1 | `15a166f43` | 计数变体 + 横幅条件拓宽（3 文件，+41/−12） |
+| M2 | `8ceced35b` | headless 测试 14 用例 + 反向验证红/绿在案（+296） |
+| M3 | 本提交 | CHANGELOG `[Unreleased]` Added + 本实施记录回填 |

@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+### Added
+- **裸 SQL 形态也有 `${}` 直替风险横幅了（T-DollarPlainSqlBanner，`15a166f43` / `8ceced35b`）**：独立工作台或弹窗里直接粘贴的纯 SQL 含未转义的 `${...}` 时，结果区顶部会给出「预览含 N 处直接替换」的信息级提示（可点 ✕ 本次会话不再弹）——此前该提示只对 mapper XML 语句生效，裸 SQL 只有执行前确认与复制注释两道防线，粘贴后一眼看不出这段 SQL 里有直替拼接面。计数口径与既有扫描一致：SQL 字符串字面量与注释里的 `${}` 算字面量不计，`\${` 转义不计；mapper XML 形态的行为不变
+
 ### Changed
 - 插件显示名更名 SQL Visualizer → MyBatis SQL Visualizer（T-D244 搜索关键词决策 B1 案）：Marketplace 后台展示名与包内 plugin.xml `<name>` 同步更名，补上名称字段对 mybatis 系搜索词的匹配缺口；插件 ID / xmlId 与界面内品牌文案（错误报告、导出头、二维码说明、设置页标题）不变
 - Marketplace 描述关键词批（D246）——首行改 40 字符关键词句，补 iBatis/GoldenDB/openGauss 词面与 slow query/execution plan/sql formatter 精确短语，随下一发行批生效（蓝本列举中的磐维 PanWeiDB 经 Dialect.kt 对账不存在该方言，按实际改列 openGauss，数字 15 不动）
