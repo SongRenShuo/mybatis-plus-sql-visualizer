@@ -33,6 +33,12 @@ class FieldFillSimulationTest {
         for (value in listOf("0", "-12.5", "+2", ".5", "1e3")) assertEquals(value, FieldFillSimulation.literal(value, false))
         assertEquals("'O''Reilly'", FieldFillSimulation.literal("O'Reilly", true))
         assertEquals("'now()'", FieldFillSimulation.literal("now()", true))
+        // T-PreQuotedLiteral：用户已手工加引号的值原样（不翻倍 `'''abc'''`）
+        assertEquals("'abc'", FieldFillSimulation.literal("'abc'", true))
+        assertEquals("''", FieldFillSimulation.literal("''", true))
+        // 预引号透传在安全闸门之后：分号/反斜杠/控制符拒绝语义不变
+        assertNull(FieldFillSimulation.literal("'; DROP TABLE t; --'", true))
+        assertNull(FieldFillSimulation.literal("'x\\y'", true))
         assertNull(FieldFillSimulation.literal("x'; DROP TABLE t", true))
         assertNull(FieldFillSimulation.literal("x\\' OR 1=1", true))
         assertNull(FieldFillSimulation.literal("a\nb", true))

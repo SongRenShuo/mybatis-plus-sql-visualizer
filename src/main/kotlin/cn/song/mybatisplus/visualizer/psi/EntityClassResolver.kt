@@ -53,6 +53,10 @@ object EntityClassResolver {
         aliasCandidates: Collection<PsiClass>,
     ): Resolution {
         if (entityName.isBlank()) return Resolution(null, emptyList())
+        // T-PerfSweep30 券02（02c）：dumb 态入口早退——下方 findClasses / PsiShortNamesCache 均为
+        // 索引查询，索引构建期不可信（异常被 previewAsync 吞成 null）。返回空 Resolution 即既有
+        // 「实体不可解析」降级语义（调用方回落 task.* 形态），不改扫描结构与缓存。
+        if (com.intellij.openapi.project.DumbService.isDumb(project)) return Resolution(null, emptyList())
         ProgressManager.checkCanceled()
         val module = contextModule(project, context)
         val scope = searchScope(project, context)

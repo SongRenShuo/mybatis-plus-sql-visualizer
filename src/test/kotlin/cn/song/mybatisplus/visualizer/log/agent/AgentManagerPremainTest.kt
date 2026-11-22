@@ -63,6 +63,30 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
         manager.shutdownAll()
     }
 
+    /**
+     * T-OldJvmPremainGuard 券01：目标 JDK 载不动 agent 字节码时跳过注入，且通道/端口零副作用。
+     *
+     * 反向验证：把 [AgentManager.preparePremainVmOption] 里的 `targetJvmSupported` 分支摘掉，
+     * 本用例第一条断言必红（会真的注入一条把 JDK 6 应用打死的 `-javaagent`）。
+     */
+    fun test目标JDK过老_不注入不协商端口且提示只记一次() {
+        enableCapture()
+        assertFalse("闸门命中前不得置位跳过标志", manager.targetJvmSkipDetected.get())
+        assertNull("JDK 6（major 50）不得注入", manager.preparePremainVmOption(50))
+        assertTrue("老 JVM 上不得协商端口", manager.premainChannels.isEmpty())
+        assertEquals("应记一条判定值 50 的一次性提示", setOf("50"), manager.targetJvmNotifiedVersions)
+        assertNull("重复准备仍不注入", manager.preparePremainVmOption(50))
+        assertEquals("同一版本只提示一次", 1, manager.targetJvmNotifiedVersions.size)
+        // T-AgentStatusOldJvm：命中闸门即粘性置位——状态行据此切到「已跳过注入」。
+        // 本类是平台测试（状态行会话态被同类回连用例污染、bundle 随 locale 变），manager 层只钉
+        // 「事实标志」这条接线；「标志 → 文案」的映射由 AgentStatusTextTest（纯函数、zh 兜底）覆盖。
+        assertTrue("targetJvmSkipDetected 应粘性置位", manager.targetJvmSkipDetected.get())
+        // 未知（null）与达标（52）照常注入——闸门只拦「确定太老」
+        assertNotNull("未知版本应放行（由 agent 侧引导类兜底）", manager.preparePremainVmOption(null))
+        assertNotNull("JDK 8 应放行", manager.preparePremainVmOption(52))
+        manager.shutdownAll()
+    }
+
     // ---------- 注入产物 ----------
 
     fun test已确认_注入_端口协商与jar落盘同在位() {
@@ -108,11 +132,15 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
         val port = portOf(option)
         val pid = 424242L
         val socket = Socket("127.0.0.1", port)
+        // T-AgentStatusOldJvm2：模拟「上一次运行命中过 JDK 闸门」——会话建立必须清掉跳过标志，
+        // 否则状态行在「本次挂载」时仍显示跳过叙事（优先级：本次挂载 > 本次跳过 > 上次会话结局）
+        manager.targetJvmSkipDetected.set(true)
         writeFrame(socket, AgentProtocol.CMD_HELLO, """{"pid":$pid}""")
 
         awaitTrue("premain 会话未建立") { manager.sessions.isNotEmpty() }
         // sessions 先入表、updateOnline/publishStatusChanged 随后，故在线态各自等一次
         awaitTrue("回连后在线态未置位") { manager.online }
+        awaitTrue("会话建立应清掉跳过标志") { !manager.targetJvmSkipDetected.get() }
         // T-AgentReconnect T-03：通道不再「accept 一次即摘除」——认领后转入等重连（绑定到本次运行），
         // 由运行结束信号/pid 消亡/TTL 回收。旧断言（通道被摘除）即 30 秒摘除后无法恢复的根因形态。
         awaitTrue("通道未认领（应留在表内等重连）") { manager.premainChannels.size == 1 && manager.premainChannels[0].claimed }

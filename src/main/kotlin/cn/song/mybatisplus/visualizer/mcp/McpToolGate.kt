@@ -42,10 +42,15 @@ object McpToolGate {
         "sqlv_history_search",
     )
 
+    /** 总开关（插件 MCP 功能是否启用）；测试环境服务未注册兜底 true（与设置默认值一致）。 */
+    fun isMasterEnabled(): Boolean = runCatching {
+        PluginSettings.getInstance().state.mcpToolsEnabled
+    }.getOrDefault(true)
+
     /** 工具是否对平台可见：总开关开 且 不在工具级禁用清单（大小写不敏感比对）。 */
     fun isEnabled(toolName: String): Boolean = runCatching {
-        val state = PluginSettings.getInstance().state
-        state.mcpToolsEnabled && state.mcpDisabledTools.none { it.equals(toolName, ignoreCase = true) }
+        isMasterEnabled() &&
+            PluginSettings.getInstance().state.mcpDisabledTools.none { it.equals(toolName, ignoreCase = true) }
     }.getOrDefault(true)
 
     /**

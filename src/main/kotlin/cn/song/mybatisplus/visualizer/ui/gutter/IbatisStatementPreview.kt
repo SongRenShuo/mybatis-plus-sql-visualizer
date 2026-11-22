@@ -67,6 +67,17 @@ internal object IbatisStatementPreview {
         resolveStatementTag(project, statementId, ownerNamespace)?.let(::previewTag) ?: statementNotFound()
 
     /**
+     * 同 [previewResolved]，但**目标缺失返回 null**——供「错源兜底」使用（T-IbatisAtShapeGate S4）。
+     *
+     * 语义差别是刻意留的：兜底链的调用方（`ConvertToSqlAction.tryJdbcTemplateFallback`）在 JDBC
+     * 通道已认领并渲染失败后试一次本档，**命中才接管、未命中保持原「未找到」提示**——若这里也返回
+     * 「语句未找到」可见失败，非 iBatis 工程里的 `cache.update("refreshCache")` 这类调用会被改成
+     * 指向 iBatis 语句的误导文案。
+     */
+    fun previewResolvedOrNull(project: Project, statementId: String, ownerNamespace: String?): PreviewResult? =
+        resolveStatementTag(project, statementId, ownerNamespace)?.let(::previewTag)
+
+    /**
      * 同标签名兄弟中的序号（0 起）——语句缺 `id` 属性（非法文件）时的定位回落。
      * 纯 PSI 兄弟遍历，O(兄弟数)，不进 gutter 热路径（只在无 id 的小概率分支调用）。
      */
@@ -139,6 +150,24 @@ internal object IbatisCallTargets {
     }
 
     /**
+     * 与 [resolve] 同两跳定位，但**跳过标识符形状正则**——只判「入口方法名 + 首参 String 字面量」。
+     *
+     * 仅供「JDBC 通道已认领且渲染失败」之后的错源兜底使用（T-IbatisAtShapeGate S4）：
+     * 该路径不是热路径（用户显式触发、JDBC 已失败一次），且调用方只在解析**命中**时才接管预览、
+     * 未命中保持原「未找到」提示——所以非 iBatis 工程不会因为这里放宽形状而多出误导文案。
+     * 常规快捷键认领仍必须走 [resolve]（热路径只做 O(1) 语法判定，不进索引）。
+     */
+    fun resolveIgnoringShape(element: PsiElement): IbatisCallTarget? {
+        PsiTreeUtil.getParentOfType(element, PsiMethodCallExpression::class.java, false)
+            ?.let { targetOf(it, requireShape = false) }
+            ?.let { return it }
+        val statement = PsiTreeUtil.getParentOfType(element, PsiStatement::class.java, false) ?: return null
+        return PsiTreeUtil.collectElementsOfType(statement, PsiMethodCallExpression::class.java)
+            .mapNotNull { targetOf(it, requireShape = false) }
+            .minByOrNull { it.call.textRange.startOffset }
+    }
+
+    /**
      * 方法体内全部 iBatis 形状调用（按 offset 序）。
      *
      * 带两道廉价预筛（对齐 `StringSqlMethodGutterLineMarkerProvider.hasStringSqlCall` 的形态）：
@@ -164,10 +193,15 @@ internal object IbatisCallTargets {
         return null
     }
 
-    private fun targetOf(call: PsiMethodCallExpression): IbatisCallTarget? {
+    private fun targetOf(call: PsiMethodCallExpression, requireShape: Boolean = true): IbatisCallTarget? {
         val methodName = call.methodExpression.referenceName ?: return null
-        // 形状门与 gutter 让位同一函数：入口方法名 + 首参 String 字面量 + 标识符形态
-        if (!IbatisCallYieldGate.isIbatisStatementIdCall(call, methodName)) return null
+        if (requireShape) {
+            // 形状门与 gutter 让位同一函数：入口方法名 + 首参 String 字面量 + 标识符形态
+            if (!IbatisCallYieldGate.isIbatisStatementIdCall(call, methodName)) return null
+        } else {
+            // 兜底口径（S4）：只判入口方法名——形状正则刻意跳过，存在性由解析链判
+            if (methodName !in IbatisXmlStatementTargets.STATEMENT_ENTRY_METHODS) return null
+        }
         val literal = call.argumentList?.expressions?.firstOrNull() as? PsiLiteralExpression ?: return null
         val statementId = (literal.value as? String)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
         return IbatisCallTarget(call, statementId, ownerNamespace(call))

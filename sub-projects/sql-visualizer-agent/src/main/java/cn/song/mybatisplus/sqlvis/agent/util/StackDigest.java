@@ -121,7 +121,7 @@ public final class StackDigest {
         // 定位帧在锚点之外（理论形态：锚点由层二选出而定位帧更靠栈底）时一并纳入，避免整链形态下丢帧
         final int depth = Math.max(lastBusiness, anchorAt) + 1;
         if (depth <= budget) {
-            return join(frames, 0, depth, maxLen);
+            return join(frames, 0, depth, maxLen, loader);
         }
         // 两端采样：栈顶 + 中段标记 + 栈底；超长先缩栈顶（缩掉的顶帧计入省略数），业务帧永不因长度被截
         final int topCount = Math.max(1, budget - BOTTOM_RESERVED);
@@ -131,9 +131,9 @@ public final class StackDigest {
         // T-StackBizFrame S2：定位帧落在两个窗口之外时单列一段，插在省略标记之前
         final boolean anchorInWindow = anchorAt < 0 || anchorAt < topCount
                 || (anchorAt >= bStart && anchorAt <= lastBusiness);
-        final String anchorText = anchorInWindow ? null : join(frames, anchorAt, 1, Long.MAX_VALUE);
-        String top = join(frames, 0, topCount, Long.MAX_VALUE);
-        String bottom = join(frames, bStart, lastBusiness - bStart + 1, Long.MAX_VALUE);
+        final String anchorText = anchorInWindow ? null : join(frames, anchorAt, 1, Long.MAX_VALUE, loader);
+        String top = join(frames, 0, topCount, Long.MAX_VALUE, loader);
+        String bottom = join(frames, bStart, lastBusiness - bStart + 1, Long.MAX_VALUE, loader);
         int elided = bStart - topCount - (anchorText == null ? 0 : 1);
         String marker = elided > 0 ? elisionMarker(elided) : "";
         int curTop = topCount;
@@ -141,7 +141,7 @@ public final class StackDigest {
         while (curTop > 1 && top.length() + anchorLen + marker.length() + bottom.length() + 4L > maxLen) {
             curTop--;
             elided++;
-            top = join(frames, 0, curTop, Long.MAX_VALUE);
+            top = join(frames, 0, curTop, Long.MAX_VALUE, loader);
             marker = elided > 0 ? elisionMarker(elided) : "";
         }
         final StringBuilder out = new StringBuilder(
@@ -302,8 +302,12 @@ public final class StackDigest {
     /**
      * 把 frames[from, from+count) 逐帧追加为「类#方法:行」（← 连接）；maxLen 为总长硬顶，
      * 超长截断加 … 后缀（语义与旧实现逐字一致）；maxLen 传 Long.MAX_VALUE 表示不截（由调用方统管）。
+     *
+     * <p>T-HdAbsorb D217：代理帧类名先经 {@link ProxyFrameDecoder#decodeForDisplay} 反解——
+     * {@code com.sun.proxy.$Proxy7} 显示为承载调用身份的接口 FQCN、CGLIB 增强类剥后缀为基类；
+     * 反解失败原样保留（不猜）。仅改展示面，不触碰定位语义。
      */
-    private static String join(List<StackTraceElement> frames, int from, int count, long maxLen) {
+    private static String join(List<StackTraceElement> frames, int from, int count, long maxLen, ClassLoader loader) {
         final StringBuilder sb = new StringBuilder(256);
         int used = 0;
         for (int i = from; i < frames.size() && used < count; i++) {
@@ -311,7 +315,7 @@ public final class StackDigest {
             if (used > 0) {
                 sb.append("<-");
             }
-            String text = f.getClassName() + '#' + f.getMethodName();
+            String text = ProxyFrameDecoder.decodeForDisplay(f.getClassName(), loader) + '#' + f.getMethodName();
             final int line = f.getLineNumber();
             if (line >= 0) {
                 text += ":" + line;

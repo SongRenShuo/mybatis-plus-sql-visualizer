@@ -207,7 +207,7 @@ internal object IbatisXmlStatementTargets {
             // 索引重建中：这是「未知」不是「没有」（PCE 不在此列，它必须上抛让本趟作废）。
             Lookup.Unknown
         }
-        logPerf(statementId, lookup, startedNs)
+        logPerf(project, statementId, lookup, startedNs)
         return lookup
     }
 
@@ -272,15 +272,22 @@ internal object IbatisXmlStatementTargets {
             .mapNotNull { it.getAttribute("id")?.valueElement }
     }
 
-    /** 每条语句只记一次定位读数（候选命中数 / 首个落点文件 / 耗时 / 三态）。 */
+    /**
+     * 每条语句只记一次定位读数（候选命中数 / 首个落点文件 / 耗时 / 三态）。
+     *
+     * T-PerfSweep31 券04：键带 `project.locationHash` 前缀——本集为应用级静态容器、项目关闭不清理，
+     * 裸 statementId 作键会让两个工程对同一条语句互踩「只记一次」登记。键域天然含项目身份后，
+     * 跨项目撞键面消除；会话内增长仍以语句数为上界。
+     */
     private val perfLoggedKeys: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     private fun logPerf(
+        project: Project,
         statementId: String,
         lookup: Lookup,
         startedNs: Long,
     ) {
-        if (!perfLoggedKeys.add(statementId)) return
+        if (!perfLoggedKeys.add("${project.locationHash}|$statementId")) return
         val ms = (System.nanoTime() - startedNs) / 1_000_000
         val anchors = (lookup as? Lookup.Found)?.anchors
         val state = when (lookup) {

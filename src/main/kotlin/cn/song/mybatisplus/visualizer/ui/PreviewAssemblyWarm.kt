@@ -55,10 +55,14 @@ internal object PreviewAssemblyWarm {
      */
     internal const val WARM_FILES_PER_PROJECT = 2
 
-    /** 已预热过的文件（按 VirtualFile.url，每文件一次；取消/失败会移除以便下次重试）。 */
+    /**
+     * 已预热过的文件（按 VirtualFile.url，每文件一次；取消/失败会移除以便下次重试）。
+     * T-PerfSweep31 券04 登记：应用级会话容器，项目关闭不清理——键含文件 URL（无跨项目撞键面），
+     * 会话内增长以「打开过的 XML 文件数」为上界且每条仅一个 URL 字符串，量级可忽略。
+     */
     private val warmedFiles: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
-    /** 每项目已用掉的预热额度（会话级）。 */
+    /** 每项目已用掉的预热额度（会话级；键=project.locationHash，项目关闭残留一条 map entry，量级可忽略）。 */
     private val usedPerProject: MutableMap<String, AtomicInteger> = java.util.concurrent.ConcurrentHashMap()
 
     /** 实际跑完的预热次数（守卫读数；不代表用户可见行为）。 */

@@ -140,8 +140,12 @@ internal class CommunityDialog(
     companion object {
         private const val QR_SIZE = 180
         internal const val ABOUT_URL = "https://sql-visualizer.jvtools.cn/about/"
-        internal const val WECHAT_QR_URL = "https://sql-visualizer.jvtools.cn/wechat-qr.png"
-        internal const val GROUP_QR_URL = "https://sql-visualizer.jvtools.cn/group-qr.png"
+        // 两码都走站点上的 .jpg：wechat-qr.png 是 7481 色的抗锯齿原图（66KB），转 q92 JPEG 后 23KB，
+        // 扫码结果与原件逐像素一致；group-qr.png 的文件内容本来就是 JPEG（扩展名不符会被 nosniff 拒渲染）。
+        // 这里不能跟文档站页面一样改 WebP——CommunityQrImages.decode 走 ImageIO，JVM 原生没有 WebP
+        // reader（2026-11-20 用 JDK8 ImageIO 实测 wechat-qr.webp → no reader），换了会直接落到「图片不可用」。
+        internal const val WECHAT_QR_URL = "https://sql-visualizer.jvtools.cn/wechat-qr.jpg"
+        internal const val GROUP_QR_URL = "https://sql-visualizer.jvtools.cn/group-qr.jpg"
     }
 }
 

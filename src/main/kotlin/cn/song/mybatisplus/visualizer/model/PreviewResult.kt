@@ -86,6 +86,17 @@ data class PreviewResult(
      */
     val hasDollarRawSegments: Boolean = false,
     /**
+     * T-DollarPlainSqlBanner D252：`${}` raw 段的**站点计数**——裸 SQL 链（独立工作台/弹窗直贴
+     * [cn.song.mybatisplus.visualizer.ui.standalone.StandaloneSqlSourceResolver]）由
+     * `countDollarRawSegments` 填上（string-aware 口径：字符串字面量里的 `${}` 是字面量不是占位，
+     * `\${` 转义不计——与既有 `?`/`#{}` 扫描同口径）。横幅据此对非 XML 形态显示「含 N 处直替」。
+     *
+     * 与 XML 链的计数刻意不同源：XML/iBatis 引擎链「字符串字面量内同样计数」（渲染后字符串内
+     * 同样直替），由面板渲染态 `xmlDollarSubstitutions` 承载，不走本字段——两链各自忠实各自引擎。
+     * 其它链（Wrapper/JPA/日志/iBatis——iBatis 可见性走 `$x$` 风险行）恒 0，既有构造点零影响。
+     */
+    val dollarRawCount: Int = 0,
+    /**
      * T-PreviewOpenPerfM2 M9：本次预览因**索引未就绪**（dumb mode）跳过了 M2 调用点检索，
      * 这里是「索引就绪后重算一次」的闭包；面板据此挂 `DumbService.runWhenSmart` 自动刷新，
      * 让冷态首次打开既秒出骨架、又能在索引就绪后补上真实 Criterion。
@@ -235,6 +246,17 @@ data class PreviewResult(
      * 在后台线程执行。返回 null = 该档位不可用（链/表不可解析）。
      */
     val statementTypeSwitch: ((ConsumptionKind) -> PreviewResult?)? = null,
+    /**
+     * T-PreviewActionRow D-4：本次 XML 预览里**引用但未定义**的 `<sql id>` 片段（按 id 排序）。
+     *
+     * 由文本来源解析链（[cn.song.mybatisplus.visualizer.ui.standalone.StandaloneSqlSourceResolver]）
+     * 在解析时算出，面板据此在结果区给「缺少片段：X —— 点此补上内容」入口（T-PreviewActionRow D-5）。
+     *
+     * 为什么放在载荷里而不是让面板自己扫：面板只有**渲染后的 SQL**（include 已被展开成 TODO 占位），
+     * 原始 XML 只在产出侧手里；缺失事实必须随产物一起走，弹窗与工作台才能同源展示。
+     * 空表 = 无缺失（真实文件来源通常由跨命名空间解析补齐，默认空表 ⇒ 既有链路零感知）。
+     */
+    val missingFragmentIds: List<String> = emptyList(),
 ) {
     val effectiveDialect: Dialect? get() = previewModel?.dialect ?: batchModel?.dialect ?: renderedDialect
 }

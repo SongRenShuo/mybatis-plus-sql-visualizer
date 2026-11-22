@@ -68,10 +68,41 @@ class McpGateFilterRegistrationGuardTest {
         val src = File("src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpGateFilterEpBridge.kt").readText()
         assertTrue("形态 A 入口在册", src.contains("\"applyFilters\" ->"))
         assertTrue("形态 B 入口在册（261）", src.contains("\"getFilters\" ->"))
-        assertTrue("未知方法必须按返回类型兜底", src.contains("else -> defaultValueFor(method.returnType)"))
+        assertTrue("未知方法必须通知熔断层（只兜底不摘除会留下后续调用）", src.contains("onUnknown(signatureOf(method))"))
+        assertTrue("未知方法必须按返回类型兜底", src.contains("defaultValueFor(method.returnType)"))
         assertTrue(
             "形态 B 两段接口必须以字符串出现（类型引用会重新触发审核拒绝）",
             src.contains("McpToolFilterProvider\\\$McpToolFilter"),
+        )
+    }
+
+    // ---- T-McpGlobalBreakHardening（20261118）：白名单 / 熔断 / 总开关联动 ---------------
+
+    @Test
+    fun `白名单否决未知契约在册`() {
+        val src = File("src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpGateFilterEpBridge.kt").readText()
+        assertTrue("探测必须先枚举白名单外方法", src.contains("unknownContractMethods"))
+        assertTrue("未知方法必须否决（非空即 UNKNOWN）", src.contains("if (unknownContractMethods(iface).isNotEmpty()) return FilterForm.UNKNOWN"))
+        assertTrue("suspend 必须否决", src.contains("isSuspendLike()"))
+        assertTrue("熔断必须真的从 EP 摘除", src.contains("unregisterExtension"))
+    }
+
+    @Test
+    fun `总开关与逃生开关联动在册`() {
+        val registrarSrc = File("src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpGateFilterRegistrar.kt").readText()
+        assertTrue("总开关关闭不得注册过滤 EP", registrarSrc.contains("McpToolGate.isMasterEnabled()"))
+        val filterRegistrarSrc = registrarSrc.substringAfter("internal object McpGateFilterEpRegistrar")
+        assertTrue(
+            "过滤 EP 注册面自己也要判总开关（只靠 controller 判＝拆掉这里后仍会注册，20261118 反向验证实测 0 红）",
+            filterRegistrarSrc.contains("McpToolGate.isMasterEnabled()"),
+        )
+        assertTrue("总开关关闭必须摘除 toolset", registrarSrc.contains("McpToolsetDynamicRegistrar.unregisterAll()"))
+        assertTrue("逃生开关在册", registrarSrc.contains(McpGateFilterEpRegistrar.ESCAPE_REGISTRY_KEY))
+        assertTrue("设置变更后必须重新同步", registrarSrc.contains("SETTINGS_CHANGE_TOPIC"))
+        val pluginXml = File("src/main/resources/META-INF/plugin.xml").readText()
+        assertTrue(
+            "逃生开关必须在 plugin.xml 声明默认值（未声明时 Registry.get 取不到，逃生通道静默失效）",
+            pluginXml.contains(McpGateFilterEpRegistrar.ESCAPE_REGISTRY_KEY),
         )
     }
 }

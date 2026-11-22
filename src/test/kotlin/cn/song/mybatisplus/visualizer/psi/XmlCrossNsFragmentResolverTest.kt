@@ -94,7 +94,11 @@ class XmlCrossNsFragmentResolverTest : BasePlatformTestCase() {
             </mapper>
         """.trimIndent())
         assertTrue("歧义应降级并给出原因：${result.warning}", result.warning.orEmpty().contains("重复声明"))
-        assertEquals("SELECT * FROM t", result.sql.replace(Regex("\\s+"), " ").trim())
+        // T-IncludePlaceholder：缺失/歧义处留注释占位（旧契约是整段抹掉 → 残句）
+        assertTrue(
+            "缺失处应留 TODO 占位：${result.sql}",
+            result.sql.contains("TODO: missing <sql id=\"com.demo.DupMapper.cols\">"),
+        )
     }
 
     fun testnamespace不匹配_降级() {
@@ -108,7 +112,10 @@ class XmlCrossNsFragmentResolverTest : BasePlatformTestCase() {
             "无该 namespace 应降级并给出原因：${result.warning}",
             result.warning.orEmpty().contains("未找到 namespace 为 com.demo.Missing"),
         )
-        assertEquals("SELECT * FROM t", result.sql.replace(Regex("\\s+"), " ").trim())
+        assertTrue(
+            "缺失处应留 TODO 占位：${result.sql}",
+            result.sql.contains("TODO: missing <sql id=\"com.demo.Missing.cols\">"),
+        )
     }
 
     fun testnamespace匹配但片段不存在_降级() {
@@ -122,7 +129,11 @@ class XmlCrossNsFragmentResolverTest : BasePlatformTestCase() {
             "同 namespace 无该片段应降级并给出原因：${result.warning}",
             result.warning.orEmpty().contains("下无片段 nope"),
         )
-        assertEquals("SELECT * FROM t", result.sql.replace(Regex("\\s+"), " ").trim())
+        // T-IncludePlaceholder：缺失片段处留注释占位（旧契约是整段抹掉 → 残句）
+        assertTrue(
+            "缺失处应留 TODO 占位：${result.sql}",
+            result.sql.contains("TODO: missing <sql id=\"com.demo.BaseMapper.nope\">"),
+        )
     }
 
     fun test纯文本链_无project_沿用旧降级文案() {
@@ -143,7 +154,11 @@ class XmlCrossNsFragmentResolverTest : BasePlatformTestCase() {
                     "(cross-namespace include is not supported).",
             ),
         )
-        assertEquals("SELECT * FROM t", result.sql.replace(Regex("\\s+"), " ").trim())
+        // T-IncludePlaceholder：同一处占位形态（纯文本链也留 TODO）
+        assertTrue(
+            "缺失处应留 TODO 占位：${result.sql}",
+            result.sql.contains("TODO: missing <sql id=\"com.demo.BaseMapper.cols\">"),
+        )
     }
 
     fun test同文件裸id_行为不变() {
