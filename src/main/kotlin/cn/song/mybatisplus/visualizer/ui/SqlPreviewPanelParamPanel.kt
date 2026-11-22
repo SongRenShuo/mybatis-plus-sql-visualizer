@@ -10,6 +10,7 @@ import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
 import cn.song.mybatisplus.visualizer.sql.PlaceholderCardinality
 import cn.song.mybatisplus.visualizer.sql.TypedLiteralRenderer
+import cn.song.mybatisplus.visualizer.sql.PreQuotedLiteral
 import cn.song.mybatisplus.visualizer.sql.SqlDateLiteral
 import cn.song.mybatisplus.visualizer.sql.RuntimeSlot
 import cn.song.mybatisplus.visualizer.sql.RuntimeSlotValues
@@ -2583,14 +2584,20 @@ internal fun SqlPreviewPanel.renderParamValue(v: String?, hint: ParamHint?, sour
         if (parts.isEmpty()) return if (hasSignatureTypeInfo(source)) emptyParamLiteral() else "?"
         return parts.joinToString(", ") { renderSingleValue(it, hint, typeText) }
     }
-    val escaped = v.replace("'", "''")
+    // T-PreQuotedLiteral：LIKE 模式下用户已手工加引号（`'abc'`）→ 剥外引号按内层内容拼 %，
+    // 不再对引号本身转义（`'%'''abc'''%'` 翻倍形态，先红读数见开发计划 §一）
+    val likeBody = if (PreQuotedLiteral.isComplete(v)) {
+        PreQuotedLiteral.stripQuotes(v).replace("'", "''")
+    } else {
+        v.replace("'", "''")
+    }
     return when {
         // LIKE 模式：恒引号 + 按位置拼 %（值本身转义）——LIKE 值是文本匹配语义，不参与类型感知
         like != null -> when (like) {
-            LikePosition.ANYWHERE -> "'%$escaped%'"
-            LikePosition.LEFT -> "'%$escaped'"
-            LikePosition.RIGHT -> "'$escaped%'"
-            LikePosition.NONE -> "'$escaped'"
+            LikePosition.ANYWHERE -> "'%$likeBody%'"
+            LikePosition.LEFT -> "'%$likeBody'"
+            LikePosition.RIGHT -> "'$likeBody%'"
+            LikePosition.NONE -> "'$likeBody'"
         }
         else -> renderSingleValue(v, hint, typeText)
     }
@@ -2631,12 +2638,15 @@ internal fun SqlPreviewPanel.renderSingleValue(raw: String, hint: ParamHint?, ty
     if (hint?.temporal == true && hint.likePosition == null) {
         SqlDateLiteral.renderByShape(raw, current?.effectiveDialect?.name)?.let { return it }
     }
-    val escaped = raw.replace("'", "''")
+    // T-PreQuotedLiteral：值已是完整引号字面量（用户手工加的 `'abc'`）→ 原样渲染，不再转义包裹
+    //（否则引号翻倍 `'''abc'''` / `''''`——int 参数走 quote 兜底引号档时最常见，先红读数见开发计划 §一）
+    val trimmed = raw.trim()
+    if (PreQuotedLiteral.isComplete(trimmed)) return trimmed
+    val escaped = trimmed.replace("'", "''")
     return when {
         hint?.quote == true -> "'$escaped'"
-        hint?.quote == false -> raw.trim()
+        hint?.quote == false -> trimmed
         else -> {
-            val trimmed = raw.trim()
             if (NUMBER_REGEX.matches(trimmed)) trimmed else "'$escaped'"
         }
     }

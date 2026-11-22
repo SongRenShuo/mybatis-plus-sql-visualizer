@@ -74,6 +74,11 @@ class SqlPreviewDialogTest : BasePlatformTestCase() {
         // 之前就被静默丢掉，不抛错、不写日志。所以「构造没崩」≠「构造正确」，而只断言
         // 「数组里含某个按钮名」也抓不到「少了一个但目标名字还在」。
         // 元素个数 + 无 null 槽是唯一能看见那次静默过滤的读数。
+        //
+        // **这个数改过两次，都不是被谁偷偷改的**：
+        //  4 → 5：T-DialogPickFile 把「从文件加载…」加进通用预览弹窗；
+        //  5 → 4：T-LoadFilePlacement 判定它是**输入源**能力（弹窗是全插件 21 处入口共用的展示层），
+        //         挪到独立工作台的输入工具栏。弹窗只剩 执行 / 复制 / 复制并关闭 / 取消。
         val dialog = SqlPreviewDialog(project, previewResult())
         try {
             val captured = dialog.actionsAtConstructionForTest
@@ -90,8 +95,22 @@ class SqlPreviewDialogTest : BasePlatformTestCase() {
         }
     }
 
-    fun testNonPrimaryButtonsKeepPlatformDefaultStyle() {
-        // UI-043 补强：只有「复制 SQL 并关闭」该是主行动样式。防「修过头」——把
+    fun testDialogHasNoLoadFromFileAction() {
+        // T-LoadFilePlacement A-1：「从文件加载…」已从通用弹窗移到独立工作台的输入工具栏——
+        // 弹窗是 21 处入口共用的展示层（gutter 图标 / 日志 / 历史 / 语句入口），在里面换输入
+        // 会静默改掉「这条 SQL 从哪来」。这里按旧文案两种语言字面量兜底断言，键已从 bundle 删除。
+        val legacyLabels = setOf("从文件加载…", "Load from File…")
+        val dialog = SqlPreviewDialog(project, previewResult())
+        try {
+            val names = dialog.actionsForTest().mapNotNull { it.getValue(javax.swing.Action.NAME)?.toString() }
+            assertTrue("弹窗底部不应再有「从文件加载」入口，实际=$names", names.none { it in legacyLabels })
+        } finally {
+            if (!dialog.isDisposed()) dialog.doDispose()
+            dialog.panelForTest()?.clear()
+        }
+    }
+
+    fun testNonPrimaryButtonsKeepPlatformDefaultStyle() {        // UI-043 补强：只有「复制 SQL 并关闭」该是主行动样式。防「修过头」——把
         // applyPrimaryButtonStyle 误用到全部动作，会让每个按钮都变成蓝底。
         val dialog = SqlPreviewDialog(project, previewResult())
         try {
@@ -327,6 +346,90 @@ class SqlPreviewDialogTest : BasePlatformTestCase() {
         assertEquals("列表项数应与预计算行数一致", rows.size, model.size)
         for (i in rows.indices) {
             assertEquals("列表第 $i 项应原样渲染预计算行（不重新解析 PSI）", rows[i], model.getElementAt(i))
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // T-PreviewActionRow D-7：弹窗内的缺失片段补齐入口
+    // ------------------------------------------------------------------
+
+    private val missingFragmentXml = """
+        <select id="selectByPrimaryKey">
+          SELECT <include refid="Base_Column_List"/> FROM CUST_CHANNEL WHERE ID = #{id}
+        </select>
+    """.trimIndent()
+
+    private fun resultWithMissingFragment() = PreviewResult(
+        sql = "SELECT\n  /* TODO: missing <sql id=\"Base_Column_List\"> */\nFROM CUST_CHANNEL\nWHERE ID = ?",
+        compactSql = "SELECT * FROM CUST_CHANNEL WHERE ID = ?",
+        unresolvedParams = listOf("id"),
+        paramTable = null,
+        wrapperType = null,
+        tableName = "CUST_CHANNEL",
+        missingFragmentIds = listOf("Base_Column_List"),
+    )
+
+    fun test弹窗拿到原文且缺片段时显示补齐入口() {
+        // 工作台「在弹框中打开」会随窗带上原文（sourceText）——弹窗内才有东西可重解析补齐
+        val dialog = SqlPreviewDialog(project, resultWithMissingFragment(), sourceText = missingFragmentXml)
+        try {
+            assertTrue(
+                "有原文 + 有缺失时应在结果区出现补齐入口",
+                dialog.panelForTest()!!.missingFragmentVisibleForTest(),
+            )
+            assertTrue(
+                "提示文案应带 refid",
+                dialog.panelForTest()!!.missingFragmentTextForTest().contains("Base_Column_List"),
+            )
+        } finally {
+            if (!dialog.isDisposed()) dialog.doDispose()
+            dialog.panelForTest()?.clear()
+        }
+    }
+
+    fun test弹窗没有原文时不显示补齐入口() {
+        // gutter / 日志 / 历史 / 语句预览都拿不到原文 → 不挂入口（否则是点了没反应的死链接）
+        val dialog = SqlPreviewDialog(project, resultWithMissingFragment())
+        try {
+            assertFalse(
+                "无原文时不应出现补齐入口",
+                dialog.panelForTest()!!.missingFragmentVisibleForTest(),
+            )
+        } finally {
+            if (!dialog.isDisposed()) dialog.doDispose()
+            dialog.panelForTest()?.clear()
+        }
+    }
+
+    fun test补齐后弹窗内就地重解析且TODO占位消失() {
+        val dialog = SqlPreviewDialog(project, resultWithMissingFragment(), sourceText = missingFragmentXml)
+        try {
+            val panel = dialog.panelForTest()!!
+            // 注入内容（headless 不能弹模态补齐框），其余链路全走真实实现
+            dialog.missingFragmentPrompt = { "ID, CHANNEL_NAME" }
+            dialog.fillMissingFragmentForTest("Base_Column_List")
+
+            // 重解析在池线程（DOM 解析不上 EDT），代次守卫回 EDT——泵队列等它落定
+            val deadline = System.currentTimeMillis() + 10_000
+            var current = panel.current
+            while (System.currentTimeMillis() < deadline) {
+                com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+                current = panel.current
+                if (current != null && !current.sql.contains("TODO: missing")) break
+                Thread.sleep(10)
+            }
+
+            assertNotNull("补齐后应有新的预览载荷", current)
+            assertTrue(
+                "补上的片段应展开进 SQL，实际：${current!!.sql}",
+                current.sql.contains("ID, CHANNEL_NAME"),
+            )
+            assertFalse("TODO 占位应消失，实际：${current.sql}", current.sql.contains("TODO: missing"))
+            assertTrue("补齐后不再有缺失片段", current.missingFragmentIds.isEmpty())
+            assertFalse("补齐后提示行应收起", panel.missingFragmentVisibleForTest())
+        } finally {
+            if (!dialog.isDisposed()) dialog.doDispose()
+            dialog.panelForTest()?.clear()
         }
     }
 }

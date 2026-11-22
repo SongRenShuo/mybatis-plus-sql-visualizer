@@ -601,16 +601,22 @@ internal fun DataSourceSelector.prewarmExecTempFileInner(
     // 判等口径与写路径**同函数**（projectExecFile 锁内即用它）：document 文本优先、否则读「最近写入
     // 内容+写入时 VFS 时间戳」快照；两者皆不可用（外部写入/无 document）时不采信 → 保守走写路径。
     var cacheOnlyHit = false
+    var cacheOnlyTarget: java.io.File? = null
     if (cacheOnly) {
         val base = project.basePath
         if (base == null) {
             LOG.warn("[M36] exec prewarm cache-only abandoned: project.basePath null")
             return
         }
-        val f = java.io.File(
-            java.io.File(base, ".idea${java.io.File.separator}${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}exec"),
-            "mpsql-exec.sql",
-        )
+        // 落点判据与 projectExecFile **同口径**（master 侧 T-ExecPsiGate R6，对齐轮并入：主落点可能被
+        // 项目根备用落点接管——dev 原版固定 .idea 路径在本仓形态下会判错文件）：
+        val rootDir = if (project in execRootFallbackProjects) java.io.File(base, ".sql-visualizer") else null
+        val dir = rootDir?.let { java.io.File(it, "exec") } ?: execPrimaryDir(project)
+        if (dir == null) {
+            LOG.warn("[M36] exec prewarm cache-only abandoned: exec dir unavailable")
+            return
+        }
+        val f = java.io.File(dir, "mpsql-exec.sql")
         // 判等前先 refresh 到 VFS 可见——首次裸写（FileUtil.writeToFile）后 VFS 条目可能尚未建立，
         // findFileByIoFile 会返回 null（误判「not visible」→ 保守走写路径）。refresh 是只读操作，
         // 不触写；与下方主链 refresh 段同款（BGT 裸调合法）。
@@ -620,8 +626,9 @@ internal fun DataSourceSelector.prewarmExecTempFileInner(
         if (existing != null && execFileContentMatches(project, existing, sql)) {
             LOG.info("[M36] exec prewarm cache-only: content already matches — write SKIPPED (T-PerfSweep30 01a)")
             // 零写盘：跳过下方 projectExecFile（其差量快路径同判据，但会多一次 document 派发探测），
-            // 保留 pre-refresh 收敛（恒 no-op）＋ refresh＋映射＋findFile＋填槽。
+            // 保留 refresh＋映射＋findFile＋填缓存槽。
             cacheOnlyHit = true
+            cacheOnlyTarget = f
         } else {
             LOG.info(
                 "[M36] exec prewarm cache-only: content mismatch (or not visible) — falling back to write path " +
@@ -635,10 +642,7 @@ internal fun DataSourceSelector.prewarmExecTempFileInner(
     // 编辑器 mousePressed 排队等 WIL 即扩大为全 IDE「not responding」）。BGT 裸调即平台合法形态
     // （下方 pre-refresh 的 findFileByIoFile 同款；EDT 冷路径 createTempPsiFile 的 WIRA 语境不同，须保留）。
     val ioFile = if (cacheOnlyHit) {
-        java.io.File(
-            java.io.File(project.basePath!!, ".idea${java.io.File.separator}${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}exec"),
-            "mpsql-exec.sql",
-        )
+        cacheOnlyTarget!!
     } else {
         runCatching { projectExecFile(project, sql, preferProjectRoot = project in execRootFallbackProjects) }.getOrElse { e ->
             // T-FatalPassthrough T-FP-02b（独立复核阻断 2）：fatal 上浮（预热跑在 BGT，透传由平台

@@ -143,7 +143,18 @@ import javax.swing.event.DocumentListener
  */
 // T-M53-II：构造期属性放宽为 internal——同包扩展函数（拆出的协作文件）需要读取它；
 // 可见性只在模块内变化，调用点语义不变。
-class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPreviewPanel>(BorderLayout()), Disposable {
+class SqlPreviewPanel(
+    internal val project: Project? = null,
+    /**
+     * T-StandaloneHintAndWarning：空态提示文案覆盖（null = 沿用 `panel.preview.emptyHint`）。
+     *
+     * 原文案写的是「选中代码按 Alt+Shift+Q 可再次预览」——那是**编辑器里点预览**那条流的语义；
+     * 独立工作台的输入是整段粘贴文本、且 `ConvertToSqlAction` 在 `input.sql` 上恒 disabled
+     * （`actions/ConvertToSqlAction.kt` update 只认 Java/XML/kt），搬过去就是假承诺。
+     * 工作台传入自己的文案（键 `standalone.preview.emptyHint`）。
+     */
+    emptyHint: String? = null,
+) : JBPanel<SqlPreviewPanel>(BorderLayout()), Disposable {
 
     internal val metaLabel = JBLabel()
 
@@ -166,6 +177,24 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var metaLineDigest: String = ""
     internal var metaPerfSegments: List<MetaPerfSegment> = emptyList()
     internal var lastMetaBudget: Int = -1
+
+    /**
+     * T-PreviewInfoLayout D-3：性能建议**独立整行**（topRow 正下方、横幅之上）。
+     *
+     * 为什么从 meta 第二行搬出来：原实现把 perf 渲染成 `metaLabel` 的 `<br>` 第二行，预算 = topRow 宽 −
+     * 工具栏理想宽 − 边距；工具栏常态 7 个按钮，工作台侧栏一窄就只能分到几十像素，结果被逐段丢尾，
+     * 用户看到的是「…集，建议添加 LIMIT」这种残句（2026-11-20 沙盒截图）。整行宿主不受工具栏挤压。
+     */
+    internal val perfLabel = JBLabel().apply {
+        border = JBUI.Borders.empty(0, 8, 2, 8)
+        isVisible = false
+    }
+
+    /** perf 行宿主（布局断言与宽度预算用）。构造期即建成，`applyPerfRow` 可在任何初始化路径安全调用。 */
+    internal val perfRow = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+        isOpaque = false
+        add(perfLabel, BorderLayout.CENTER)
+    }
 
     /**
      * T-DialectStatusLiveRefresh：当前方言决策（初值来自 [PreviewResult.dialectDecision]）。
@@ -309,6 +338,15 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
      */
     @Volatile
     internal var prewarmAwait: PrewarmAwait<Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>>? = null
+
+    /**
+     * T-FirstOpenDegradedLabel 二轮：本面板是否已自动补过一轮预热。
+     *
+     * 编辑器因 removeNotify（标签切换/隐藏）释放后重建时，上一轮产物早已被消费——旧行为直接报
+     * 「完整编辑器尚未就绪」（硬失败档横幅）。现在自动重预热一次把语义拉回「在途」，但只补一次
+     * 防止预热持续失败时的自动循环；新产物发布成功会复位（见 publishPrewarmProduct）。
+     */
+    internal var prewarmAutoRetried: Boolean = false
     /** T-GifRerecord：预热失败标志——await 快速降级用，避免 EDT 空等 2s 后再走降级路径。 */
     @Volatile
     internal var prewarmFailed = false
@@ -438,7 +476,21 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
      * T-UxOnboard T-UX-02：预览编辑器空态引导（原生 placeholder，显隐由编辑器随空文档管理）。
      * 常态下预览内容即编辑器全文、placeholder 不可见；用户清空文档后原生提示接管。
      */
-    internal val previewEmptyHint: String = MpSqlVisualizerBundle.message("panel.preview.emptyHint")
+    internal val previewEmptyHint: String =
+        emptyHint ?: MpSqlVisualizerBundle.message("panel.preview.emptyHint")
+
+    /**
+     * T-DialogPasteReparse：当前编辑区文本（原生控制台文档优先，自建编辑器兜底；空返回 null）。
+     *
+     * 「先开弹窗、后贴内容」场景需要它——弹窗里的编辑器只是普通 SQL 编辑器，贴进去的
+     * iBatis/MyBatis 片段不会被任何链识别；重新识别必须能把**用户当前的草稿**读出来。
+     */
+    internal fun currentDraftText(): String? =
+        nativeEditorDoc?.text?.takeIf { it.isNotBlank() } ?: editor?.document?.text?.takeIf { it.isNotBlank() }
+
+    /** T-DialogPasteReparse：当前草稿所在文档（挂「贴入即识别」监听用；两者皆无时 null）。 */
+    internal fun draftDocument(): com.intellij.openapi.editor.Document? =
+        nativeEditorDoc ?: editor?.document
 
     /** M36：已内嵌的原生控制台 UI 组件（清空/释放时级联 dispose）。 */
     internal var embeddedConsole: JComponent? = null
@@ -759,6 +811,69 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var xmlDollarSubstitutions = 0
 
     /**
+     * T-PreviewActionRow D-5：缺失 `<sql id="…">` 片段的补齐入口（结果区一行可点链接）。
+     *
+     * 提示事实来自载荷（[cn.song.mybatisplus.visualizer.model.PreviewResult.missingFragmentIds]），
+     * 补齐动作由**持有原文的一方**注入（[missingFragmentFillHandler]）——面板只有渲染后的 SQL，
+     * 自己重解析不出原本的 include。没有注入方时整行不显示（真实文件来源的 gutter/日志弹窗不该出现
+     * 一条点了没反应的链接）。
+     */
+    internal val missingFragmentLabel = JBLabel(" ").apply {
+        putClientProperty("html.disable", true)
+        foreground = com.intellij.ui.JBColor.namedColor("Link.activeForeground", com.intellij.ui.JBColor.BLUE)
+        cursor = java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
+        border = JBUI.Borders.empty(2, 8, 2, 8)
+        isVisible = false
+        addMouseListener(object : java.awt.event.MouseAdapter() {
+            override fun mouseClicked(e: java.awt.event.MouseEvent) {
+                val refid = missingFragmentRefid ?: return
+                missingFragmentFillHandler?.invoke(refid)
+            }
+        })
+    }
+
+    /** 补齐回调（refid → 弹框收内容 → 调用方重解析回填）。赋值即按当前载荷刷新可见性。 */
+    internal var missingFragmentFillHandler: ((String) -> Unit)? = null
+        set(value) {
+            field = value
+            refreshMissingFragmentHint(current?.missingFragmentIds.orEmpty())
+        }
+
+    /** 当前提示行指向的 refid（点击时用它回调；多缺失时一次补一个，补完重解析自然收敛）。 */
+    private var missingFragmentRefid: String? = null
+
+    /**
+     * 刷新缺失片段提示行（[SqlPreviewPanel.updateMeta] 与 handler 赋值两处驱动）。
+     *
+     * 双条件才可见：产物确实带缺失 id，且有人能补（handler 非 null）。任一不满足即隐藏——
+     * 隐藏是常态，本行不占高度。
+     */
+    internal fun refreshMissingFragmentHint(ids: List<String>) {
+        val handler = missingFragmentFillHandler
+        val first = ids.firstOrNull()
+        if (first == null || handler == null) {
+            missingFragmentRefid = null
+            missingFragmentLabel.isVisible = false
+            return
+        }
+        missingFragmentRefid = first
+        missingFragmentLabel.text = MpSqlVisualizerBundle.message(
+            "panel.missingFragment.label",
+            ids.joinToString("、"),
+        )
+        missingFragmentLabel.isVisible = true
+    }
+
+    /** 测试访问器：提示行可见性（证「无 handler 不出现 / 有 handler 出现」）。 */
+    internal fun missingFragmentVisibleForTest(): Boolean = missingFragmentLabel.isVisible
+
+    /** 测试访问器：提示行文案。 */
+    internal fun missingFragmentTextForTest(): String = missingFragmentLabel.text
+
+    /** 测试访问器：提示行组件（用例派发真实 MouseEvent，覆盖监听器接线而不只是直接调 handler）。 */
+    internal fun missingFragmentLabelForTest(): JBLabel = missingFragmentLabel
+
+    /**
      * T-InjectionGate T-IG-02：本面板实例内已确认过 `${}` raw 段执行（会话级记忆）。
      *
      * 同一面板确认一次后不再重复弹（常用 `${orderBy}` 场景的确认疲劳缓解）；记忆随面板实例
@@ -867,7 +982,15 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         // 不随参数区重建（常驻语义不再依赖参数区是否建行），refreshBindStateRow 单点刷新链不变。
         val northHost = JBPanel<JBPanel<*>>(BorderLayout()).apply {
             isOpaque = false
-            add(topRow, BorderLayout.NORTH)
+            add(
+                JBPanel<JBPanel<*>>(BorderLayout()).apply {
+                    isOpaque = false
+                    add(topRow, BorderLayout.NORTH)
+                    // T-PreviewInfoLayout D-3：topRow 下方紧贴性能建议整行（不参与 meta 的宽度预算）
+                    add(perfRow, BorderLayout.CENTER)
+                },
+                BorderLayout.NORTH,
+            )
             add(buildBindStateRow(), BorderLayout.CENTER)
             // T-DmlImpactProminence：降级横幅与影响行数结果横幅上下各占一行（并存不抢位）
             dmlImpactBanner.add(dmlImpactBannerLabel, BorderLayout.CENTER)
@@ -876,6 +999,8 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
                     isOpaque = false
                     add(degradationBanner, BorderLayout.NORTH)
                     add(dmlImpactBanner, BorderLayout.CENTER)
+                    // T-PreviewActionRow D-5：缺失片段补齐入口贴着 SQL 区（离 TODO 占位最近）
+                    add(missingFragmentLabel, BorderLayout.SOUTH)
                 },
                 BorderLayout.SOUTH,
             )
@@ -885,6 +1010,11 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         topRow.addComponentListener(object : java.awt.event.ComponentAdapter() {
             override fun componentResized(e: java.awt.event.ComponentEvent) = applyMetaTruncation()
             override fun componentShown(e: java.awt.event.ComponentEvent) = applyMetaTruncation()
+        })
+        // T-PreviewInfoLayout D-3：perf 行整行重算（它有自己的宽度，不再受工具栏挤压）
+        perfRow.addComponentListener(object : java.awt.event.ComponentAdapter() {
+            override fun componentResized(e: java.awt.event.ComponentEvent) = applyPerfRow()
+            override fun componentShown(e: java.awt.event.ComponentEvent) = applyPerfRow()
         })
         // T-ParamNameTruncation：左栏视口宽度变化（拖分隔条 / 拉窗口 / 首显）→ 标签列宽原地重算。
         // 旧实现只在 rebuildLeftPanel 那一瞬间算一次，宽面板里仍按窄列宽截断参数名。
@@ -930,8 +1060,17 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
             cn.song.mybatisplus.visualizer.config.SettingsChangeListener {
                 val app = ApplicationManager.getApplication()
                 // 设置应用通常在 EDT；后台广播同步收口，避免开脱敏后仍能复制旧原文。
+                // T-UserFreezeTriage：收口必须有界——EDT 被第三方长读锁占住时，无超时的
+                // invokeAndWait 会把调用线程一起挂死（用户冻结 dump 里 Cool Request 的同族形态）。
                 val update = Runnable { if (!previewDisposed) refreshShardingRouteDisplay() }
-                if (app.isDispatchThread) update.run() else app.invokeAndWait(update)
+                if (app.isDispatchThread) {
+                    update.run()
+                } else {
+                    cn.song.mybatisplus.visualizer.util.EdtDispatch.invokeLaterAndWaitBounded(
+                        reason = "preview settings-change refresh",
+                        block = { update.run() },
+                    )
+                }
             },
         )
         // UX 换源重渲染：last-used 数据源变更（执行/换源写入记忆）→ 存活的预览面板刷新头部
@@ -1291,6 +1430,18 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
      * 悬停内容契约（真实悬停动作本身不在自动化范围）。
      */
     internal fun metaTooltipForTest(): String? = metaLabel.toolTipText
+
+    /** T-PreviewInfoLayout D-3：性能建议整行的可见文本（headless 未布局时为全文 HTML）。 */
+    internal fun perfLabelForTest(): String = perfLabel.text
+
+    /** T-PreviewInfoLayout D-3：性能建议整行是否可见（无建议即隐藏，不占高度）。 */
+    internal fun perfLabelVisibleForTest(): Boolean = perfLabel.isVisible
+
+    /** T-PreviewInfoLayout D-3：性能建议行 tooltip（恒全文，纯文本）。 */
+    internal fun perfLabelTooltipForTest(): String? = perfLabel.toolTipText
+
+    /** T-PreviewInfoLayout D-3：性能建议行宿主（布局断言用）。 */
+    internal fun perfRowForTest(): JBPanel<JBPanel<*>> = perfRow
 
     /** T-StackHoverUi：当前喂给悬停弹层的栈快照（接线断言用——tooltip 不再承载栈文本）。 */
     internal fun stackDigestForTest(): String? = stackHover.currentDigestForTest()

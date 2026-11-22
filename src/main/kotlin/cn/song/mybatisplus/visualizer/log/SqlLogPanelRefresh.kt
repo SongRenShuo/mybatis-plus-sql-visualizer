@@ -55,6 +55,17 @@ import javax.swing.JRadioButtonMenuItem
         entryCellRenderer.dedupeCounts = dedupeCounts
         templateCounts = countAccumulator.currentTemplateCounts
         entryCellRenderer.templateCounts = templateCounts
+        // T-HdAbsorb D216 第二刀（master 对齐轮并入）：窗口嫌疑键集每拍产出（buffer 侧修剪+分桶
+        // O(窗内戳数)，有界）；总开关/阈值语义仍在徽章层（NplusOneSuspect），buffer 只产数据。
+        val nplusOneSuspects = manager.entries.windowSuspectKeys(
+            nowMs = System.currentTimeMillis(),
+            windowMs = NplusOneSuspect.DEFAULT_WINDOW_MS,
+            threshold = NplusOneSuspect.thresholdProvider(),
+        )
+        entryCellRenderer.nplusOneSuspects = nplusOneSuspects
+        // T-Nplus1Aggregate D235（master 对齐轮并入）：聚合摘要行随刷新拍更新
+        // （条数源=完整快照该键条目数——口径生命线；摘要函数在 SqlLogPanel 主体）。
+        updateNplusOneAggregateSummary(snapshot)
     }
 
     /**

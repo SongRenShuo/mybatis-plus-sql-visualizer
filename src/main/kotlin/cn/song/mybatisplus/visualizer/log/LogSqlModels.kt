@@ -202,6 +202,12 @@ data class LogSqlEntry(
      * 主构造字段——参与 equals：同通道纯重复不融合的判定依赖它（[mergedProvenance]）。
      */
     val captureProvenance: CaptureProvenance = CaptureProvenance.UNKNOWN,
+    /**
+     * T-HdAbsorb D215：耗时测量来源分档（见 [DurationKind]）。agent 通道 = EXECUTION（经调试器
+     * 挂起补偿）；控制台日志回落 = APPROXIMATE（展示 `~` 前缀）；null = 未知（历史读回 / 旧条目），
+     * 展示与既有行为逐字节一致。主构造字段——随 copy() 走（[mergeDuplicateEntry] 融合不丢档）。
+     */
+    val durationKind: DurationKind? = null,
 ) {
     /**
      * T-CrudColor：条目语句类型（渲染热路径缓存，惰性计算一次）。
@@ -550,7 +556,17 @@ internal fun mergeDuplicateEntry(existing: LogSqlEntry, incoming: LogSqlEntry): 
         errorText = existing.errorText ?: incoming.errorText,
         logTimestamp = existing.logTimestamp ?: incoming.logTimestamp,
         captureProvenance = mergedProvenance(existing.captureProvenance, incoming.captureProvenance),
+        // T-HdAbsorb D215：耗时档随融合升级——agent（EXECUTION）比控制台解析（APPROXIMATE）精确，
+        // 融合条目取更精确一侧；null 让位任意已知档。
+        durationKind = mergedDurationKind(existing.durationKind, incoming.durationKind),
     )
+}
+
+/** D215：耗时档融合（EXECUTION > APPROXIMATE > null，融合语义与 [mergedProvenance] 同族）。 */
+internal fun mergedDurationKind(existing: DurationKind?, incoming: DurationKind?): DurationKind? = when {
+    existing == DurationKind.EXECUTION || incoming == DurationKind.EXECUTION -> DurationKind.EXECUTION
+    existing != null -> existing
+    else -> incoming
 }
 
 /**

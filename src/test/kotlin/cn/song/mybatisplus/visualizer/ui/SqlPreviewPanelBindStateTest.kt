@@ -179,14 +179,22 @@ class SqlPreviewPanelBindStateTest : BasePlatformTestCase() {
             p.paramPanelComponentsForTest().any { it === row },
         )
         // ② 与工具栏同挂北区宿主，位置=工具栏行（NORTH）之下的 CENTER 位
-        val northHost = p.toolbarForTest().parent.parent
-        assertSame("指示行应与工具栏同挂北区宿主", northHost, row.parent)
-        val layout = northHost.layout as java.awt.BorderLayout
-        assertSame("工具栏应挂 NORTH", p.toolbarForTest().parent, layout.getLayoutComponent(java.awt.BorderLayout.NORTH))
+        // T-PreviewInfoLayout：topRow 与指示行之间插入了「性能建议整行」，工具栏不再是指示行的
+        // 直接兄弟（层级不再固定）。这里改成断「同属北区宿主 + 各自槽位」——保住原意（指示行紧跟
+        // 工具栏区、不回参数区），同时不对中间多插一层容器过敏。
+        val northHost = row.parent
+        assertNotNull("指示行应有北区宿主", northHost)
+        val layout = northHost!!.layout as java.awt.BorderLayout
         assertSame(
-            "指示行应挂北区宿主 CENTER（「更多」按钮所在工具栏行正下方）",
+            "指示行应挂北区宿主 CENTER（工具栏区正下方）",
             row,
             layout.getLayoutComponent(java.awt.BorderLayout.CENTER),
+        )
+        val northSlot = layout.getLayoutComponent(java.awt.BorderLayout.NORTH)
+        assertNotNull("北区宿主 NORTH 位应有工具栏行", northSlot)
+        assertTrue(
+            "工具栏必须挂在北区宿主的 NORTH 槽位内（性能建议行可插在其间）",
+            javax.swing.SwingUtilities.isDescendingFrom(p.toolbarForTest(), northSlot),
         )
         // ③ 右对齐：与工具栏右缘（更多按钮一侧）对齐
         assertEquals(

@@ -674,7 +674,8 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
         try {
             waitForEdt()
             val tabs = panel.tabsForTest
-            assertEquals("四个 tab：SQL 日志 / 日志转 SQL / SQL→Java / SQL 历史", 4, tabs.getTabCount())
+            // T-SqlPreviewStandalone（2026-11-14）：registry 默认开 → 第 5 个「SQL 预览」工作台页签在场
+            assertEquals("五个 tab：SQL 日志 / 日志转 SQL / SQL→Java / SQL 历史 / SQL 预览", 5, tabs.getTabCount())
             assertTrue(
                 "历史 tab 应恒定存在（未开自动保存、无历史文件）",
                 tabs.getTabs().any { it.text == MpSqlVisualizerBundle.message("log.tab.history") },
@@ -692,10 +693,11 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             waitForEdt()
             val tabs = panel.tabsForTest
             val infos = tabs.tabs
-            assertEquals("主容器恰有四个页签", 4, tabs.tabCount)
+            // T-SqlPreviewStandalone（2026-11-14）：末位追加「SQL 预览」工作台页签（registry 默认开）
+            assertEquals("主容器恰有五个页签", 5, tabs.tabCount)
             assertEquals(
                 "页签顺序不得漂移",
-                listOf("log.tab.logs", "log.tab.logToSql", "log.tab.sqlToJava", "log.tab.history")
+                listOf("log.tab.logs", "log.tab.logToSql", "log.tab.sqlToJava", "log.tab.history", "log.tab.standalone")
                     .map { MpSqlVisualizerBundle.message(it) },
                 infos.map { it.text },
             )
@@ -837,7 +839,8 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
                 "关闭自动保存后历史 tab 不得被移除（旧实现此处会摘掉它）",
                 tabs.getTabs().any { it === historyInfo },
             )
-            assertEquals("tab 总数不应变化", 4, tabs.getTabCount())
+            // T-SqlPreviewStandalone（2026-11-14）：第 5 个「SQL 预览」页签随 registry 默认开常驻
+            assertEquals("tab 总数不应变化", 5, tabs.getTabCount())
         } finally {
             panel.dispose()
             settings.state.logAutoSaveEnabled = prevAutoSave
@@ -858,6 +861,47 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             assertTrue("未开启自动保存时历史 tab 也应常驻（R19）", found)
         } finally {
             panel.dispose()
+        }
+    }
+
+    /** T-SqlPreviewStandalone D-2：registry 默认开启时工作台 tab 挂载 + 面板外通道注册在位。 */
+    fun test独立预览工作台tab_默认registry开启时挂载且通道已注册() {
+        val manager = SqlLogManager(project)
+        val panel = SqlLogPanel(project, manager)
+        try {
+            val tabs = panel.tabsForTest
+            assertTrue(
+                "registry 默认开启 → 「SQL 预览」工作台 tab 应挂载",
+                tabs.getTabs().any { it.text == MpSqlVisualizerBundle.message("log.tab.standalone") },
+            )
+            assertNotNull("面板 init 应注册面板外通道", manager.onOpenStandalonePreview)
+            // tab 在场 → select + 聚焦，不得抛异常（构造 SqlInputEditor 的能力由本类既有用例证明）
+            panel.openStandalonePreview(null)
+            waitForEdt()
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    /** T-SqlPreviewStandalone A-6 反向验证：registry 关闭时工作台 tab 不挂载。 */
+    fun test独立预览工作台tab_registry关闭时不挂载() {
+        val registry = com.intellij.openapi.util.registry.Registry.get(STANDALONE_TAB_REGISTRY_KEY)
+        val old = registry.asBoolean()
+        registry.setValue(false)
+        try {
+            val manager = SqlLogManager(project)
+            val panel = SqlLogPanel(project, manager)
+            try {
+                assertFalse(
+                    "registry 关闭 → 工作台 tab 不得挂载",
+                    panel.tabsForTest.getTabs()
+                        .any { it.text == MpSqlVisualizerBundle.message("log.tab.standalone") },
+                )
+            } finally {
+                panel.dispose()
+            }
+        } finally {
+            registry.setValue(old)
         }
     }
 

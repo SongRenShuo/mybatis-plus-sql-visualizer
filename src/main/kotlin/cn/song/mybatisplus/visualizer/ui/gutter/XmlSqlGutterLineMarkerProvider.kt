@@ -137,7 +137,11 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
             runCatching { cn.song.mybatisplus.visualizer.ui.PreviewAssemblyWarm.warmOnce(tag) }
         }
 
-        /** §二十七：已预热过补全上下文的文件（按 VirtualFile.url，每文件一次）。 */
+        /**
+         * §二十七：已预热过补全上下文的文件（按 VirtualFile.url，每文件一次）。
+         * T-PerfSweep32 券02 补登（性能分析第九期 §5.2）：会话级、无失效、键=文件 URL 无撞键面、
+         * 量级=每文件一条——登记即可，不做项目身份改造（与 PreviewAssemblyWarm.warmedFiles 同档）。
+         */
         private val warmedContextFiles: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
         /**

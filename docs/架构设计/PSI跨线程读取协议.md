@@ -3,7 +3,7 @@
 > 适用：插件内一切「在非 EDT 线程读 PSI / Document」的代码，以及「在 EDT 上做文件/文档 I/O」的代码（第 5 节，2026-10-23 补）。
 > 出处：T-PsiCaptureProtocol（竞品第八轮报告 §9.4 O-35，来源 §7.2 Z-16）。
 > 工具与守卫：`psi/PsiSnapshot.kt`（两段式快照，`capture(element)` 捕获 + `validate()` 校验）、`convention/BannedApiSourceScanTest`（psiCapture / edtReadContract 两条规则）。
-> 最后核实：2026-10-27（`PsiSnapshot` 的 `capture` / `validate` / `Valid` 形态未变）。
+> 最后核实：2026-11-17（`PsiSnapshot` 的 `capture` / `validate` / `Valid` 形态未变；第 4 节池化原语清单与形态 B 的 nonBlocking 变体按当轮实况刷新）。
 
 ---
 
@@ -52,6 +52,11 @@ IDEA 的 PSI / Document 读取有两条独立约束，容易被混为一谈：
   但保留，仓内统一 `@Suppress("DEPRECATION")`）或 `ReadAction.nonBlocking`。
 - 代表：`log/CallerMethodRangeResolver.kt`（自包 `ReadAction`，EDT 与后台均可直调）、
   `log/MapperXmlLocator.kt`、`ui/SqlPreviewService.previewAsync`。
+- **nonBlocking 变体（2026-11 起在用，现 19 处）**：`ReadAction.nonBlocking{}.inSmartMode(project)
+  .expireWith(project).coalesceBy(...)`——等待 smart mode 期间不占阻塞读锁、可被写请求撤销
+  （代表：`MbgExampleCallResolver` 预取、`EntityClassFinder` 反查索引建立）。撤销/失败的语义必须
+  **如实降级 + 冷却重试**（反查索引 `INDEX_RETRY_COOLDOWN_MS=10s`、MBG 预取 10s 冷却 + 耗时熔断），
+  禁止「失败立刻重试」的自旋。
 
 反例：在后台块内 `PsiManager.findFile(vf)` 之后再 resolve 实体链——这属于形态 B 的正确用法，
 但如果把结果 PSI 元素**带出**块外再用（存字段、传回调），下一次使用就退回形态 C 的风险面。
@@ -124,11 +129,16 @@ app.executeOnPooledThread {
 | `edtReadContract` | 同上 | 跳转族调用点文件既无 `ReadAction` 又不在 EDT 白名单 |
 | 断言锚点 | 同上 | `SourcePathResolver.resolveVirtualFile` 丢失 `assertReadAccessAllowed()` |
 
-`psiCapture` 的边界（如实登记，两个方向都有）：
+`psiCapture` 的边界（如实登记，两个方向都有；2026-11-17 按当轮实况刷新）：
 
-- 漏报：PSI 读被挪进池化块**调用的另一个函数**即脱离扫描面（规则只看池化块本体）；
-  只覆盖 `executeOnPooledThread` 这一在用的池化原语（仓内唯一；`runAsync` / `supplyAsync` /
-  `ReadAction.nonBlocking` 仓内 0 处）。
+- 漏报：PSI 读被挪进池化块**调用的另一个函数**即脱离扫描面（规则只看池化块本体）。
+  扫描面也**只盖 `executeOnPooledThread` 一种池化原语**（现 src/main 74 处）——仓内另有两种在用
+  原语守卫看不见：`ReadAction.nonBlocking`（19 处，块自带读权限但仍是后台线程，元素有效性问题
+  同样存在）与 `AppExecutorUtil.getAppScheduledExecutorService().schedule` 延迟派发（4 处，
+  代表 `GutterWarmScheduler`——派发体跨过任意长的延迟后再碰 PSI，捕获元素存活与否完全不在
+  守卫视野内）。这两种原语上的 PSI 读**合规靠自律**：nonBlocking 块内只用块内解析的对象，
+  schedule 派发体整段包 `runReadAction` 且只碰派发时重新校验过的引用（T-GutterWarmReadAction）。
+  新增第三种池化原语时先想它要不要进扫描面。
 - 过报：块内对**块内新解析**的对象读 `textRange`（非捕获元素）也会命中——遇到时把该读挪出块外，
   或加 `psi-capture:` 标注说明其非捕获元素。
 

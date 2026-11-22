@@ -1813,6 +1813,18 @@ class SqlPreviewService(internal val project: Project) {
             result: PreviewResult?,
             sourceLocation: String? = null,
             sourceContext: cn.song.mybatisplus.visualizer.context.PreviewSourceContext? = null,
+            /**
+             * T-DialogPasteReparse：「先开弹窗、后贴内容」——弹窗挂防抖监听，用户往编辑器里
+             * 贴入内容后自动重新识别一次（仅独立工作台的空/原文态开窗时置 true；其余入口保持 false）。
+             */
+            autoParseOnPaste: Boolean = false,
+            /**
+             * T-PreviewActionRow D-7：产出本次预览的原始文本（仅独立工作台开窗传）。
+             *
+             * 面板展示的是渲染后的 SQL，缺 `<sql>` 片段要补齐必须用原文重解析；其余入口
+             * 没有原文，传 null ⇒ 弹窗不挂补齐入口（不制造点了没反应的链接）。
+             */
+            sourceText: String? = null,
         ) {
             // T-PreviewFast P7：请求→弹窗耗时（第二段锚点；后续控制台可见由面板记）
             runCatching {
@@ -1853,7 +1865,7 @@ class SqlPreviewService(internal val project: Project) {
             // 注：不再量「池线程→EDT 排队」——该值依赖全局单槽时间戳，并发预览会串读数（实测 651ms
             // 的请求被后一次请求覆盖成 1ms），不可信。
             val constructStarted = System.currentTimeMillis()
-            val dialog = SqlPreviewDialog(project, result, sourceLocation, sourceContext)
+            val dialog = SqlPreviewDialog(project, result, sourceLocation, sourceContext, autoParseOnPaste, sourceText)
             val constructMs = System.currentTimeMillis() - constructStarted
             activePreviewDialogs[project] = java.lang.ref.WeakReference(dialog)
             val showStarted = System.currentTimeMillis()
@@ -1958,7 +1970,8 @@ class SqlPreviewService(internal val project: Project) {
                             return@runWhenSmart
                         }
                         if (result != null && PreviewConsoleEager.enabled()) {
-                            // T-PreviewExecWriteDefer：惰性口径下不预热（同下方主路径门禁）
+                            // T-PreviewExecWriteDefer：惰性口径下不预热（同下方主路径门禁；
+                            // 确定性 SQL 与执行可用性判据收在 dispatchPrewarm 内——master 对齐轮形态并存）
                             dispatchPrewarm(project, result!!)
                         }
                         ApplicationManager.getApplication().invokeLater { onResult(result) }
@@ -1970,10 +1983,17 @@ class SqlPreviewService(internal val project: Project) {
                 // prepareDefaultConsole 命中缓存，EDT 冷路径（refresh+findFile 慢操作 SEVERE 本体）
                 // 退化为兜底。独立池线程 fire-and-forget——预热含 VFS refresh 有界耗时，不得推迟
                 // 弹窗；带参/批量/XML 预览 SQL 随面板勾选变化，预热内容不可信，跳过。
-                // T-PreviewExecWriteDefer（master 语义并入 dev T-PerfSweep30 派发形态）：惰性口径下
+                // T-PreviewExecWriteDefer（dev T-PerfSweep30 派发形态）：惰性口径下
                 // **不预热 exec 文件**——预热本身就是「写带方言映射的 mpsql-exec.sql」，会触发
                 // PushedFilePropertiesUpdater ⇒ 工程进 dumb。EAGER 档才派发；确定性 SQL 门禁与
                 // cache-only 形态收在 [dispatchPrewarm]（T-PerfSweep30 01a/02d）。
+                // T-PreviewExecWriteDefer（master 侧口径）：惰性口径下**不预热 exec 文件**——预热本身就是
+                // 「写带方言映射的 mpsql-exec.sql」，会触发 PushedFilePropertiesUpdater ⇒ 工程进 dumb
+                // （用户 00:10 A/B：第 1 次写→dumb、第 2 次不写→无 dumb）。执行链在用户真执行时会自己
+                // 同步该文件。
+                // T-PerfSweep30 01a（dev 移植）：预热派发改走 dispatchPrewarm——cache-only 形态，
+                // 同一预览打开内渲染回填与预热内容一致时零写盘。确定性 SQL 判据与执行可用性判据
+                // 均在 dispatchPrewarm 内。
                 if (PreviewConsoleEager.enabled() && result != null) {
                     dispatchPrewarm(project, result!!)
                 }

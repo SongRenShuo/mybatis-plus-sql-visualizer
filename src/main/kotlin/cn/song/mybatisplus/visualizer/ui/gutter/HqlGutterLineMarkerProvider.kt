@@ -86,12 +86,12 @@ class HqlGutterLineMarkerProvider : LineMarkerProvider {
         }
         if (firstArg is PsiReferenceExpression) {
             // 变量引用：仅 String 类型视为有效 HQL 参数（排除 cq 等 CriteriaQuery 变量）
-            val resolved = firstArg.resolve()
-            if (resolved is com.intellij.psi.PsiVariable) {
-                val typeName = resolved.type.canonicalText
-                return typeName == "java.lang.String" || typeName == "String"
-            }
-            return false
+            // T-PerfSweep31 券05（M36.5.79 残留收口）：改按表达式类型直判——旧形态
+            // resolve() 拿 PsiVariable 再取 canonicalText，引用解析 + 字符串分配在慢趟
+            // per-element 重复付费；PsiReferenceExpression.type 走类型推断引擎直取，
+            // equalsToText 无 String 分配。判空回落 false（既有语义不变）。
+            val type = runCatching { firstArg.type }.getOrNull() ?: return false
+            return type.equalsToText("java.lang.String") || type.equalsToText("String")
         }
         return false // Class 字面量等
     }

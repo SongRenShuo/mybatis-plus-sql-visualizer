@@ -1,14 +1,15 @@
 ---
 name: pitfall-darcula-native-swing-containers
-description: 深色主题「白条」的真身是原生 JSplitPane 的 Metal 分隔条（shadow=#EEEEEE / darkShadow=#7A8A99）
-  与 JScrollPane 的裸 JViewport 四角，不是滚动条本身；新增子页必须从第一笔就用平台组件，
-  否则守卫要等合流那天才红
+description: 深色主题白条＝原生 JSplitPane 的 Metal 分隔条（shadow #EEEEEE / darkShadow #7A8A99）与
+  JScrollPane 的裸 JViewport 四角；不是滚动条。第一轮修复只扫了预览主界面，漏了「更多」子页；
+  新增子页必须从第一笔就用平台组件，否则守卫要等合流才红
 metadata:
   node_type: memory
   type: project
   originSessionId: sess_da4753b3-ef7f-4a1f-b5d2-a46a94883c80
 ---
 
+<<<<<<< HEAD
 # 深色主题白条：原生 Swing 容器（2026-11-01 三轮定位实证）
 
 ## 症状与判据
@@ -75,4 +76,4 @@ metadata:
 
 无头 LAF 探测**未能**复现全宽浅色带——守卫约束的是**结构形态**，不承诺解释每一处浅色。所以「守卫绿」不能替代「真机看不到白条」，两者都要。
 
-相关：[[pitfall-combobox-stretches-in-boxlayout]]（另一个 BoxLayout 布局坑）、`docs/架构设计/01-项目架构总览.md` 的自绘组件口径。
+相关：[[pitfall-combobox-stretches-in-boxlayout]]（另一个 BoxLayout 布局坑）、[[project-selfpainted-component-laf-parity]]（master 侧互链）、`docs/架构设计/01-项目架构总览.md` 的自绘组件口径。

@@ -14,8 +14,12 @@
          configurable displayName 按 bundle+key 属性，从 messages.MpSqlVisualizerBundle（含 _zh）解析本地化 -->
     <resource-bundle>messages.MpSqlVisualizerBundle</resource-bundle>
 
-    <!-- 插件显示名称（M13.1 统一为完整名） -->
-    <name>SQL Visualizer</name>
+    <!-- 插件显示名称（M13.1 统一为完整名；T-D244 2026-11-21 更名 B1 案：SQL Visualizer → MyBatis SQL Visualizer——
+         官方排名公式五字段中名称字段对 mybatis 系词零匹配是搜索排名主缺口，详见
+         docs/开发计划/20261121-1748-可发现性与知名度提升-开发计划.md；
+         xmlId 与界面内品牌文案（错误报告 / 二维码说明 / 导出头 / 设置页标题）不变；
+         Marketplace 后台展示名同批改，preserveUIEdits=false 下次上传包内名即权威、两处合一） -->
+    <name>MyBatis SQL Visualizer</name>
     <!-- 插件图标：不声明 <icon>，走 IDEA 约定路径（jar 根 pluginIcon.svg / pluginIcon_dark.svg，亮暗主题自动切换，M14） -->
 
     <!-- 插件厂商（发布前请替换为真实信息） -->
@@ -27,7 +31,7 @@
          ③ 不使用 <hr/> 与 HTML 注释——Marketplace 会剥离（实测：本地 tag 2026.10.7 含 hr，线上同版本描述 hr=0）；
          ④ <img> 只允许自有文档站域名（sql-visualizer.jvtools.cn，第三方图床在 Marketplace 被 302 防盗链），
             截图仍走 Marketplace Media 区；
-         ⑤ 数字类声明（方言数取 DialectRegistry.dialects、工具数取 McpToolGate.TOOL_NAMES、Alt+Shift+Q、since-build 版本标签）由 PluginXmlStructureGuardTest 与代码对账；
+         ⑤ 数字类声明（15 方言 / 11 工具 / Alt+Shift+Q / 2024.3）由 PluginXmlStructureGuardTest 与代码对账；
          ⑥ 二维码卡片必须给 <td> 显式 width：Marketplace 描述区样式 `.mdContent img{width:100%;max-width:800px}`
             会盖掉 <img> 的 width 属性，图片改按所在单元格宽度撑满——两个 <td> 不写 width 时列宽由下方
             说明文字长度决定（auto table layout），两张码就会一大一小（2026-11-03 按线上同款样式本地复现：
@@ -37,17 +41,22 @@
          ⑦ 交流群码引 .jpg 而非 .png：站点上的 group-qr.png 文件内容实为 JPEG（magic FF D8 FF E0），
             按扩展名却返回 image/png，与内容不符，配合 nosniff 在部分客户端会被拒渲染。站点已补一份
             字节相同的 group-qr.jpg，旧 .png 保留不删（已发布版本与历史文档仍指向它）。
+         ⑧ 作者微信码 2026-11-20 起同样引 .jpg：wechat-qr.png 是 7481 色抗锯齿原图（66KB），描边与渐变
+            吃掉了全部字节；转 q92 JPEG 后 23KB，OpenCV 在原尺寸与 180px 两档解码结果均与原件一致。
+            不引 WebP：插件内的交流群弹窗（CommunityQrImages）用 ImageIO 解码，JVM 原生无 WebP reader
+            （JDK8 实测 wechat-qr.webp → no reader）；描述区虽在浏览器渲染，但两处保持同一种格式好维护。
+            旧 .png 保留不删。
          HTML 片段下同。 -->
     <description><![CDATA[
-        <p><b>See the exact SQL your code will run.</b> Renders MyBatis-Plus, JPA and JdbcTemplate queries into executable SQL with real parameter values before the server starts — then explains the plan and generates a rollback. From MySQL to DM and Kingbase, all inside your IDE.</p>
-        <p><b>服务未启，SQL 先知。</b>把 MyBatis-Plus、JPA、JdbcTemplate 查询还原为可执行 SQL，参数自动回填——再看懂它的执行计划、备好回滚语句。MySQL 到达梦、金仓，都在一个 IDE 里。</p>
+        <p><b>MyBatis SQL preview with real parameters.</b> Renders MyBatis-Plus, JPA, JdbcTemplate and iBatis queries into executable SQL with real parameter values, before the server starts.</p>
+        <p><b>服务未启，SQL 先知</b>——在 IntelliJ IDEA 内把 MyBatis-Plus、JPA、JdbcTemplate 查询还原为可执行 SQL，参数自动回填。</p>
         <p><a href="https://sql-visualizer.jvtools.cn">中文文档</a> · <a href="https://sql-visualizer.jvtools.cn/en/">English Docs</a> · <a href="https://sql-visualizer.jvtools.cn/about/feedback">需求池 / Feedback</a> · <a href="https://plugins.jetbrains.com/plugin/33633-sql-visualizer">Screenshots</a></p>
 
         <h3>中文</h3>
         <ul>
-            <li><b>编码期预览 · SQL 来源全覆盖</b>：Lambda / Query / Update / Delete Wrapper 及服务链、MPJ 联表、mapper XML 动态标签（if / foreach / choose）、<code>@Select</code> 注解 SQL、Spring Data 派生查询、Specification / CriteriaQuery、HQL / <code>@Query</code>、JdbcTemplate / 自研 DAO 字符串 SQL、Querydsl / EasyQuery / Xbatis / MDS；Java Wrapper 完整预览，Kotlin Wrapper 当前可识别链路但无法可靠推断实体时会明确提示、不生成猜测 SQL；mapper XML、注解与 Wrapper 链内补全表名、列名与 <code>#{}</code> 参数</li>
-            <li><b>真实参数一键回填</b>：<code>?</code> 替换为实际值（LIKE 自动拼百分号、按字段类型加引号），命名参数 <code>:name</code> 按名回填；OGNL 条件勾选；逻辑删除 / 乐观锁 / 多租户 / 数据权限按 MyBatis-Plus 拦截器语义还原；15 种数据库方言自动格式化</li>
-            <li><b>运行期捕获（默认开启）</b>：向运行中的应用挂载轻量 agent 直接采集真实执行——不依赖日志格式，附目标库、毫秒级耗时、影响行数与执行报错；慢查询标红并给出静态性能建议，真实源码位置一键跳回、调用栈悬停弹层可逐帧跳转。控制台日志（MyBatis / iBatis 2.x / Hibernate / JdbcTemplate 四族）作为不改工程的回落通道，按线程分桶、去重过滤、着色标记；保活刷屏一键屏蔽，历史 SQL 自动落盘</li>
+            <li><b>编码期预览 · SQL 来源全覆盖</b>：Lambda / Query / Update / Delete Wrapper 及服务链、MPJ 联表、mapper XML 动态标签（if / foreach / choose）、<code>@Select</code> 注解 SQL、Spring Data 派生查询、Specification / CriteriaQuery、HQL / <code>@Query</code>、JdbcTemplate / 自研 DAO 字符串 SQL、Querydsl / EasyQuery / Xbatis / MDS，以及 iBatis 2.x sqlMap；Java Wrapper 完整预览，Kotlin Wrapper 当前可识别链路但无法可靠推断实体时会明确提示、不生成猜测 SQL；mapper XML、注解与 Wrapper 链内补全表名、列名与 <code>#{}</code> 参数</li>
+            <li><b>真实参数一键回填</b>：<code>?</code> 替换为实际值（LIKE 自动拼百分号、按字段类型加引号），命名参数 <code>:name</code> 按名回填；OGNL 条件勾选；逻辑删除 / 乐观锁 / 多租户 / 数据权限按 MyBatis-Plus 拦截器语义还原；内置 SQL 格式化引擎覆盖 15 种数据库方言——达梦、人大金仓、GaussDB、OceanBase、GoldenDB、openGauss、瀚高、海量 Vastbase 等</li>
+            <li><b>运行期捕获（默认开启）</b>：向运行中的应用挂载轻量 agent 直接采集真实执行——不依赖日志格式，附目标库、毫秒级耗时、影响行数与执行报错（达梦、人大金仓、GaussDB、磐维 PanWeiDB、OceanBase、GoldenDB 等国产库驱动已适配增强捕获）；慢查询标红并给出静态性能建议，真实源码位置一键跳回、调用栈悬停弹层可逐帧跳转。控制台日志（MyBatis / iBatis 2.x / Hibernate / JdbcTemplate 四族）作为不改工程的回落通道，按线程分桶、去重过滤、着色标记；保活刷屏一键屏蔽，历史 SQL 自动落盘</li>
             <li><b>生成与转换 · SQL 反向转 Java</b>：一键生成可直接编译的 QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper 代码（增删改查与多表 JOIN）</li>
             <li><b>CRUD SQL 一步直出</b>：实体类 / 数据库表右键生成 INSERT / UPDATE / SELECT / DELETE</li>
             <li><b>一键回滚 SQL</b>：对预览的 INSERT 推导逆向 DELETE（SQL Server / 达梦自增列自动包装）；UPDATE / DELETE 支持快照回填恢复</li>
@@ -61,13 +70,13 @@
 
         <h3>English</h3>
         <ul>
-            <li><b>Preview &middot; all SQL sources covered</b>: Wrapper chains (Lambda / Query / Update / Delete, service chains, MPJ joins), mapper XML dynamic tags (if / foreach / choose), <code>@Select</code> annotation SQL, Spring Data derived queries, Specification / CriteriaQuery, HQL / <code>@Query</code>, JdbcTemplate / custom-DAO string SQL, Querydsl / EasyQuery / Xbatis / MDS. Java Wrapper preview is fully supported; Kotlin Wrapper chains are recognized, but when entity metadata cannot be inferred reliably the plugin explains the limitation instead of generating guessed SQL. Completion covers table / column names and <code>#{}</code> parameters in mapper XML, annotations and Wrapper chains</li>
-            <li><b>Real parameters</b>: <code>?</code> replaced with actual values (LIKE auto-wildcard, type-aware quoting), named parameters <code>:name</code>; OGNL condition checkboxes; logic-delete / optimistic-lock / multi-tenant / data-permission replay as MyBatis-Plus interceptors would; formatting for 15 database dialects</li>
-            <li><b>Runtime capture (on by default)</b>: an agent attached to the running app collects every statement directly &mdash; no log format required, with target database, exact duration, affected rows and execution errors; slow queries are marked red with static performance advice, source locations come from the real call stack for one-click jump-back, and a call-stack popup navigates frame by frame. Console logs (MyBatis / Hibernate / JdbcTemplate) remain as the no-code-change fallback, bucketed by thread, de-duplicated and color-marked; one-click suppression for keep-alive noise; history archiving</li>
+            <li><b>Preview &middot; all SQL sources covered</b>: Wrapper chains (Lambda / Query / Update / Delete, service chains, MPJ joins), mapper XML dynamic tags (if / foreach / choose), <code>@Select</code> annotation SQL, Spring Data derived queries, Specification / CriteriaQuery, HQL / <code>@Query</code>, JdbcTemplate / custom-DAO string SQL, Querydsl / EasyQuery / Xbatis / MDS, and iBatis 2.x sqlMap statements. Java Wrapper preview is fully supported; Kotlin Wrapper chains are recognized, but when entity metadata cannot be inferred reliably the plugin explains the limitation instead of generating guessed SQL. Completion covers table / column names and <code>#{}</code> parameters in mapper XML, annotations and Wrapper chains</li>
+            <li><b>Real parameters</b>: <code>?</code> replaced with actual values (LIKE auto-wildcard, type-aware quoting), named parameters <code>:name</code>; OGNL condition checkboxes; logic-delete / optimistic-lock / multi-tenant / data-permission replay as MyBatis-Plus interceptors would; a built-in SQL formatter covering 15 database dialects including MySQL, PostgreSQL, Oracle, SQL Server, DM (Dameng), KingbaseES, GaussDB, OceanBase, GoldenDB and openGauss</li>
+            <li><b>Runtime capture (on by default)</b>: an agent attached to the running app collects every statement directly &mdash; no log format required, with target database, exact duration, affected rows and execution errors (dedicated driver support for DM, KingbaseES, GaussDB, PanWeiDB, OceanBase, GoldenDB and more); slow query detection marks them red with static performance advice, source locations come from the real call stack for one-click jump-back, and a call-stack popup navigates frame by frame. Console logs (MyBatis / Hibernate / JdbcTemplate) remain as the no-code-change fallback, bucketed by thread, de-duplicated and color-marked; one-click suppression for keep-alive noise; history archiving</li>
             <li><b>Generate &middot; SQL to Java</b>: convert any SQL back into compilable QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper code (CRUD and joins)</li>
             <li><b>CRUD SQL in one step</b>: right-click an entity class or database table to generate INSERT / UPDATE / SELECT / DELETE</li>
             <li><b>Rollback SQL in one click</b>: derive the reverse DELETE for an INSERT preview (identity-column wrapping for SQL Server and DM); snapshot recovery for UPDATE / DELETE</li>
-            <li><b>Analyze &middot; execution and EXPLAIN</b>: run SQL in the embedded native Database console, one-click EXPLAIN, JOIN diagram with PNG / SVG export; <code>${}</code> injection confirmation, unbounded-write findings and a timeout guard (Ultimate; Community degrades gracefully)</li>
+            <li><b>Analyze &middot; execution and EXPLAIN</b>: run SQL in the embedded native Database console, one-click EXPLAIN execution plan, JOIN diagram with PNG / SVG export; <code>${}</code> injection confirmation, unbounded-write findings and a timeout guard (Ultimate; Community degrades gracefully)</li>
             <li><b>Call stack hover and recent executions</b>: debugger-style stack popup (configurable frame count, jump-to-source) and a recent-executions dialog</li>
             <li><b>Editing and workflow</b>: SQL syntax highlighting, dynamic-tag folding and reference navigation for mapper XML statements, plus two-way gutter jumps between mapper XML statements and interface methods; a static warning for dialect quote mismatches; SQL quick templates usable with the caret on a table name; history pinning, regex search, export to CSV / TSV / plain text / executable SQL, and two-entry version diff; collapsible parameter presets scoped to and permanently bound to the declaring method; pagination-interceptor simulation with LIMIT and COUNT controlled separately; structured EXPLAIN rendering plus Oracle / SQL Server templates</li>
             <li><b>AI agents &middot; MCP tools</b>: 11 deterministic read-only <code>sqlv_*</code> tools on the platform MCP Server (render, log restore, checks, EXPLAIN, rollback plan, CRUD, reverse SQL), per-tool gating in settings</li>
@@ -78,7 +87,7 @@
         <p>两张二维码用途不同，请对照下方说明选择扫码（二维码为限时码）。</p>
         <table>
             <tr>
-                <td width="200" align="center"><img src="https://sql-visualizer.jvtools.cn/wechat-qr.png" width="200" alt="作者微信二维码"/><br/><b>作者微信</b><br/>扫码添加作者为朋友，欢迎交流插件使用与开发话题；加好友时请备注「SQL Visualizer」。</td>
+                <td width="200" align="center"><img src="https://sql-visualizer.jvtools.cn/wechat-qr.jpg" width="200" alt="作者微信二维码"/><br/><b>作者微信</b><br/>扫码添加作者为朋友，欢迎交流插件使用与开发话题；加好友时请备注「SQL Visualizer」。</td>
                 <td width="200" align="center"><img src="https://sql-visualizer.jvtools.cn/group-qr.jpg" width="200" alt="交流群二维码"/><br/><b>交流群</b><br/>扫码加入 SQL Visualizer 交流群；群码失效时可添加作者微信。</td>
             </tr>
         </table>
@@ -258,6 +267,13 @@
              只认根标签 sqlMap（与上面 MyBatis 侧 mapper 索引互斥、不扩面）；正确性闸门在 PSI 侧精确匹配。 -->
         <fileBasedIndex
                 implementation="cn.song.mybatisplus.visualizer.xml.ibatis.SqlMapNamespaceIndex"/>
+        <!-- T-PerfSweep31 券01（2026-11-17）：iBatis <sqlMapConfig> 的 <typeAlias> 自定义标量索引——
+             旧链 IbatisTypeAliasResolver 首次调用对语句所在模块内容根做 VFS 全走查 + 逐 XML 建 PSI
+             （性能分析第八期 §4.3 P2），且 config 改动要重启会话才生效；本索引在索引期摊平两类键
+             （cfg / ta:<alias>），运行时一次 getContainingFiles 出候选文件，失效交平台增量。
+             只认根标签 sqlMapConfig（与 sqlMap/mapper 两索引互斥）；正确性闸门在 PSI 侧精确匹配。 -->
+        <fileBasedIndex
+                implementation="cn.song.mybatisplus.visualizer.xml.ibatis.SqlMapConfigAliasIndex"/>
         <!-- M10 gutter 预览图标：Wrapper 锚点行显示预览 SQL 图标（快速路径单元素 O(1) 判定，见 M10 开发计划 §2.4） -->
         <codeInsight.lineMarkerProvider language="JAVA"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.SqlGutterLineMarkerProvider"/>
@@ -696,6 +712,17 @@
              数据源时由执行链准备。置 true 回到"打开即准备"的旧行为。 -->
         <registryKey key="sqlvis.preview.eagerConsole" defaultValue="false"
                      description="Prepare the execution console eagerly when the preview opens (writes the mapped exec SQL file, which can put the project into dumb mode briefly). Disable to prepare the console on first execution instead."/>
+        <!-- T-SqlPreviewStandalone：主侧边栏是否挂载「SQL 预览」独立工作台 tab（粘贴 SQL/mapper XML
+             片段 → 识别 → 格式化/填值/复制/弹框）。关闭后 tab 不再挂载（重启后生效），预览弹窗与
+             语句入口不受影响。代码读取：log/SqlLogPanel.kt（STANDALONE_TAB_REGISTRY_KEY 文件级常量）。 -->
+        <registryKey key="sqlvis.preview.standaloneTab" defaultValue="true"
+                     description="Show the standalone SQL preview workbench tab in the main sidebar tool window (paste SQL or mapper XML fragments, then format / fill values / copy / open in dialog). Disable to remove the tab after a restart; statement-entry previews are unaffected."/>
+        <!-- T-StandaloneExecPhase2 D234：独立工作台「粘贴即体检」。默认开＝解析产物补填
+             perfWarnings（SqlPerfAnalyzer 同一规则引擎），内嵌面板既有性能建议行直接呈现；
+             关掉即回到不带体检的旧行为（回退通道）。代码读取：
+             ui/standalone/StandaloneSqlSourceResolver.PERF_CHECK_REGISTRY_KEY。 -->
+        <registryKey key="sqlvis.preview.standalonePerfCheck" defaultValue="true"
+                     description="Run static SQL perf checks on standalone-workbench paste input and show the advice via the existing perf-warning row. Disable to skip the check (legacy behavior)."/>
         <!-- T-IbatisXmlArrowCallerGate：iBatis `<sqlMap>` 语句行的跳转箭头是否要求「Java 侧真的存在
              调用点」。默认 true＝只有存在调用点才出箭头（改名/删调用后箭头消失，不制造点开必空的假图标）；
              false＝回到旧行为（无条件出箭头，目标留到点击时查）。回退通道，下一版删除。
@@ -708,6 +735,30 @@
              代码读取：ui/highlight/XmlSymbolNameIndexCache.REGISTRY_KEY。 -->
         <registryKey key="sqlvis.completion.nameIndexCache" defaultValue="true"
                      description="Cache the project-wide completion name list (cross-file sql-id refs and mybatis-config properties keys) in a per-project service invalidated by index state. Disable to rescan all XML files on every completion (legacy behavior)."/>
+        <!-- T-HdAbsorb D216：N+1 嫌疑判定（第一刀）。同模板计数达 minCount 判嫌疑并显示红色
+             「疑似 N+1」徽章；总开关关掉即回到只有「×N 同模板」计数徽章的旧行为（回退通道）。
+             代码读取：log/NplusOneSuspect.REGISTRY_KEY / THRESHOLD_KEY。 -->
+        <registryKey key="sqlvis.log.nplusOneSuspect" defaultValue="true"
+                     description="Show a red 'suspected N+1' badge on SQL-log entries whose parameterized template repeats at least minCount times in the current buffer. Disable to keep only the amber same-shape count badge (legacy behavior)."/>
+        <registryKey key="sqlvis.log.nplusOneSuspect.minCount" defaultValue="5"
+                     description="Minimum same-template count that marks an entry as a suspected N+1 (D216)."/>
+        <!-- T-Nplus1Aggregate D235：N+1 嫌疑徽章聚合视图（点开看全）。默认开：点击红色徽章进入
+             同结构过滤态（复用聚焦页签形态）+ 顶部聚合摘要行（条数/首末时间/线程，跨线程如实标注）；
+             关掉＝徽章纯行级（点击无过滤态，右键「只看同结构」不受影响）。
+             代码读取：log/NplusOneAggregate.REGISTRY_KEY。 -->
+        <registryKey key="sqlvis.log.nplusOneSuspect.aggregate" defaultValue="true"
+                     description="Enable the N+1 suspect badge aggregate view: clicking the red 'suspected N+1' badge filters the log list to that template's entries and shows a top summary line (count, first/last time, threads). Disable to keep badges row-level only (clicking does nothing; the right-click 'same shape' focus is unaffected)."/>
+        <!-- T-HdAbsorb D215：agent 耗时的调试器挂起补偿（吸收 Hibernate Debugger SuspensionLedger
+             思路）。默认开：断点挂起时段从 agent 耗时测量窗中扣减；关掉即原样墙钟（回退通道）。
+             代码读取：log/agent/DebuggerSuspendTracker.REGISTRY_KEY。 -->
+        <registryKey key="sqlvis.log.durationSuspendCompensation" defaultValue="true"
+                     description="Subtract debugger-suspend wall-clock overlaps from agent-measured SQL durations (breakpoint pauses inflate the wall clock). Disable to keep raw wall-clock durations."/>
+        <!-- T-McpGlobalBreakHardening：MCP 外部会话门控的过滤 EP 逃生开关。默认开＝按平台契约注册
+             过滤 provider；关掉即完全不注册（门控不生效，平台内置 MCP Server 不受影响）。
+             用途：万一平台再改过滤器契约，用户可只关这一项而不用卸载插件。
+             代码读取：mcp/McpGateFilterRegistrar.kt（McpGateFilterEpRegistrar.ESCAPE_REGISTRY_KEY）。 -->
+        <registryKey key="sqlvis.mcp.gateFilterEp" defaultValue="true"
+                     description="Register the MCP tool-filter extension that hides disabled SQL Visualizer tools from external MCP sessions. Disable to skip registration entirely (the gate stops working; the IDE's built-in MCP server is unaffected)."/>
     </extensions>
 
     <!-- T-M53：Kotlin plugin mode 声明——本插件只用 Kotlin PSI（gutter 标记），不涉及 Analysis API，
@@ -747,6 +798,19 @@
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
             <keyboard-shortcut keymap="$default" first-keystroke="alt shift J"/>
             <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta shift J"/>
+        </action>
+
+        <!-- T-SqlPreviewStandalone：打开 SQL 预览工作台（主侧边栏新 tab；粘贴 SQL/mapper XML 片段
+             → 识别 → 格式化/填值/复制/在弹框中打开）。Tools 菜单全局入口 + Alt+Shift+P
+             （Alt+Shift+Q/J 已被正反向转换占用；与既有动作同款双 keymap 登记，冲突可在 Keymap 改绑） -->
+        <action id="cn.song.mybatisplus.visualizer.OpenSqlPreview"
+                class="cn.song.mybatisplus.visualizer.actions.OpenSqlPreviewAction"
+                text="action.cn.song.mybatisplus.visualizer.OpenSqlPreview.text"
+                description="action.cn.song.mybatisplus.visualizer.OpenSqlPreview.description"
+                icon="/icons/sqlGutter.svg">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="alt shift P"/>
+            <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta shift P"/>
         </action>
 
         <!-- T-CrudSql：实体类右键生成 CRUD SQL（编辑器 + 项目视图；update 判定 MP 实体注解；

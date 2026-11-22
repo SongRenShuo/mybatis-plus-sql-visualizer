@@ -59,7 +59,21 @@ class DegradationBanner : JBPanel<DegradationBanner>(BorderLayout()) {
         border = JBUI.Borders.empty(4, 8, 4, 8)
         // 详情可能含 SQL 片段（`<` 开头），禁用 HTML 解析纯文本渲染（SqlSelectionDialog 同款约定）
         putClientProperty("html.disable", true)
+        // T-StandaloneHintAndWarning：正文单行必被裁——点击正文看全文（回调由调用方按需挂）
+        addMouseListener(object : java.awt.event.MouseAdapter() {
+            override fun mouseClicked(e: java.awt.event.MouseEvent) {
+                onDetailsRequested?.invoke()
+            }
+        })
     }
+
+    /**
+     * T-StandaloneHintAndWarning：点击正文的回调（null = 正文不可点，指针保持默认）。
+     *
+     * 为什么要有它：横幅是单行 `JBLabel`，长警告（如 mapper `include` 片段缺失说明）在窄面板里
+     * 必被裁，tooltip 只能瞄一眼；用户要的是**能整段读、能选中复制**。
+     */
+    var onDetailsRequested: (() -> Unit)? = null
 
     /** 仅 DOLLAR_INJECT 可见的信息级关闭按钮（错误/降级类保持常驻不可关）。 */
     private val dismissButton = com.intellij.ui.components.JBLabel("✕").apply {
@@ -124,6 +138,12 @@ class DegradationBanner : JBPanel<DegradationBanner>(BorderLayout()) {
         }
         // 宽度不足时正文会被裁：调用方传入完整文案作 tooltip（不新造「详情」控件）
         label.toolTipText = tooltip
+        // T-StandaloneHintAndWarning：挂了「看全文」回调时正文给手型指针（可发现性）
+        label.cursor = if (onDetailsRequested != null) {
+            java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
+        } else {
+            null
+        }
         dismissButton.isVisible = kind == Kind.DOLLAR_INJECT
         dismissButton.toolTipText = message
         // T-PrewarmLateRecover F2：动作只在「有回调的降级提示」上出现
@@ -141,6 +161,7 @@ class DegradationBanner : JBPanel<DegradationBanner>(BorderLayout()) {
         if (currentKind != kind) return
         currentKind = null
         label.text = ""
+        label.toolTipText = null
         dismissButton.isVisible = false
         retryLabel.isVisible = false
         actions.isVisible = false
@@ -149,6 +170,9 @@ class DegradationBanner : JBPanel<DegradationBanner>(BorderLayout()) {
 
     /** 测试访问器：当前文案（显隐断言用 isVisible）。 */
     internal fun textForTest(): String = label.text
+
+    /** 测试访问器：正文 tooltip（T-StandaloneHintAndWarning：必须是完整文案而非截断文本）。 */
+    internal fun tooltipTextForTest(): String? = label.toolTipText
 
     /** 测试访问器：当前挂起类别。 */
     internal fun kindForTest(): Kind? = currentKind

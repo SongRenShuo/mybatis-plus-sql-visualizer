@@ -332,8 +332,12 @@ import javax.swing.Icon
             // 同时 setText 必须落在**写命令**内（262 DocumentImpl 的写环境断言），故包 WriteCommandAction。
             val doc = historyViewer.javaClass.getMethod("getDocument").invoke(historyViewer)
                 as? com.intellij.openapi.editor.Document ?: return
-            com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
-                doc.setText("")
+            // T-UserFreezeTriage（master 对齐轮并入）：空文档不开写命令——预览切换是每轮都走的高频
+            // 路径，无变化的写也要抢一次写锁（外部长读锁在场时这笔白等会被读成「插件卡住」）。
+            if (doc.textLength > 0) {
+                com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+                    doc.setText("")
+                }
             }
             LOG.info("[M36] console history cleared (preview switch)")
         }.onFailure { e ->

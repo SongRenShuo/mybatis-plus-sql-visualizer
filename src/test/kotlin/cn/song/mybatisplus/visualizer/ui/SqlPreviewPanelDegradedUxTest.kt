@@ -105,9 +105,15 @@ class SqlPreviewPanelDegradedUxTest : BasePlatformTestCase() {
         return awaitPrewarmProduct(panel, allowRearm = false)
     }
 
-    /** 把面板推进稳定降级态（见类 KDoc），并确认横幅已按 PRODUCT_CONSUMED 立即挂出。 */
+    /** 把面板推进稳定降级态（见类 KDoc），并确认横幅已按 PRODUCT_CONSUMED 立即挂出。
+     *
+     * T-FirstOpenDegradedLabel 二轮：生产路径在「产物已消费」时会**自动补一轮预热**（语义回到
+     * 「在途」→ 宽限期静默）。本类要的是**稳定**降级态来验降级期行为，故夹具显式置位
+     * `prewarmAutoRetried`，让这一轮走「已消费」的硬失败档——这是测试意图，不是绕过实现。
+     */
     private fun degradePanel(panel: SqlPreviewPanel, result: PreviewResult) {
         awaitPrewarmProduct(panel)
+        panel.prewarmAutoRetried = true
         panel.showResult(result)
         UIUtil.dispatchAllInvocationEvents()
         panel.releaseEditorForTest()

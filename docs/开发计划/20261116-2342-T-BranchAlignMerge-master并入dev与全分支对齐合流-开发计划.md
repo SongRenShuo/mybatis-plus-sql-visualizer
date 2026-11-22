@@ -149,10 +149,10 @@ git merge --no-ff dev
 | 步骤 | 状态 | 合并哈希 | 冲突文件与裁决 |
 |---|---|---|---|
 | 第 0 步 清理 | **已做**（2026-11-16）：删 `t-standalone-hotreload`（悬置 `28531e967`）+ 删 demo 孤儿目录 | | |
-| 第 0 步 fetch+建本地 | 已可用（master 本地引用在位，第 1 步 merge 直接受益） | | |
-| 第 1 步 master→dev | **已合并＋编译定向全绿**（2026-11-17，merge commit `aba1e47ba`；实际冲突 20 文件＝预演清单逐个一致，无增减）。编译：`compileKotlin` BUILD SUCCESSFUL 3m32s（`-Pkotlin.compiler.execution.strategy=in-process`）。定向 10 类合并一次 96 用例 0 失败 0 错误 0 跳过（PluginSettingsPersistence 24、GuardSelfTestCoverageMetaGuard 8、LastUsedWriteOnEdt 3、DumbModeClickChain 5、MapperXmlLocator 10、SqlPreviewServicePreview 16、DataSourceSelector 2、StartupUpdateCheck 10、PreviewConsoleEager 7、SqlLogPanelSortAndSlowQuery 11）。not run：全量门禁/verifyGate/testShards（本轮纪律单路收口由主控统一安排，本步只做定向）；复选框计数 46 预置经 PluginSettingsPersistenceTest 24 例实跑核对成立。补充修复 2 笔：`5bcfe2de6`（dumb 夹具退役缝引用随 F1''' 同步）+ `097474f1e`（dumb 态断言对齐 master 契约——locate 抛 IndexNotReadyException、locateOrUnknown 归 Lookup.Unknown；首跑 2 红修正后复跑绿） | `aba1e47ba` | 见下方逐文件裁决表 |
+| 第 0 步 fetch+建本地+四工作树 | **已做**（2026-11-17）：dialects/security/hiddenbug/merge-route 各建独立工作树；master 双仓推送成功（github 落后一笔补齐） | | |
+| 第 1 步 master→dev | **完成**（2026-11-17，子代理执行：合并 `aba1e47ba` + dumb 夹具修复 `5bcfe2de6`/`097474f1e` + 记录回填，dev tip `7fc7b3a42` 已推双仓 + gate run `43911747068`） | `aba1e47ba` | 实际 20 文件＝预演逐一一致：生产代码 MapperXmlLocator 取 master F1''' 索引化、SqlPreviewService 取 dev 重构+master 惰性门禁、DataSourceSelector 取 dev、SqlLogPanel 取 dev 单行、StartupUpdateCheck 双钩子并存；plugin.xml/Bundle 键冲突以 master 为准 dev 独有键全保留；测试取合并态（Guard 双侧 83 条、Persistence 预置 46）；CHANGELOG 双保留、LESSONS L52 撞号 master 优先 dev 顺延 L80、架构计数脚本实测重写、索引并集去重。编译 3m32s 绿，定向 10 类 **96/0/0/0**；dev 独有测试引用 master 已退役缝（DumbModeClickChainGuardTest）两笔修复收口 |
 
-**第 1 步逐文件裁决表（20 文件，实际清单＝预演清单）**
+**第 1 步逐文件裁决表（20 文件，实际清单＝预演清单）**（dev 侧留档，上表第 1 步末列即其汇总口径；D241 对齐轮并入时保此详表）
 
 | 文件 | 裁决 |
 |---|---|
@@ -176,13 +176,31 @@ git merge --no-ff dev
 | PluginSettingsPersistenceTest.kt | 复选框计数断言：dev 注释链为基线（含 SettingsConverge -6 等）+ master 两开关（dialectTip/firstCaptureGuide）+2 → 预置 46，实跑核对 |
 | GuardSelfTestCoverageMetaGuardTest.kt | 2 hunk 双保留：dev 5 条 + master 2 条 GUARD_CLASSES 全并存（合并态 83 条 GuardEntry） |
 | LastUsedWriteOnEdtGuardTest.kt | add/add 取 dev 版（大括号配对切体防假绿 + 委托归位形态 + 辅助函数兜底用例），与合并后生产代码委托形态匹配 |
-| 2.1 preview 吃 master | 待做 | | |
-| 2.2 dialects 吃 master | 待做 | | |
-| 2.3 rollback 吃 master | 待做 | | |
-| 2.4 security 吃 master | 待做 | | |
-| 2.5 hiddenbug 吃 master | 待做 | | |
-| 2.6 merge-route 吃 master | 待做 | | |
-| 2.7 insight 吃 dev | 待做 | | |
+| 第 0 步 fetch+建本地+四工作树 | **已做**（2026-11-17）：dialects/security/hiddenbug/merge-route 各建独立工作树；master 双仓推送成功（github 落后一笔补齐） | | |
+| 第 1 步 master→dev | **完成**（2026-11-17，子代理执行：合并 `aba1e47ba` + dumb 夹具修复 `5bcfe2de6`/`097474f1e` + 记录回填，dev tip `7fc7b3a42` 已推双仓 + gate run `43911747068`） | `aba1e47ba` | 实际 20 文件＝预演逐一一致：生产代码 MapperXmlLocator 取 master F1''' 索引化、SqlPreviewService 取 dev 重构+master 惰性门禁、DataSourceSelector 取 dev、SqlLogPanel 取 dev 单行、StartupUpdateCheck 双钩子并存；plugin.xml/Bundle 键冲突以 master 为准 dev 独有键全保留；测试取合并态（Guard 双侧 83 条、Persistence 预置 46）；CHANGELOG 双保留、LESSONS L52 撞号 master 优先 dev 顺延 L80、架构计数脚本实测重写、索引并集去重。编译 3m32s 绿，定向 10 类 **96/0/0/0**；dev 独有测试引用 master 已退役缝（DumbModeClickChainGuardTest）两笔修复收口 |
+| 2.1 preview 吃 master | **完成**（合并 `054827e50`，编译绿，Standalone 定向 2 类绿，双仓已推） | `054827e50` | CHANGELOG（分支 Unreleased 条目保留+master 11.16 段接上）；plugin.xml（双方 registryKey 追加型双保留） |
+| 2.2 dialects 吃 master | **完成**（合并 `5e8baf493`，编译绿，双仓已推） | `5e8baf493` | CHANGELOG（同款）；架构 01 `sql` 行取分支侧（含 domestic/ 超集）、`ui`/`update` 行取 master；架构 03 取 master 四行、sql 行并成 25 方言并实测 61 类 |
+| 2.3 rollback 吃 master | **完成**（合并 `1028a117e`，编译绿，双仓已推） | `1028a117e` | CHANGELOG（Unreleased 快照/脚本 4 条保留；T-LocalDirPersist 已随 11.14 发行自动合并不丢） |
+| 2.4 security 吃 master | **完成**（合并 `7f1ec6d1d`，编译绿，双仓已推） | `7f1ec6d1d` | 两个解析器 6+2 hunk 双保留（分支 T-SAF-22 forceClose/createdAtMs/TTL + master T-ConsoleFlushAlign settleMs/lastTouchMs 全并存，LogThreadRouter 自动合并已含两侧 API）；LESSONS 取 master 整体+安全教训让号改 **L80** 追加；CHANGELOG 双保留并去 3 条已发行重复（T-DevUpdateChannel/T-HotSwapUnloadSafety/T-RuntimeSlotOptionalFill） |
+| 2.5 hiddenbug 吃 master | **完成**（合并 `41706930b`，编译绿，双仓已推） | `41706930b` | SqlPreviewPanel dispose 尾 `Disposer.dispose(this)`：分支券 Y2 删自处置 vs master T-PreviewEditorLeak 保留——按 master 基线保留 master 形态并加合流注记；架构 01/03 同 dialects 款（sql 行 65 类实测）；索引保 master 全表+分支 HiddenBugPerfScan 行按日期插入；CHANGELOG 保 Unreleased（方言 4 条+HiddenBugPerfScan 全券），去已发行重复（DmlResult/LastUsedEdt/WorkspaceHeal 等） |
+| 2.6 merge-route 吃 master | **完成**（合并 `912dba4e2`，编译绿，双仓已推） | `912dba4e2` | LESSONS 取 master+安全教训改 L80（与 security 同款，该支并过 security）；索引保 master 表+BranchMergeRoute 行用分支侧新状态（前三支已实施）；CHANGELOG 保 Unreleased（方言 4 条+HiddenBugPerfScan 全券），去 LocalDirPersist 已发行条目 |
+| 2.7 insight 吃 dev | **完成**（2026-11-17，子代理执行：合并 `805068ede` + 记录回填，tip `d7c3fe94d` 已推双仓 + gate run `43914861235`） | `805068ede` | 实际 7 文件＝预演一致：索引取并集但 T-SqlInsight 行保 insight 交付态版；SqlPreviewPanel/Execution 测试锚点与守卫成员并存；xml 四文件主线基线（hasContent/R2 补空格/kindDriven/五参 DynamicContext）+ insight 增量（renderTrace/traceSlice/accountAppend/scenarioBindings/isCancelled）全并入。**NestGate 显式裁决：合并态默认关→改回主线默认开**（KDoc 留档 insight 2026-10-30 旧裁决，回退 `-Dsqlvis.agent.nestGate=false`），`SqlInsightWeaveProbeTest` 改按回退开关形态跑。编译 2m44s 绿，定向 13 类 **131/0/0/0**（含 agent 侧 NestGateTest/InsightWeaveProbe） |
+
+## 六.1 CI gate 修红账本（2026-11-17，dispatch `build-plugin.yml mode=gate` 逐支触发）
+
+首轮七轮读数：preview ✅ / rollback ✅ / dev ❌ / dialects ❌ / hiddenbug ❌ / merge-route ❌ / security ❌ / insight ❌。四类根因与修复：
+
+| 类 | 支 | 根因 | 修复 | 复验 |
+|---|---|---|---|---|
+| 守卫账本·描述数 | dialects / hiddenbug | 插件描述声明「15 种方言」，合并态代码 25（master 11.14/11.16 重写描述段覆掉分支侧 25 声明） | 描述 15→25（`23371a44e` / hiddenbug 同款） | dialects `43915730620` ✅ / hiddenbug `43916284026` ✅ |
+| 守卫账本·预算/归组 | dev（5396 例 2 红） | GiantFileBudget 5 文件超线（合并并集）+ T-NotifyTune 4 个 Boolean 未归 SettingsScenarioGroups（master 无此 dev 守卫故漏登） | `ce8fbd03b` 按守卫自身流程提额（注明理由、拆分仍首选）+ 补登归组 | dev `43917243979` ✅ |
+| 依赖校验清单缺登记 | merge-route / security | **L80 三轮打地鼠**：①idea:idea:2025.3.5 安装包 zip ②jackson-base/junit-bom BOM ③jackson-core module——冷缓存每次解析出新元数据 | 结构性收口：`<trust file=".*\.(pom|module)">` 全量放行元数据文件（依赖描述非字节级制品），jar/zip sha256 严格校验不动；idea 安装包按 group+name 窄口径 | route `43916478233` ✅ / security 第三轮清单全过 |
+| 真缺陷（合流引入） | security / insight | security：T-SAF-09/10 转义钩子落在 master 新渲染路径下游，纯文本态栈摘要显示字面 `&lt;-`——判定①真缺陷，转义挪到两处 `<html>` 拼装边界+新增 HTML 态回归用例（`8a67887ae`，注入面不放松）。insight：10 类自有测试落 testFast 快桶（源码无 `com.intellij` 字面量但被测生产类走平台 UI），按既有协议加排除名单（`a77a6e8c4`，整桶 5623/0 本地权威） | | security `43931919466` ✅ / insight 重触发中 |
+| 环境抖动 | insight | `ExternalTemplateRendererTest` 外部渲染器 30s 超时（六轮 gate 并发抢机器；master 历轮从未红） | 第三轮 ✅ 后做根治：真实进程引号契约用例提额 60s+超时重试一次（`edb4952ed`，契约断言不动、生产上限 120 内零改动） | insight 第四轮 `43984498377` ✅ |
+
+**终局**（2026-11-17 03:06）：八支 gate 全绿——preview `43907520040` / dialects `43915730620` / rollback `43907537976` / security `43931919466` / hiddenbug `43916284026` / merge-route `43916478233` / dev `43917243979` / insight `43932008569`。修红裁决纪律沿用：守卫账本漂移按对账修、禁弱化守卫语义；真缺陷修生产侧；k2j 支全程未动。
+
+修红裁决纪律沿用：守卫账本漂移按对账修、禁弱化守卫语义；真缺陷修生产侧；k2j 支全程未动。
 
 ## 七、决策点（须用户拍板）
 

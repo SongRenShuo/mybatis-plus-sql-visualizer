@@ -126,12 +126,14 @@ object ParameterReplacer {
         if (hint?.temporal == true && hint.likePosition == null) {
             SqlDateLiteral.renderByShape(value, dialectName)?.let { return it }
         }
-        val escaped = value.replace("'", "''")
+        // T-PreQuotedLiteral：值已是完整引号字面量 → 原样渲染，不再转义包裹（翻倍前科见开发计划 §一）
+        val trimmed = value.trim()
+        if (PreQuotedLiteral.isComplete(trimmed)) return trimmed
+        val escaped = trimmed.replace("'", "''")
         return when {
             hint?.quote == true -> "'$escaped'"
-            hint?.quote == false -> value.trim()
+            hint?.quote == false -> trimmed
             else -> {
-                val trimmed = value.trim()
                 if (NUMBER_REGEX.matches(trimmed)) trimmed else "'$escaped'"
             }
         }
@@ -207,12 +209,14 @@ object ParameterReplacer {
         if (hint?.temporal == true && hint.likePosition == null) {
             SqlDateLiteral.renderByShape(value, dialectName)?.let { return it }
         }
-        val escaped = value.replace("'", "''")
+        // T-PreQuotedLiteral：同 renderValue 口径——完整引号字面量原样，不翻倍
+        val trimmed = value.trim()
+        if (PreQuotedLiteral.isComplete(trimmed)) return trimmed
+        val escaped = trimmed.replace("'", "''")
         return when {
             hint?.quote == true -> "'$escaped'"
-            hint?.quote == false -> value.trim()
+            hint?.quote == false -> trimmed
             else -> {
-                val trimmed = value.trim()
                 if (NUMBER_REGEX.matches(trimmed)) trimmed else "'$escaped'"
             }
         }
@@ -655,15 +659,24 @@ object ParameterReplacer {
         } else {
             null
         }
-        val escaped = trimmed.replace("'", "''")
+        // T-PreQuotedLiteral：值已是完整引号字面量（用户手工 quoting 的 `'abc'`）→
+        // 非 inQuoted 上下文原样渲染（不再转义包裹，否则翻倍 `'''abc'''`，先红读数见开发计划 §一）；
+        // inQuoted（占位落在用户自己的引号串内）剥外引号按内层转义重拼，`'abc'` → `'%abc%'` 同形态。
+        val preQuoted = PreQuotedLiteral.isComplete(trimmed)
+        val escaped = if (preQuoted) {
+            PreQuotedLiteral.stripQuotes(trimmed).replace("'", "''")
+        } else {
+            trimmed.replace("'", "''")
+        }
+        val rendered = if (inQuoted) escaped else if (preQuoted) trimmed else "'$escaped'"
         return when (effective) {
             ValueType.STRING, ValueType.LIST, ValueType.AUTO ->
-                Filled(if (inQuoted) escaped else "'$escaped'", notice = notice)
+                Filled(rendered, notice = notice)
             ValueType.NUMBER -> if (numeric) {
                 Filled(trimmed, notice = notice)
             } else {
                 Filled(
-                    if (inQuoted) escaped else "'$escaped'",
+                    rendered,
                     notice = "「数字」类型收到非数字输入「$trimmed」，已按字符串渲染",
                 )
             }

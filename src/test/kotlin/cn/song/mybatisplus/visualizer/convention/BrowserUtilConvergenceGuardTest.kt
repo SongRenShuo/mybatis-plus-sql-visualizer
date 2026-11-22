@@ -65,9 +65,7 @@ class BrowserUtilConvergenceGuardTest : BannedApiScanSupport() {
                 "或加 isUnitTestMode 收敛，不得沿用本豁免。",
     )
 
-    /** 期望计数：与 src/main 生产调用点同步（当前 5 = SqlLogPanel 1 + SafeBrowser 1 + PluginSettingsPanel 1 + ShareDialog 2）。 */
-    // 2026-11-06 S1-7 合并：ShareDialog 两处导出统一走 saveHtmlInBackground（T-PerfSweep30 04a），
-    // BrowserUtil.open 收成一处——调用面 5→4，收敛判据与豁免口径不变。
+    /** 期望计数：与 src/main 生产调用点同步（当前 4 = SqlLogPanel 1 + SafeBrowser 1 + PluginSettingsPanel 1 + ShareDialog 1——T-PerfSweep30 04a（T-PerfSweep31 券03 移植）把两处导出回调收敛进共享 onSuccess 后 2→1）。 */
     private val expectedTotalCallSites = 4
 
     /** 一个调用站点：文件相对路径、1-based 行号、命中的 API 形态、最小围合函数体（无 fun 围合为空串）。 */

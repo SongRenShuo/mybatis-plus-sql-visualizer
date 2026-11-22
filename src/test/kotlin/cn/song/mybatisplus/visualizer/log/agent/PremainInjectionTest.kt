@@ -1,16 +1,20 @@
 package cn.song.mybatisplus.visualizer.log.agent
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * T-M56Phase2-Premain：注入决策纯函数表驱动（T-M56P2-05）。
  *
- * 覆盖三道闸门的全部顺序敏感组合——真机跑不出「jar 缺失 + 端口为 0」这类交叉面，
+ * 覆盖各闸门的顺序敏感组合——真机跑不出「jar 缺失 + 端口为 0」这类交叉面，
  * 而闸门顺序错一位的后果是「未开启也去开 ServerSocket」或「端口为 0 也注入 → agent 侧
  * AgentMain.install 直接放弃挂载、白注入一条 VM 参数」。
  *
  * T-EnhancedCaptureDefaultOn（2026-10-19）：注入确认闸门已移除，表驱动收敛为三道闸门。
+ * T-OldJvmPremainGuard（2026-11-20）：新增目标 JVM 类版本闸（JDK 6/7 载不动 major 52 的入口类，
+ * premain 失败会让宿主 JVM 直接终止），顺序在开关之后、jar/端口之前。
  */
 class PremainInjectionTest {
 
@@ -19,38 +23,55 @@ class PremainInjectionTest {
         val jarAvailable: Boolean,
         val port: Int?,
         val expect: String,
+        val targetJvm: Int? = null,
     )
 
     private fun outcomeOf(row: Row): String =
-        when (val d = PremainInjection.decide(row.enabled, row.jarAvailable, row.port)) {
+        when (val d = PremainInjection.decide(row.enabled, row.jarAvailable, row.port, row.targetJvm)) {
             is PremainInjection.Decision.Inject -> "inject:${d.port}"
             is PremainInjection.Decision.Skip -> "skip:${d.reason}"
         }
 
     @Test
-    fun 三闸门表驱动_顺序敏感全组合() {
+    fun 四闸门表驱动_顺序敏感全组合() {
         val rows = listOf(
             // 开关关：后续事实一律不参与判定（调用方据此跳过 jar 提取与端口协商）
             Row(false, false, null, "skip:enhanced-disabled"),
             Row(false, true, 53210, "skip:enhanced-disabled"),
+            Row(false, true, 53210, "skip:enhanced-disabled", targetJvm = 50),
+            // T-OldJvmPremainGuard：目标 JVM 太老优先于 jar/端口（老 JVM 上不落盘 jar、不开 ServerSocket）
+            Row(true, false, null, "skip:target-jvm-too-old", targetJvm = 50),
+            Row(true, true, 53210, "skip:target-jvm-too-old", targetJvm = 50),
+            Row(true, true, 53210, "skip:target-jvm-too-old", targetJvm = 51),
             // jar 不可用优先于端口判定（端口此时压根没协商）
             Row(true, false, null, "skip:agent-jar-unavailable"),
-            Row(true, false, 53210, "skip:agent-jar-unavailable"),
+            Row(true, false, 53210, "skip:agent-jar-unavailable", targetJvm = 52),
             // 端口协商失败：null 与 <=0 同判（0 会被 agent 侧 AgentMain.install 放弃）
             Row(true, true, null, "skip:port-negotiation-failed"),
             Row(true, true, 0, "skip:port-negotiation-failed"),
-            Row(true, true, -1, "skip:port-negotiation-failed"),
-            // 三闸门全过
+            Row(true, true, -1, "skip:port-negotiation-failed", targetJvm = 61),
+            // 全闸门通过（52 = 恰好等于 agent 产物，必须放行；null = 未知也放行）
             Row(true, true, 53210, "inject:53210"),
-            Row(true, true, 1, "inject:1"),
+            Row(true, true, 1, "inject:1", targetJvm = 52),
+            Row(true, true, 53210, "inject:53210", targetJvm = 69),
         )
         for (row in rows) {
             assertEquals(
-                "enabled=${row.enabled} jar=${row.jarAvailable} port=${row.port}",
+                "enabled=${row.enabled} jar=${row.jarAvailable} port=${row.port} jvm=${row.targetJvm}",
                 row.expect,
                 outcomeOf(row),
             )
         }
+    }
+
+    @Test
+    fun 目标JVM判定_未知放行_恰好等于产物放行_更低拦下() {
+        assertTrue("未知（null）必须放行——探测失败不能把能力整体关掉", PremainInjection.targetJvmSupported(null))
+        assertTrue("52 = agent 产物版本，必须放行", PremainInjection.targetJvmSupported(52))
+        assertTrue("69 明确支持", PremainInjection.targetJvmSupported(69))
+        assertFalse("51 = JDK 7，载不动 major 52", PremainInjection.targetJvmSupported(51))
+        assertFalse("50 = JDK 6，载不动 major 52", PremainInjection.targetJvmSupported(50))
+        assertEquals(52, PremainInjection.MIN_TARGET_CLASS_MAJOR)
     }
 
     @Test
@@ -73,6 +94,7 @@ class PremainInjectionTest {
         assertEquals("enhanced-disabled", PremainInjection.REASON_DISABLED)
         assertEquals("agent-jar-unavailable", PremainInjection.REASON_NO_JAR)
         assertEquals("port-negotiation-failed", PremainInjection.REASON_NO_PORT)
+        assertEquals("target-jvm-too-old", PremainInjection.REASON_TARGET_JVM_TOO_OLD)
     }
 
     @Test

@@ -181,6 +181,17 @@ class SqlLogManager(private val project: Project) : Disposable {
     @Volatile
     internal var onOpenEntryInTab: ((LogSqlEntry, LogEntryTab) -> Unit)? = null
 
+    /**
+     * T-SqlPreviewStandalone：面板外「打开 SQL 预览工作台」通道（D-3 action 用）。
+     *
+     * 回调形态照抄 [onOpenEntryInTab]（面板 init 注册、dispose 同一性注销；未注册 =
+     * 工具窗未创建，调用方先 show 工具窗触发工厂建面板，再于一拍后重试）。
+     * 参数 = 剪贴板预填候选文本（D-4，null = 不预填）；registry 开关关闭时 tab 不存在，
+     * 回调内部按「未就绪」轻通知降级，不静默。
+     */
+    @Volatile
+    internal var onOpenStandalonePreview: ((String?) -> Unit)? = null
+
     init {
         // T-SqlSuppress：初始同步一次屏蔽键集 + 订阅规则变更（dispose 注销）；
         // 命中计数归账同挂专用出口（被拦条目不触发其他任何回调）。

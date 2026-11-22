@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log.agent
 
 import cn.song.mybatisplus.visualizer.log.CaptureProvenance
+import cn.song.mybatisplus.visualizer.log.DurationKind
 import cn.song.mybatisplus.visualizer.log.LogSqlEntry
 import cn.song.mybatisplus.visualizer.log.LogSqlParam
 import cn.song.mybatisplus.visualizer.log.SqlSource
@@ -42,13 +43,19 @@ object AgentEventAdapter {
         // 与列表显示 / 复制 / 去重键同口径——不能等面板再修。
         val dialectName = cn.song.mybatisplus.visualizer.sql.UrlSubprotocolDialects.dialectName(event.url)
         val restored = restore(event.sql, params, dialectName)
+        // T-HdAbsorb D215：耗时双档 + 调试器挂起补偿——agent 计时恒为精确档（EXECUTION）；
+        // 测量窗 [ts-duration, ts) 与调试器挂起区间有交集时扣减（断点挂起不再虚增耗时），
+        // 无账本/无交集原值返回（诚实降级）。
+        val rawDurationMs = event.durationNanos / 1_000_000L
+        val durationMs = DebuggerSuspendTracker.compensatedDurationMs(event.timestamp, rawDurationMs)
         return LogSqlEntry(
             rawSql = event.sql,
             restoredSql = restored,
             params = params,
             timestamp = event.timestamp,
             source = SqlSource.AGENT,
-            executionTimeMs = event.durationNanos / 1_000_000L,
+            executionTimeMs = durationMs,
+            durationKind = DurationKind.EXECUTION,
             sourceFile = event.sourceFile,
             sourceLine = event.sourceLine,
             // T-AgentSourceJump：候选帧透传（IDE 侧跳转在主位置解析失败时按序回退）

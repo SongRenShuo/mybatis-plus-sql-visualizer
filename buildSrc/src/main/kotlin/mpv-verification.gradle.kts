@@ -4,6 +4,8 @@ import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask
 import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask.FailureLevel
 import mpv.verification.assertNoForeignVerifier
 import mpv.verification.checkMarketplaceVerdicts
+import mpv.verification.requireVerifierCliJar
+import mpv.verification.resolveVerifierCliJarOrNull
 
 plugins {
     id("org.jetbrains.intellij.platform")
@@ -203,11 +205,15 @@ val verifyGate = tasks.register<JavaExec>("verifyGate") {
         providers.gradleProperty("watermarkFloorGb").orNull?.toDoubleOrNull() ?: 6.0
     }
     inputs.property("mpvWatermarkFloorGb", watermarkFloorGb)
+    // 20261121：jar 解析降级——配置期只扫描不抛（缺 jar 用哨兵路径占位），失败检查移到
+    // doFirst 执行期（requireVerifierCliJar）。原 error() 写在配置期会把 IDE Gradle 同步炸掉：
+    // 任务模型 warm-up / IdeaModelBuilder 遍历全部任务触发惰性创建，任一任务配置期抛
+    // IllegalStateException＝整个同步失败、runIde 沙盒无法启动（用户 20261121 实测）。
     classpath(
-        gradleUserHome.resolve("caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli")
-            .walkTopDown().maxDepth(4)
-            .filter { it.isFile && it.name.matches(Regex("verifier-cli-.+-all\\.jar")) }
-            .firstOrNull() ?: error("verifier-cli jar 未在 gradle 缓存找到（先跑一次 verifyPlugin 重建缓存）"),
+        resolveVerifierCliJarOrNull(gradleUserHome)
+            ?: gradleUserHome.resolve(
+                "caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli/__missing__verifier-cli.jar",
+            ),
     )
     argumentProviders.add(CommandLineArgumentProvider {
         val guh = gradleUserHome
@@ -254,6 +260,8 @@ val verifyGate = tasks.register<JavaExec>("verifyGate") {
     // 并发审计锚点：起止毫秒时间戳（与 testShardN 同款，便于事后核对链路时序）。
     // 配置缓存约束：动作内只引用配置期已解析的值，辅助函数（walkTopDown 链）写在动作体内。
     doFirst {
+        // 20261121：jar 缺失检查在执行期（配置期不再抛，防连坐 IDE 同步）——放水位闸门前，秒级红。
+        requireVerifierCliJar(gradleUserHome)
         // T-ReleasePerf10 券02：水位闸门在 285s 错峰 sleep 之前判定——水位不足秒级红，不白睡。
         mpv.watermark.MemoryWatermarkProbe.checkGate(
             (inputs.properties["mpvWatermarkFloorGb"] as? Number)?.toDouble() ?: 6.0,
@@ -356,11 +364,12 @@ fun registerMarketTarget(name: String, ideName: String, tag: String) {
         mainClass.set("com.jetbrains.pluginverifier.PluginVerifierMain")
         jvmArgs("-Dplugin.verifier.home.dir=${verifyHome.absolutePath}")
         jvmArgs(verifierProxyJvmArgs)
+        // 20261121：与 verifyGate 同款——配置期只扫描不抛（哨兵占位），doFirst 期 requireVerifierCliJar。
         classpath(
-            gradleUserHome.resolve("caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli")
-                .walkTopDown().maxDepth(4)
-                .filter { it.isFile && it.name.matches(Regex("verifier-cli-.+-all\\.jar")) }
-                .firstOrNull() ?: error("verifier-cli jar 未在 gradle 缓存找到（先跑一次 verifyPlugin 重建缓存）"),
+            resolveVerifierCliJarOrNull(gradleUserHome)
+                ?: gradleUserHome.resolve(
+                    "caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli/__missing__verifier-cli.jar",
+                ),
         )
         argumentProviders.add(CommandLineArgumentProvider {
             val ide243 = mpv.verification.resolveIdeDir(gradleUserHome, "ideaIU-2024.3.7.1-win")
@@ -380,6 +389,8 @@ fun registerMarketTarget(name: String, ideName: String, tag: String) {
             }
         })
         doFirst {
+            // 20261121：jar 缺失检查在执行期（配置期不再抛，防连坐 IDE 同步）。
+            requireVerifierCliJar(gradleUserHome)
             // 首跑种子：把主 home 既有缓存拷进子 home（幂等，已初始化则空操作）。
             mpv.verification.seedVerifierHome(masterHomeCaptured, verifyHomeCaptured, logger)
             // 锁探测按各自子 home 判定——三子 home 互不相同，互不误伤；本树内三进程各占
@@ -480,11 +491,8 @@ tasks.register("verifyMarketplaceRefresh") {
     val preferredZip = layout.buildDirectory
         .file("distributions/mybatis-plus-sql-visualizer-$pluginVersion.zip").get().asFile
     val gradleUserHome = gradle.gradleUserHomeDir
-    val verifierJar = gradleUserHome
-        .resolve("caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli")
-        .walkTopDown().maxDepth(4)
-        .filter { it.isFile && it.name.matches(Regex("verifier-cli-.+-all\\.jar")) }
-        .firstOrNull() ?: error("verifier-cli jar 未在 gradle 缓存找到（先跑一次 verifyPlugin 重建缓存）")
+    // 20261121：允许配置期为 null（缺 jar 不再连坐 IDE 同步）；doFirst 拦下跳过并给播种指引。
+    val verifierJar = resolveVerifierCliJarOrNull(gradleUserHome)
     val explicitZip = providers.gradleProperty("refreshZip").orNull?.let { File(it) }
     val zipFile = explicitZip?.takeIf { it.isFile }
         ?: preferredZip.takeIf { it.isFile }
@@ -500,6 +508,13 @@ tasks.register("verifyMarketplaceRefresh") {
     inputs.property("mpvRefreshZip", zipFile.absolutePath)
     inputs.property("mpvRefreshHomes", subHomes.joinToString("|") { it.absolutePath })
     doFirst {
+        // 20261121：jar 缺失检查在执行期——保温任务缺 jar 按「环境未就绪」跳过（与缺 zip 同语义）。
+        if (verifierJar == null) {
+            throw StopExecutionException(
+                "verifyMarketplaceRefresh 跳过：verifier-cli jar 未在 gradle 缓存找到。" +
+                    "先跑 dev-support/seed-verifier-cli.ps1 播种后再保温（本轮未保温，stamp 未更新）。",
+            )
+        }
         if (!zipFile.isFile) {
             throw StopExecutionException(
                 "verifyMarketplaceRefresh 跳过：无可用发行包（$zipFile 不存在）。" +
@@ -509,6 +524,8 @@ tasks.register("verifyMarketplaceRefresh") {
         logger.lifecycle("verifyMarketplaceRefresh START ${System.currentTimeMillis()} zip=$zipFile targets=${ideNames.size}（在线、无豁免、保温用、串行三子 home）")
     }
     doLast {
+        // verifierJar 的非空性已由 doFirst 拦下（StopExecutionException 跳过），此处局部解引用。
+        val jar = verifierJar ?: error("verifier-cli jar 缺失（doFirst 应已跳过本任务）")
         val jbr = mpv.verification.resolveIdeDir(gradleUserHome, "ideaIU-2024.3.7.1-win")
             .resolve("jbr").takeIf { it.isDirectory }
             ?: error("243 发行版缺 jbr（-runtime-dir 必需）")
@@ -519,7 +536,7 @@ tasks.register("verifyMarketplaceRefresh") {
                 add("-Dplugin.verifier.home.dir=${home.absolutePath}")
                 addAll(proxyArgs)
                 add("-jar")
-                add(verifierJar.absolutePath)
+                add(jar.absolutePath)
                 add("check-plugin")
                 add("-verification-reports-dir")
                 add(reportDir.absolutePath)

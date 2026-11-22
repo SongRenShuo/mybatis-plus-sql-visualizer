@@ -1133,6 +1133,18 @@ object DataSourceSelector {
             // UX 换源重渲染：写入成功即广播（存活的预览面板刷新头部绑定行/方言徽章）
             LastUsedChangeEvents.notifyChanged(project)
         }
+        // T-HdAbsorb D218：last-used 写入时顺带落**连接事实指纹**（url+user+dbms 归一哈希）——
+        // 数据源改名/UUID 重排后，UUID/名字两级记忆全落空时由指纹兜底恢复静默复用。
+        // 名字解析不出唯一源（弹窗路径/多同名）或读不到 URL → 清指纹键，绝不留指认错源的旧值。
+        runCatching {
+            val ds = DataSourceSettings.getAllDataSources(project)
+                .filter { DataSourceSettings.getName(it) == name }
+                .singleOrNull()
+            DataSourceFingerprint.remember(project, moduleKey, ds?.let { DataSourceFingerprint.fingerprintOfDataSource(it) })
+        }.onFailure {
+            com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+                .warn("[D218] fingerprint remember skipped", it)
+        }
     }
 
     /**
@@ -1149,6 +1161,9 @@ object DataSourceSelector {
             fun clear(keyModule: String?) {
                 pc.unsetValue(LastUsedKeys.displayNameKey(keyModule))
                 pc.unsetValue(LastUsedKeys.dataSourceIdKey(keyModule))
+                // T-HdAbsorb D218：清记忆连指纹层一起清——记忆没了指纹还留着，会在「无记忆」
+                // 入口被指纹兜底复活，违背「用户点了清空就该干净」的 W4 语义。
+                pc.unsetValue(LastUsedKeys.key(DataSourceFingerprint.FINGERPRINT_KEY, keyModule))
             }
             // 未指定模块＝既有语义「清项目级」；同时清掉所有模块级分桶（W4 的「清空学习」
             // 入口要求彻底清干净，否则用户点了清空、灰字仍显示旧源）。
@@ -1174,6 +1189,7 @@ object DataSourceSelector {
             fun clear(keyModule: String?) {
                 pc.unsetValue(LastUsedKeys.displayNameKey(keyModule))
                 pc.unsetValue(LastUsedKeys.dataSourceIdKey(keyModule))
+                pc.unsetValue(LastUsedKeys.key(DataSourceFingerprint.FINGERPRINT_KEY, keyModule))
             }
             clear(null)
             registeredLastUsedModuleKeys(project).forEach { clear(it) }
