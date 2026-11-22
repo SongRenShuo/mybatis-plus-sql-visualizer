@@ -55,6 +55,7 @@ description: 插件双通道发行作业法——把 master 上的发行提交�
 写文案的硬规矩：
 
 - 新块置顶时同批删上一块那行评分引导句，句末 ≤60 字中性措辞；块内禁全角 `（ ） ：`；`@注解名` 用 `<code>` 包裹（LESSONS L27）。
+- 用户可见更新日志的条目顺序＝**新功能在前 → 修复其次 → 优化/提速收尾**（2026-11-19 用户口径，v2026.11.19-beta.1 首次执行）。适用四处：change-notes 本版块 / preview.changeNotes / 发行说明「这一版有什么」/ Gitee 正文；混装条目按主要性质归类。已发 zip 内嵌描述是打包瞬间文本——发行后才发现顺序问题，只改仓内 `change-notes.html` / `preview.update.json` + PATCH Gitee 正文并在落账说明「zip 内嵌随下版」，不为排序 tag 前移（详版：发行检查清单 §1.2）。
 - 源码级机器判据必须跑在 `git tag` 之前（LESSONS L25；`release-beta.ps1` 的 gates 就是下面两条、本地零 Gradle）：
   ```
   python -I dev-support/check-change-notes.py --version {版本}

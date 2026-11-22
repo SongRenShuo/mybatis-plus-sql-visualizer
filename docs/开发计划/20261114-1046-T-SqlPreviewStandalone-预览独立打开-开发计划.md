@@ -168,4 +168,40 @@ not run 条款：D-4 剪贴板探测、A-4 快捷键真机手感、A-5 弹窗与
 
 ## 八、实施记录
 
-（未开工，待用户拍板方案后回填）
+**实施于 2026-11-14（工作树 `.worktrees/T-SqlPreviewStandalone`，分支 `T-SqlPreviewStandalone`，自 master `293e466c1` 起）。**
+
+### 8.1 落位清单（按提交时序）
+
+| 提交 | 内容 |
+|---|---|
+| `aee2927a5` | D-1/D-1b `StandaloneSqlSourceResolver`（纯 SQL 占位符解析 + XML 检测门）+ 23 例单测 |
+| `5b0a8c538` | D-2~D-4 `SqlStandalonePreviewPanel` + 主侧边栏第 5 tab + `onOpenStandalonePreview` 通道 + `OpenSqlPreviewAction`（剪贴板预填）+ 2 条 Light 用例 |
+| `a17752142` | D-5 registry `sqlvis.preview.standaloneTab` + plugin.xml action/keymap + bundle 双语 15 键 + `StandaloneTabRegistryGuardTest` 5 例 + GUARD_CLASSES 登记 |
+
+### 8.2 计划前提的落地校正
+
+- **P-1（纯 SQL 载荷可渲染）**：代码级确认——ParamPanel 直接消费 `unresolvedParams`（`SqlPreviewPanelParamPanel.kt:287/387`），`param1..N` 标签沿用 LiteralParamRecovery 惯例；同名 `#{x}` 复用同一填值行（与 XML 链 mappings 同名复用语义一致）。
+- **P-6（XML 链 GUI 侧）**：`XmlPreviewService.preview(text, null, null)` 纯文本链确认（KDoc 明言、MCP xmlSnippet 通道同源）；多语句片段默认取第一个并在状态条报总数（statementId=null 的既有口径）。
+- **P-7（高亮）**：未验证直挂 MpSqlMapper（无先例，保守放弃）；XML 来源与纯 SQL 同走标准 SQL FileType——`#{}` 原样显示，not run 待真机定夺。
+- **P-8（检测门鲁棒性）**：夹具进单测——markdown 围栏、实体转义、字面量内占位符、混入说明文字（块级兜底包根）、pom 片段判 null（A-7）。
+- **J-3（逃生门）**：插件既有填值语义已等价（`ParameterReplacer` 明文「值未填写（空/空白）→ 保留 `?`」），**不实施**，登记差异为零。
+
+### 8.3 实施中被守卫纠正的两处
+
+- **初始化顺序陷阱**：`standalonePanel by lazy` 初稿声明在 init 块之后，`DialogWrapperInitOrderGuardTest` 实测点名（构造期经 `addStandaloneTab` 读委托=JVM 默认 null，真陷阱非误报）——声明上移到 init 之前（`5b0a8c538` 内修正）。
+- **`Registry.is` 反引号**：`is` 是 Kotlin 关键字，首跑编译红（872 语法错），按 `MbgExampleCallResolver.kt:164` 在册注释改 `` Registry.`is` ``；守卫测试断言同步钉住反引号形态。
+
+### 8.4 既有读数的演进
+
+`SqlLogPanelLayoutTest` 三条「恰 4 tab」计数断言随第 5 页签改 5（页签顺序断言同步补 `log.tab.standalone`），注释标注 T-SqlPreviewStandalone——非放松，是功能演进的结构事实更新。
+
+### 8.5 验证读数
+
+- **testFast（快桶）**：BUILD SUCCESSFUL——新增 `StandaloneSqlSourceResolverTest` 23/23 + `StandaloneTabRegistryGuardTest` 5/5 全绿（快桶自动扫描收录：测试源码零平台引用），既有快桶零回归（此前两红=守卫拦我的两处，修后绿）。
+- **定向平台桶**：`SqlLogPanelLayoutTest` 25/25（含新增 2 条：registry 默认开 tab 挂载 + registry 关反向验证）。
+- **not run / 待用户验收**：① P-7 MpSqlMapper 直挂高亮（未实施）；② A-3 系 XML 真机手感（条件勾选/foreach 展开在沙盒 GUI）；③ A-4 快捷键 `Alt+Shift+P` 真机冲突核对；④ 弹窗与 tab 双实例并存的真机内存（P-2 留了互斥退化路线未触发）；⑤ D-4 剪贴板预填的真机手感。GUI 最终验收按惯例由用户做。
+- **k2j**：feature/kotlin-to-java 端口同步另行派活（master 为 Kotlin，本功能三文件生产码 + 两个测试类需翻译）。
+
+### 8.6 并行登记
+
+`python parallel_tasks.py register --name t-sqlpreview-standalone --sandbox wt-sqlpreview-standalone`，测试全程在本工作树独立 `build/`（沙盒天然隔离），跑前已 check（活跃任务 t-localdir-persist 未受干扰）。

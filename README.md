@@ -6,6 +6,9 @@ SQL Visualizer 是 IntelliJ IDEA 的 SQL 调试插件。写代码时，不启动
 
 [官网与在线文档](https://sql-visualizer.jvtools.cn) · [插件市场](https://plugins.jetbrains.com/plugin/33633-sql-visualizer) · [快速开始](https://sql-visualizer.jvtools.cn/guide/getting-started) · [更新记录](CHANGELOG.md) · [问题反馈](https://sql-visualizer.jvtools.cn/about/feedback) · [GitHub](https://github.com/SongRenShuo/mybatis-plus-sql-visualizer)
 
+> 用着顺手的话，留一条评价吧——你的一句真实体验，比十次下载更能帮到后来的人：[JetBrains Marketplace 评分](https://plugins.jetbrains.com/plugin/33633-sql-visualizer/reviews)
+> If it saves you time, an honest review helps the next user find it: [Rate on JetBrains Marketplace](https://plugins.jetbrains.com/plugin/33633-sql-visualizer/reviews)
+
 支持 IntelliJ IDEA 2024.3 及以上版本。Community 版可使用静态预览、日志捕获、代码转换等核心能力；内嵌执行控制台与数据库表入口需要 Ultimate 的 Database Tools。MCP 接入需要 IDEA 2025.2+ 及可用的 MCP Server。
 
 ## 能解决什么问题
@@ -28,7 +31,7 @@ SQL Visualizer 是 IntelliJ IDEA 的 SQL 调试插件。写代码时，不启动
 
 ### 1. Wrapper → SQL：不启动服务，也能看见最终语句
 
-支持 MyBatis-Plus 查询、更新、删除与服务链，以及 MyBatis-Plus-Join 联表查询。动态条件可勾选，参数可回填，并可保存为按语句隔离的参数预设。
+支持 MyBatis-Plus 查询、更新、删除与服务链，以及 MyBatis-Plus-Join 联表查询。动态条件可勾选，参数可回填，并可保存为按语句隔离的参数预设。语句类型怎么判的直接写在面板上，同一 wrapper 被多处消费时可在工具栏切换预览目标；`update(entity, wrapper)` 的 SET 参数逐列独立填值。
 
 <img src="https://sql-visualizer.jvtools.cn/demo/wrapper-preview.gif" width="800" alt="Wrapper SQL 预览：勾选动态条件并回填参数"/>
 
@@ -72,7 +75,7 @@ SQL Visualizer 是 IntelliJ IDEA 的 SQL 调试插件。写代码时，不启动
 
 <img src="https://sql-visualizer.jvtools.cn/demo/xml-preview.gif" width="800" alt="MyBatis XML 动态 SQL 预览：条件切换、集合展开与参数回填"/>
 
-[查看 XML 预览说明](https://sql-visualizer.jvtools.cn/features/xml-preview) · [查看注解 SQL 演示](https://sql-visualizer.jvtools.cn/demo/annotation-preview.gif) · [查看 iBatis 预览演示](https://sql-visualizer.jvtools.cn/demo/ib1_ibatis_preview.gif) · [查看 iBatis 说明](https://sql-visualizer.jvtools.cn/features/ibatis-preview)
+[查看 XML 预览说明](https://sql-visualizer.jvtools.cn/features/xml-preview) · [查看注解 SQL 演示](https://sql-visualizer.jvtools.cn/demo/annotation-preview.gif) · [查看 iBatis 预览演示](https://sql-visualizer.jvtools.cn/demo/ib1_ibatis_preview.gif) · [查看 iBatis 双向跳转演示](https://sql-visualizer.jvtools.cn/demo/ib2_ibatis_nav.gif) · [查看 iBatis 运行期填值演示](https://sql-visualizer.jvtools.cn/demo/ib3_runtime_fill.gif) · [查看 iBatis 说明](https://sql-visualizer.jvtools.cn/features/ibatis-preview)
 
 ### 7. JPA / Hibernate：从实体查询到数据库 SQL
 
@@ -96,13 +99,14 @@ Claude Code、Cursor、JetBrains AI Assistant 等客户端可经 IDEA MCP Server
 
 ### 编码期：静态预览与编辑辅助
 
-- **MyBatis-Plus / MPJ**：Lambda 与字符串 Wrapper、服务链、联表、批量操作；Java 支持静态预览；Kotlin Wrapper 尚不能可靠还原表和列/值，因此不显示预览图标，主动使用 Convert to SQL/快捷键时说明限制且不生成猜测 SQL。支持逻辑删除、乐观锁、多租户 / 数据权限模拟，以及分页 LIMIT 与可独立关闭的 COUNT 模拟；空 Wrapper（`delete(null)` / `remove(null)` / `update(entity, null)`）也有预览入口。
-- **MyBatis XML / 注解**：动态标签、OGNL 条件、集合参数、跨命名空间 SQL 片段、`@Select` / `@Update` / `@Delete` / `@Insert` 与 Provider；MyBatis Generator 生成的 Example 查询按调用点的 `and*` / `or*` 调用还原条件，`${criterion.condition}` 落成真实列名与操作符。自研 XML 的自定义标签内嵌 SQL / HQL 可按内容识别，自研框架 `<pages>` 页面数据源里的 HQL 也按实体映射转换成数据库 SQL。
+- **MyBatis-Plus / MPJ**：Lambda 与字符串 Wrapper、服务链、联表、批量操作；Java 支持静态预览；Kotlin Wrapper 尚不能可靠还原表和列/值，因此不显示预览图标，主动使用 Convert to SQL/快捷键时说明限制且不生成猜测 SQL。支持逻辑删除、乐观锁、多租户 / 数据权限模拟，以及分页 LIMIT 与可独立关闭的 COUNT 模拟；空 Wrapper（`delete(null)` / `remove(null)` / `update(entity, null)`）也有预览入口。语句类型的判定依据直接写在预览 meta 行，同一 wrapper 变量被多处消费时（先 `update(entity, w)`、重新赋值后再 `delete(w)`）工具栏出现「语句: UPDATE」切换入口，列出全部消费档位，按需切换预览目标；重新赋值即分段，JDK 容器上的同名 `remove` 不参与判型。`update(entity, wrapper)` 的 SET 参数逐列独立（如 `patch.order_no`），填哪列改哪列。
+- **MyBatis XML / 注解**：动态标签、OGNL 条件、集合参数、跨命名空间 SQL 片段（按 namespace 走项目索引，改动立即生效；被 include 片段里的 `<bind>` 静态引用 `@类@常量` 也能求值，常量声明在父类或接口上时支持 `@子类@常量`）、`@Select` / `@Update` / `@Delete` / `@Insert` 与 Provider；MyBatis Generator 生成的 Example 查询按调用点的 `and*` / `or*` 调用还原条件，`${criterion.condition}` 落成真实列名与操作符。自研 XML 的自定义标签内嵌 SQL / HQL 可按内容识别，自研框架 `<pages>` 页面数据源里的 HQL 也按实体映射转换成数据库 SQL。
 - **iBatis 2.x**：`<sqlMap>` 语句预览（`#name#` 占位按 `parameterClass` 类型定引号、14 种动态条件标签、`<iterate>`、`<selectKey>`，渲染口径以官方 2.3.4.726 引擎做逐字节对照）、SQL 注入着色与折叠、关键字补全；XML 内部引用与「Java DAO ↔ XML 语句」双向跳转，DAO 调用行点图标直接预览。MCP `sqlv_render_sql` 同样支持。
 - **JPA / Hibernate**：派生查询、JPQL / 原生 `@Query`、Criteria、Specification、QBE、HQL、hbm 映射；支持 `@Embedded` / `@EmbeddedId`、嵌套 `@AttributeOverride`、Spring Data 嵌入前缀。组件路径命名可从工程配置探测或手动指定；实体所在模块无法确定或实体打包在依赖 JAR / lib 模块中时，按「实体所在模块 → 查询宿主模块」级联判定，仍判不出再从工程配置与源码信号探测。
 - **其他 SQL 来源**：JdbcTemplate、命名参数、自研 DAO 字符串 SQL，以及 xbatis、Easy-Query、MyBatis Dynamic SQL、Querydsl。支持可静态分析的字符串拼接、StringBuilder / StringBuffer 和源码可见的辅助方法返回值；多分支结果不一致或无法求值时不猜运行结果。
 - **参数与预设**：按类型回填标量、集合与日期；未填写的参数默认保留 `?`，也可切换为 NULL / 空字符串。运行期拼接产生的占位（单值、循环、三元、可选片段）可逐个填值，填完即得可执行 SQL。参数值、条件勾选与 foreach 值可保存为本条语句的命名预设。
-- **XML 编辑辅助**：SQL 语法高亮、`#{}` / `${}` 区分、表列与参数补全、resultMap 属性补全、引用导航、查找用法和动态标签折叠；Mapper 接口方法与 XML 语句双向跳转走平台原生 Ctrl+B / Ctrl+Click，与同类导航插件在位时按设置让位图标；与其他 SQL 注入器按实际着色区间让位。
+- **方言推断**：预览方言由数据源、项目配置、依赖坐标与语法特征综合推断；推断走到死路（既无数据源与配置也无依赖坐标可依）时，打开含 SQL 的文件会在后台判一次并主动提示——说明按 MySQL 兜底渲染，给「去设置方言」「本项目不再提示」两个动作，每台机器至多一条，歧义或冲突不弹。
+- **XML 编辑辅助**：SQL 语法高亮、`#{}` / `${}` 区分、表列与参数补全（列名候选同时收录原名 / snake / UPPER_SNAKE 形态，敲 `DEL_F` 能出 `DEL_FLAG`，插入形态跟随输入大小写）、resultMap 属性补全、引用导航、查找用法和动态标签折叠；Mapper 接口方法与 XML 语句双向跳转走平台原生 Ctrl+B / Ctrl+Click，跳转与补全用的语句清单按项目索引一次构建，大工程不再逐次全项目扫描；与同类导航插件在位时按设置让位图标；与其他 SQL 注入器按实际着色区间让位。
 
 静态预览不等于运行结果：运行时分支、数据库内容、无法静态求值的变量需要手动提供参数。代码中的常量可能直接内联，而 ORM 实际执行时仍使用占位符绑定；请用运行期捕获核对真实执行。
 
@@ -191,10 +195,10 @@ SQL 静态预览、代码转换、日志还原、关系图和 CRUD 生成在本�
 
 ```json
 {
-  "version": "2026.11.12",
-  "downloadUrl": "http://nexus.intranet.local/plugins/mybatis-plus-sql-visualizer-2026.11.12.zip",
+  "version": "2026.11.17",
+  "downloadUrl": "http://nexus.intranet.local/plugins/mybatis-plus-sql-visualizer-2026.11.17.zip",
   "changeNotes": "本次更新说明",
-  "publishDate": "2026-11-12",
+  "publishDate": "2026-11-17",
   "sinceBuild": "243"
 }
 ```
@@ -209,7 +213,7 @@ SQL 静态预览、代码转换、日志还原、关系图和 CRUD 生成在本�
 2. 发现更高版本时在设置页和启动通知里提示，点「立即安装」即可——新版 IDE（2025.2+）动态热替换、**免重启**生效；旧版 IDE 回退为「重启生效」；
 3. 只安装本插件的包：包内 `<id>` 必须匹配、包内不得夹带其他插件目录，且要求 IDE 构建号不高于当前 IDE——放别的插件进去只会被跳过。
 
-目录留空即关闭；路径支持 `~`（macOS/Linux）与中文、空格，不支持 `%VAR%`/`$VAR` 环境变量引用与相对路径。目录非法时状态行会给出具体原因。
+目录留空即关闭；路径支持 `~`（macOS/Linux）与中文、空格，不支持 `%VAR%`/`$VAR` 环境变量引用与相对路径。选好或填好目录立即保存，重启后保留；删空目录同样被记住（等于关闭该功能）。目录非法时不保存，状态行会给出具体原因。
 
 ## 开发与项目文档
 
@@ -262,6 +266,6 @@ SQL 静态预览、代码转换、日志还原、关系图和 CRUD 生成在本�
 
 | 作者微信 | 交流群 |
 |---|---|
-| ![作者微信](https://sql-visualizer.jvtools.cn/wechat-qr.png) | ![交流群](https://sql-visualizer.jvtools.cn/group-qr.jpg) |
+| ![作者微信](https://sql-visualizer.jvtools.cn/wechat-qr.jpg) | ![交流群](https://sql-visualizer.jvtools.cn/group-qr.jpg) |
 
 问题与建议请提交到 [官网需求池](https://sql-visualizer.jvtools.cn/about/feedback)。

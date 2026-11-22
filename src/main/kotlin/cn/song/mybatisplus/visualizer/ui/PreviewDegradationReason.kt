@@ -80,3 +80,24 @@ internal fun PrewarmAwait<*>.degradationReasonOrNull(): PreviewDegradationReason
     if (isTimedOut()) return PreviewDegradationReason.TIMEOUT
     return null
 }
+
+/**
+ * T-FirstOpenDegradedLabel：装配降级时的**原因决策**（纯函数，便于单测钉住优先级）。
+ *
+ * 顺序：显式原因 > 预热终态（失败 / 超时） > **仍在途 → [TIMEOUT]** > 已消费。
+ *
+ * 最后一步为什么不能一律 PRODUCT_CONSUMED：那个原因属硬失败档（**立即**弹横幅 + 重试），
+ * 而首次打开时预热通常刚发起、产物仍在路上——旧实现因此在每次首开都给用户看一条假失败提示
+ *（2026-11-18 用户截图）。在途的正确语义是 TIMEOUT：宽限期静默，超时才以「仍在准备中」披露，
+ * 产物到达后由迟到产物换装静默切换。
+ */
+internal fun fallbackDegradationReason(
+    explicit: PreviewDegradationReason?,
+    await: PrewarmAwait<*>?,
+): PreviewDegradationReason = explicit
+    ?: await?.degradationReasonOrNull()
+    ?: if (await != null && !await.isDone()) {
+        PreviewDegradationReason.TIMEOUT
+    } else {
+        PreviewDegradationReason.PRODUCT_CONSUMED
+    }

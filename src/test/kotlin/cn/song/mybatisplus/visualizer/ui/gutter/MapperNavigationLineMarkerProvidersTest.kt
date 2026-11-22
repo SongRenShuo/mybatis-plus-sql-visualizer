@@ -58,6 +58,14 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         marker.navigationHandler!!.navigate(null, marker.element!!)
     }
 
+    /**
+     * 正缓存键测试构造（T-PerfSweep32 券02 同步）：键带 `project.locationHash` 前缀后，
+     * 断言必须与生产 [MapperXmlToJavaLineMarkerProvider.cacheKey] 同源，不得再裸拼 namespace#id
+     * （照 IbatisNavigationLineMarkerProvidersTest 的券04 同款先例）。
+     */
+    private fun cacheKey(namespace: String = "com.demo.UserMapper", statementId: String): String =
+        MapperXmlToJavaLineMarkerProvider.cacheKey(project, namespace, statementId)
+
     fun testJavaMethodNavigatesToMatchingXmlStatement() {
         val java = addMapper()
         val xml = addXml("  <select id=\"count\">SELECT 1</select>")
@@ -179,13 +187,13 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         assertSame(MpvsIcons.MapperStatement, marker.icon)
         assertTrue(
             "解析成功必须记入会话级正缓存",
-            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains("com.demo.UserMapper#count"),
+            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains(cacheKey(statementId = "count")),
         )
     }
 
     fun testF1ResolveUnknownWithCacheHitStillProducesMarker() {
         // 冷窗形态（S2）：查询**没算完**（Unknown），不是「确定没有」——已确认过的图标必须留着。
-        MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add("com.demo.UserMapper#count")
+        MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add(cacheKey(statementId = "count"))
         MybatisXmlTargets.methodLookupOverrideForTest = { _, _, _ -> MybatisXmlTargets.MethodLookup.Unknown }
         MapperXmlToJavaLineMarkerProvider.isDumbProvider = { false }
         val xmlProvider = MapperXmlToJavaLineMarkerProvider()
@@ -194,7 +202,7 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         assertSame(MpvsIcons.MapperStatement, marker.icon)
         assertTrue(
             "Unknown 不得动缓存",
-            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains("com.demo.UserMapper#count"),
+            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains(cacheKey(statementId = "count")),
         )
     }
 
@@ -203,7 +211,7 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
      * 早期 F1 缓存只进不出，删掉接口方法 / 改 `<mapper namespace>` 后图标靠旧记忆续命。
      */
     fun testF1ResolveAbsentEvictsPositiveCacheAndProducesNoMarker() {
-        MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add("com.demo.UserMapper#count")
+        MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add(cacheKey(statementId = "count"))
         MybatisXmlTargets.methodLookupOverrideForTest = { _, _, _ -> MybatisXmlTargets.MethodLookup.Absent }
         MapperXmlToJavaLineMarkerProvider.isDumbProvider = { false }
         val xmlProvider = MapperXmlToJavaLineMarkerProvider()
@@ -211,7 +219,7 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         assertEmpty(markers(xmlProvider, xml))
         assertFalse(
             "确定不存在必须收回正缓存，否则下一趟慢 pass 还会把图标画回来",
-            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains("com.demo.UserMapper#count"),
+            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains(cacheKey(statementId = "count")),
         )
     }
 
@@ -223,7 +231,7 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         assertEmpty(markers(xmlProvider, xml))
         assertFalse(
             "「真没有」的负例不得污染正缓存",
-            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains("com.demo.UserMapper#ghost"),
+            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains(cacheKey(statementId = "ghost")),
         )
     }
 
@@ -241,7 +249,7 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
             assertEquals("dumb 窗内解析失败须乐观产出（F1-b）", 1, marker.size)
             assertSame(MpvsIcons.MapperStatement, marker.single().icon)
             assertFalse("乐观产出不得污染正缓存",
-                MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains("com.demo.UserMapper#ghost"))
+                MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains(cacheKey(statementId = "ghost")))
         } finally {
             MapperXmlToJavaLineMarkerProvider.isDumbProvider = original
         }
@@ -261,13 +269,13 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         assertSame(MpvsIcons.MapperMethod, marker.icon)
         assertTrue(
             "locate 成功必须记入共享正缓存（Java 侧失败分支靠它双向受益）",
-            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains("com.demo.UserMapper#count"),
+            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains(cacheKey(statementId = "count")),
         )
     }
 
     fun testF1JavaLocateUnknownWithCacheHitStillProducesMarker() {
         // 冷窗形态：locate **没算完**（Unknown）——缓存命中必须照常产出，缓存不动。
-        MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add("com.demo.UserMapper#count")
+        MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add(cacheKey(statementId = "count"))
         MapperXmlLocator.lookupOverrideForTest = { _, _ -> MapperXmlLocator.Lookup.Unknown }
         MapperXmlToJavaLineMarkerProvider.isDumbProvider = { false }
         val marker = markers(javaProvider, addMapper())
@@ -275,19 +283,19 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         assertEquals("count", marker.single().element?.text)
         assertTrue(
             "Unknown 不得动缓存",
-            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains("com.demo.UserMapper#count"),
+            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains(cacheKey(statementId = "count")),
         )
     }
 
     /** P2.1（T-MapperGutterEvict，2026-11-16）：Java 侧确定不存在时摘图标并收回缓存。 */
     fun testF1JavaLocateAbsentEvictsPositiveCacheAndProducesNoMarker() {
-        MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add("com.demo.UserMapper#count")
+        MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add(cacheKey(statementId = "count"))
         MapperXmlLocator.lookupOverrideForTest = { _, _ -> MapperXmlLocator.Lookup.Absent }
         MapperXmlToJavaLineMarkerProvider.isDumbProvider = { false }
         assertEmpty(markers(javaProvider, addMapper()))
         assertFalse(
             "确定不存在必须收回正缓存（删掉 XML 语句 / 改 namespace 后图标不得续命）",
-            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains("com.demo.UserMapper#count"),
+            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains(cacheKey(statementId = "count")),
         )
     }
 
@@ -299,7 +307,7 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
             val marker = markers(javaProvider, addMapper())
             assertEquals("dumb 窗内 locate 落空须乐观产出（接口 5 个方法）", 5, marker.size)
             assertFalse("乐观产出不得污染正缓存",
-                MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains("com.demo.UserMapper#missing"))
+                MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains(cacheKey(statementId = "missing")))
         } finally {
             MapperXmlToJavaLineMarkerProvider.isDumbProvider = original
         }

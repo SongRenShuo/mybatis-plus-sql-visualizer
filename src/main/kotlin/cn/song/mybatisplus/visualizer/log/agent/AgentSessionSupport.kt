@@ -58,6 +58,13 @@ internal data class AgentStatusSnapshot(
      * 桥已恢复解析。状态行必须如实披露（用户看到「已挂载」却零条目时，这句是唯一解释）。
      */
     val activityFallbackActive: Boolean = false,
+    /**
+     * T-AgentStatusOldJvm（2026-11-21）：本会话曾因目标 JVM 类版本低于 agent 产物（major 52，
+     * 即 JDK 低于 8）被注入闸门拦下。这类项目永远等不到挂载，若照旧落进「等待挂载」态，
+     * 用户读作「勾着、在等、像坏了」——必须如实改说「已跳过注入（回落控制台捕获）」。
+     * 粘性置位（本会话曾命中即真）；真实挂载后由更高优先级分支覆盖叙事。
+     */
+    val targetJvmUnsupported: Boolean = false,
 )
 
 /**
@@ -91,6 +98,15 @@ internal fun agentStatusText(s: AgentStatusSnapshot): String? {
         } else {
             attached
         }
+    }
+    // T-AgentStatusOldJvm：目标 JVM 低于 agent 字节码要求时注入已被闸门跳过——本项目永远等不到
+    // 挂载，「等待挂载」是错叙事。位置在「曾挂载」分支**之前**（T-AgentStatusOldJvm2 复盘）：
+    // everAttached 是项目级粘性标志，先跑一次 JDK 8 再跑 JDK 7 时，上次会话的「连接中断」会
+    // 遮住本次「已跳过注入」的事实——优先级必须是「本次挂载 > 本次跳过 > 上次会话结局」。
+    // AgentManager 在会话建立时清跳过标志，故「真实挂载了」不会落入本分支（且 livePids 分支更先）。
+    // 【反向验证实验摘除点】git 补丁摘掉本分支 → 优先级用例必红（回落上次会话的结局文案）
+    if (s.targetJvmUnsupported) {
+        return MpSqlVisualizerBundle.message("settings.enhancedCapture.status.targetJvmTooOld")
     }
     if (s.everAttached) {
         // T-ReachAudit T-RA-01：心跳过期 = socket 未断而帧停，与真断连分开叙述。
@@ -531,6 +547,16 @@ internal class AgentSession(
                     // 宿主有、IDE 无=传输；两侧都有而面板空=消费链（去重/屏蔽/过滤/暂停）。
                     if (AgentEventAdapter.receivedEvents() == 1L) {
                         LOG.info("增强通道首条事件已到达并进入消费链（pid=$pid）——若面板仍零产出，查消费链（去重窗口/屏蔽/过滤），不再疑 agent 侧")
+                    }
+                    // T-DriverInternalSqlFilter（2026-11-21）：驱动内部语句（连接初始化族，如
+                    // Connector/J 5.1 建连接时自钉版本注释的 @@session 系统变量查询）不是业务 SQL，
+                    // 不入列表。放在「收到即计数」之后——「已收事件 N」口径含被过滤者，面板空时的
+                    // 分流逻辑不变；静默丢弃 + 计数不刷日志（预期常态，控制台安静口径）。
+                    // 只作用 agent 通道入队点：MCP 审计与历史回读不经这里（同入队闸门边界）。
+                    // 【反向验证实验摘除点】git 补丁摘掉本分支 → 端到端过滤用例必红。
+                    if (DriverInternalSql.isInternal(event.sql)) {
+                        DriverInternalSql.markDropped()
+                        return
                     }
                     // R53：用户暂停闸门（在收到计数**之后**——暂停中「已收事件 N」照常增长，
                     // 状态栏据此显示「暂停中且通道活着」而非「通道断了」）。只丢入列表，

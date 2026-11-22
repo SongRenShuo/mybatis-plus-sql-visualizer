@@ -35,6 +35,7 @@ class McpGateFilterEpBridgeProxyTest : BasePlatformTestCase() {
         // 应用级服务跨用例存活，恢复默认避免污染同 suite
         state.mcpToolsEnabled = true
         state.mcpDisabledTools.clear()
+        McpGateFilterEpBridge.resetForTest()
         super.tearDown()
     }
 
@@ -96,6 +97,40 @@ class McpGateFilterEpBridgeProxyTest : BasePlatformTestCase() {
         assertNotNull(McpGateFilterEpBridge.defaultValueFor(Flow::class.java))
         assertTrue((McpGateFilterEpBridge.defaultValueFor(Int::class.javaPrimitiveType!!) as Number).toInt() == 0)
         assertTrue((McpGateFilterEpBridge.defaultValueFor(Long::class.javaPrimitiveType!!) as Number).toLong() == 0L)
+    }
+
+    // ---- T-McpGlobalBreakHardening 券01：未知契约熔断 ----------------------------------
+
+    fun test未知方法每次都通知熔断层() {
+        val hits = mutableListOf<String>()
+        val handler = McpGateFilterEpBridge.handlerForTest { hits += it }
+        val method = FakeFilterWithExtra::class.java.methods.first { it.name == "getToolAliases" }
+        handler.invoke(Any(), method, emptyArray<Any?>())
+        handler.invoke(Any(), method, emptyArray<Any?>())
+        assertEquals(
+            "每次未知调用都要通知（是否重复摘除由 tripBreaker 的原子闸决定）",
+            listOf("getToolAliases/0->Map", "getToolAliases/0->Map"),
+            hits,
+        )
+    }
+
+    fun test熔断只触发一次且置位() {
+        McpGateFilterEpBridge.resetForTest()
+        assertTrue("首次未知契约必须触发熔断", McpGateFilterEpBridge.tripBreaker("getToolAliases/0->Map"))
+        assertFalse(
+            "熔断后再次触发必须静默（不重复摘除/不刷日志）",
+            McpGateFilterEpBridge.tripBreaker("getToolAliases/0->Map"),
+        )
+        assertTrue(McpGateFilterEpBridge.isBreakerTripped())
+    }
+
+    fun test未知方法按返回类型兜底不抛() {
+        val handler = McpGateFilterEpBridge.handlerForTest { }
+        val mapMethod = FakeFilterWithExtra::class.java.methods.first { it.name == "getToolAliases" }
+        val objectMethod = FakeFilterWithExtra::class.java.methods.first { it.name == "getSomething" }
+        assertEquals(emptyMap<Any, Any>(), handler.invoke(Any(), mapMethod, emptyArray<Any?>()))
+        assertNull("对象返回类型仍给 null（这是平台强转风险，故必须靠摘除止损）",
+            handler.invoke(Any(), objectMethod, emptyArray<Any?>()))
     }
 
     // ---- 券03：261 形态 B 的过滤器链 ----------------------------------------------------
@@ -164,6 +199,13 @@ class McpGateFilterEpBridgeProxyTest : BasePlatformTestCase() {
 
     interface FakePrimitiveProvider {
         fun flag(): Boolean
+    }
+
+    /** 假想的未来契约：A 形态原样保留 + 一个本桥不认识的方法（熔断触发面）。 */
+    interface FakeFilterWithExtra {
+        fun applyFilters(context: FakeFilterContext?, clientInfo: Any?, invocationMode: Any?, options: Any?)
+        fun getToolAliases(): Map<String, String>
+        fun getSomething(): Any
     }
 
     interface FakeToolFilter261 {

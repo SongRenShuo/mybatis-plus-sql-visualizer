@@ -124,6 +124,66 @@ class ParameterReplacerTest {
         assertEquals("SELECT id FROM tbl WHERE name = 'O''Brien'", result)
     }
 
+    // ------------------------------------------------------------------
+    // T-PreQuotedLiteral：值已是完整引号字面量 → 原样渲染，不再转义包裹（引号翻倍前科）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `buildExecutableSql_已引号字符串原样不翻倍`() {
+        val sql = "SELECT id FROM tbl WHERE name = ?"
+        val result = ParameterReplacer.buildExecutableSql(
+            sql = sql,
+            sources = listOf("name"),
+            paramValues = mapOf("name" to "'abc'"),
+            hints = listOf(ParamHint(quote = true)),
+        )
+        assertEquals("SELECT id FROM tbl WHERE name = 'abc'", result)
+    }
+
+    @Test
+    fun `buildExecutableSql_已引号输入走启发式档同样原样`() {
+        val sql = "SELECT id FROM tbl WHERE name = ?"
+        val result = ParameterReplacer.buildExecutableSql(
+            sql = sql,
+            sources = listOf("name"),
+            paramValues = mapOf("name" to "'abc'"),
+            hints = listOf(ParamHint()),
+        )
+        assertEquals("SELECT id FROM tbl WHERE name = 'abc'", result)
+    }
+
+    @Test
+    fun `buildExecutableSql_数值列收到已引号非数字_原样不翻倍`() {
+        val sql = "SELECT id FROM tbl WHERE id = ?"
+        val result = ParameterReplacer.buildExecutableSql(
+            sql = sql,
+            sources = listOf("id"),
+            paramValues = mapOf("id" to "'abc'"),
+            hints = listOf(ParamHint(quote = false)),
+        )
+        assertEquals("SELECT id FROM tbl WHERE id = 'abc'", result)
+    }
+
+    @Test
+    fun `运行期占位_VALUE_已引号输入落在引号内_剥外引号按内层转义`() {
+        val target = slot("rt9", SlotKind.VALUE, "kw", hint = ParamHint(quote = true))
+        val sql = "SELECT id FROM t WHERE name LIKE '%${target.token}%'"
+        val result = render(sql, listOf(target), RuntimeSlotValues.of("rt9" to SlotValue.text("'abc'")))
+        assertEquals("SELECT id FROM t WHERE name LIKE '%abc%'", result.sql)
+    }
+
+    @Test
+    fun `buildExecutableSql_已转义内层引号完整字面量原样`() {
+        val sql = "SELECT id FROM tbl WHERE name = ?"
+        val result = ParameterReplacer.buildExecutableSql(
+            sql = sql,
+            sources = listOf("name"),
+            paramValues = mapOf("name" to "'a''b'"),
+            hints = listOf(ParamHint(quote = true)),
+        )
+        assertEquals("SELECT id FROM tbl WHERE name = 'a''b'", result)
+    }
+
     @Test
     fun `buildExecutableSql_无参数原样返回`() {
         val sql = "SELECT id FROM tbl"

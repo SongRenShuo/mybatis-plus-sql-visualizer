@@ -14,7 +14,10 @@ import cn.song.mybatisplus.visualizer.log.logTimeParamSignature
 import cn.song.mybatisplus.visualizer.log.stampLogTime
 import cn.song.mybatisplus.visualizer.util.FatalErrors
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
@@ -249,6 +252,19 @@ class AgentManager(private val project: Project) : Disposable {
      */
     internal val premainChannels = CopyOnWriteArrayList<PremainChannel>()
 
+    /**
+     * T-OldJvmPremainGuard 券01：已提示过的「目标 JDK 过老」版本串（同一版本只报一次，防反复 Run 刷屏）。
+     * 随 project 级 service 生命周期回收；internal 为测试缝。
+     */
+    internal val targetJvmNotifiedVersions: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /**
+     * T-AgentStatusOldJvm（2026-11-21）：本会话是否曾因目标 JVM 类版本过低被注入闸门拦下。
+     * 粘性置位（不随单次运行清除）：状态行在「从未挂载」分支用它改说「已跳过注入」；
+     * 真实挂载后由更高优先级分支覆盖叙事，无需反向清除。internal 为同模块测试缝。
+     */
+    internal val targetJvmSkipDetected = java.util.concurrent.atomic.AtomicBoolean(false)
+
     // ---------- T-PS4-03 测试缝：去抖窗与时间源可注入（生产链路勿改默认值） ----------
 
     /** attach 排队去抖窗（默认 [DEFAULT_ATTACH_DEBOUNCE_MS]；测试注入短窗驱动去抖语义）。 */
@@ -320,6 +336,9 @@ class AgentManager(private val project: Project) : Disposable {
     private val monitorLock = Any()
 
     init {
+        // T-HdAbsorb D215：调试器挂起账本安装（幂等；Community/无 debugger 环境反射缺类静默降级）——
+        // 断点挂起时段入账，agent 耗时在适配期按测量窗交集扣减（补偿自身带 registry 闸）。
+        DebuggerSuspendTracker.install()
         // T-PS5-04：monitor 定时任务不再在此排定（见 ensureMonitorStarted）。
         // T-M56-08：设置变更驱动——开启 → 惰性挂载由进程出现回调承接；
         // 关闭 → CONFIG 停采集 + 会话关闭 + 桥回落；脱敏开关 → CONFIG 下发
@@ -616,6 +635,9 @@ class AgentManager(private val project: Project) : Disposable {
         heartbeatDropDetected.set(false)
         // T-AgentHeartbeat T-05：同一口径清「首条心跳未到」标记
         firstHeartbeatPending.set(false)
+        // T-AgentStatusOldJvm2：本次真挂载成功 → 清「目标 JDK 过老已跳过」标志——状态行优先级
+        // 是「本次挂载 > 本次跳过 > 上次会话结局」，真实挂载后不得再显示跳过叙事
+        targetJvmSkipDetected.set(false)
         publishStatusChanged()
         // T-FirstUsePremainConsent S2：attach 兜底挂载成功（能走到这里必非 premain 在场——
         // premain 通道在场的进程在 doAttachAsync 入口就跳过）→ 能力边界告知（每轮至多一次）
@@ -841,25 +863,41 @@ class AgentManager(private val project: Project) : Disposable {
 
     /**
      * premain 注入准备（`PremainRunConfigurationExtension.updateJavaParameters` 的唯一入口）：
-     * 过三道闸门 → 产出 `-javaagent:…` VM 选项字符串，null = 本次不注入。
+     * 过四道闸门 → 产出 `-javaagent:…` VM 选项字符串，null = 本次不注入。
      *
-     * 闸门顺序与副作用解耦（零劣化的关键）：开关为假时**不提取 jar、不协商端口**——
-     * 这两步在未开启态纯属浪费（且端口协商会开 ServerSocket）。判定本身走纯函数
+     * 闸门顺序与副作用解耦（零劣化的关键）：开关为假、或目标 JVM 太老时**不提取 jar、不协商端口**
+     * ——这两步在未开启/注定无效时纯属浪费（且端口协商会开 ServerSocket）。判定本身走纯函数
      * [PremainInjection.decide]，此处只负责按序求值事实与打日志。
      *
      * T-EnhancedCaptureDefaultOn（2026-10-19）：注入确认闸门已移除——开关打开即注入，
      * 不再有 confirmed 前置条件，也不再有弹窗与 EDT 依赖。
+     *
+     * T-OldJvmPremainGuard（2026-11-20）：[targetJvmMaxMajor] 是目标 JVM 的类版本上限（探测失败
+     * 传 null = 未知放行）。低于 agent 产物（major 52）时跳过注入并给一次性提示——JDK 6/7 上
+     * `-javaagent` 载不动入口类，JVM 会直接终止，用户的应用根本起不来。
      */
-    internal fun preparePremainVmOption(): String? {
+    internal fun preparePremainVmOption(targetJvmMaxMajor: Int? = null): String? {
         val enabled = isEnhancedEnabled()
         if (!enabled) {
             val reason = (PremainInjection.decide(false) as PremainInjection.Decision.Skip).reason
             LOG.info("premain 注入跳过：$reason（不提取 jar、不协商端口）")
             return null
         }
+        if (!PremainInjection.targetJvmSupported(targetJvmMaxMajor)) {
+            LOG.warn(
+                "premain 注入跳过：${PremainInjection.REASON_TARGET_JVM_TOO_OLD}" +
+                    "（目标 JDK 判定值 $targetJvmMaxMajor < agent 产物 ${PremainInjection.MIN_TARGET_CLASS_MAJOR}）" +
+                    "——不提取 jar、不协商端口，回落 attach/桥（零劣化）",
+            )
+            // T-AgentStatusOldJvm：粘性置位——状态行据此显示「已跳过注入」而不是「等待挂载」
+            // （本项目永远等不到挂载，气球通知错过后就只剩状态行这一个自解释面）。
+            targetJvmSkipDetected.set(true)
+            notifyTargetJvmUnsupported(targetJvmMaxMajor)
+            return null
+        }
         val jar = extractPremainAgentJar()
         val port = if (jar != null) openPremainChannel() else null
-        return when (val decision = PremainInjection.decide(true, jar != null, port)) {
+        return when (val decision = PremainInjection.decide(true, jar != null, port, targetJvmMaxMajor)) {
             is PremainInjection.Decision.Inject -> {
                 LOG.info("premain 注入：端口 ${decision.port} 已前置协商（agent 回连前不阻塞用户 Run）")
                 // T-StackHoverUi：-javaagent 选项随带调用栈快照帧数预算（premain 场景无 attach 二次下发）
@@ -873,6 +911,32 @@ class AgentManager(private val project: Project) : Disposable {
                 LOG.warn("premain 注入跳过：${decision.reason}——回落 attach/桥（零劣化）")
                 null
             }
+        }
+    }
+
+    /**
+     * T-OldJvmPremainGuard 券01：目标 JDK 过老的一次性提示（同一 Java 版本只报一次）。
+     *
+     * 为什么必须提示：跳过注入后增强捕获在该应用上等于沉默失效，用户只会觉得「勾了没反应」；
+     * 而这条限制是产品面的（agent 需要 JDK 8+），必须让用户看到原因与可行替代（控制台日志仍可捕获）。
+     * 去重按判定值（同一目标 JDK 反复 Run 不刷屏），集合随本 project 级 service 生命周期走。
+     * 文案不报具体 JDK 版本：探测来自 rt.jar 兜底时给的是「自带类库编译目标」（实测 JDK 6 为 49），
+     * 拿它说「你的 JDK 是 1.5」会误导——只如实说「低于 8」。
+     */
+    private fun notifyTargetJvmUnsupported(maxMajor: Int?) {
+        val key = maxMajor?.toString() ?: "unknown"
+        if (!targetJvmNotifiedVersions.add(key)) return
+        ApplicationManager.getApplication().invokeLater {
+            runCatching {
+                NotificationGroupManager.getInstance()
+                    .getNotificationGroup(AGENT_NOTIFICATION_GROUP_ID)
+                    .createNotification(
+                        MpSqlVisualizerBundle.message("agent.targetJvm.title"),
+                        MpSqlVisualizerBundle.message("agent.targetJvm.content"),
+                        NotificationType.WARNING,
+                    )
+                    .notify(project)
+            }.onFailure { LOG.warn("目标 JDK 过老提示发送失败（零劣化）", it) }
         }
     }
 
@@ -1169,9 +1233,11 @@ class AgentManager(private val project: Project) : Disposable {
             everAttached.set(true)
             // T-AgentHeartbeat T-05（独立复核补位）：与 attachToPid 对称——新会话挂上即清两类回落标记。
             // 此前只写 attachedPids 不清标记，premain 重连后状态行可能残留上一轮摘除的叙事；
-            // 当前无可见后果（agentStatusText 先判 livePids），但任何人重排分支就会露出来。
+            // T-AgentStatusOldJvm2：状态行重排后（本次跳过 > 上次会话结局）本清位已**必然可见**——
+            // 不清的话「先跑 JDK 8 挂上、再跑 JDK 7 被跳过」的场景里，重跑挂上的会话仍显示跳过叙事。
             heartbeatDropDetected.set(false)
             firstHeartbeatPending.set(false)
+            targetJvmSkipDetected.set(false)
             updateOnline()
             // T-PS5-04：premain 会话建立同 attach 链——巡检懒启 + 推断 URL 回写
             ensureMonitorStarted()
@@ -1282,6 +1348,11 @@ class AgentManager(private val project: Project) : Disposable {
         // 控制台通道照常解析兜底，两通道不并存（agent 侧已丢，无重复条目）。
         val gateNow = online && captureConfirmedActive() && !userPaused
         val gateWas = SqlCaptureGate.paused.getAndSet(gateNow)
+        // T-MultiModuleConsoleYield（2026-11-21）：与闸门同点同步「健康会话 pid 集」——控制台行级
+        // 让位归属的依据（行前缀 PID 字段 ∈ 集 → 让位；∉ 集 → 该行来自无 agent 模块，桥照常解析）。
+        // 与 paused 同点写：避免「闸门已封、pid 集陈旧」的窗口；clear + 重灌（规模=会话数，代价可忽略）。
+        SqlCaptureGate.liveSessionPids.clear()
+        sessions.forEach { if (isSessionHealthy(it)) SqlCaptureGate.liveSessionPids.add(it.pid) }
         // T-CaptureCatchAll 券02：让位起点/回落沿同步给活性回落状态机（白名单漏驱动导致的双哑
         // 由它兜底）。放在闸门写入之后：状态机的「静默计时」必须与闸门实际生效时刻对齐。
         CaptureActivityFallback.onGateChanged(gateNow)
@@ -1379,6 +1450,8 @@ class AgentManager(private val project: Project) : Disposable {
             heartbeatWindowSeconds = heartbeatWindowMs / 1000,
             // T-CaptureCatchAll 券02：活性回落解封态——设置页状态行如实披露「已回退控制台解析」
             activityFallbackActive = CaptureActivityFallback.isActive(),
+            // T-AgentStatusOldJvm：曾因目标 JDK 过老被闸门跳过——状态行改说「已跳过注入」而非「等待挂载」
+            targetJvmUnsupported = targetJvmSkipDetected.get(),
         ),
     )
 

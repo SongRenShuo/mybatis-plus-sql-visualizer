@@ -202,6 +202,55 @@ class JdbcTemplateIbatisMutualExclusionTest : BasePlatformTestCase() {
         )
     }
 
+    /**
+     * T-IbatisAtShapeGate：`组名@命名空间.语句id` 形态（站点自研封装的语句名约定）。
+     *
+     * 真机现场：`baseDao.queryForObject("cQAccountTypeByAccountType@custmg.qAccountTypeByAccountType", inMap)`。
+     * 修复前形状门正则不含 `@` ⇒ JDBC 通道认领该调用（gutter 双图标面），快捷键回落链也被 JDBC 抢走
+     * 后渲染 null（「未在光标处找到可预览的 SQL 源」错源提示）。
+     *
+     * 本用例两侧同时钉住：① iBatis 侧仍产出跳转箭头（1 枚，`@` 形态解析链天然支持）；
+     * ② JDBC 通道按形状让位（0 枚）——反向验证的靶点。
+     */
+    fun test带At符号的自研语句名_JdbcTemplate同样让位() {
+        myFixture.addFileToProject(
+            "sqlmap/Account.xml",
+            """
+            <sqlMap namespace="cQAccountTypeByAccountType@custmg">
+              <select id="qAccountTypeByAccountType">SELECT * FROM T_ACCOUNT_TYPE WHERE ACCOUNT_TYPE = #accountType#</select>
+            </sqlMap>
+            """.trimIndent(),
+        )
+        // 接收者**不能**叫 `baseDao` 一类名：变量名启发会先归类成 CUSTOM_DAO，JDBC 通道在
+        // 形状门之前就因家族排除让位（实测 jdbcMarkers=[]），反向验证会测不到形状门本身。
+        val dao = myFixture.addFileToProject(
+            "com/demo/AccountDaoImpl.java",
+            """
+            package com.demo;
+            public class AccountDaoImpl {
+                private Object client;
+                public Object query(String accountType) {
+                    return client.queryForObject("cQAccountTypeByAccountType@custmg.qAccountTypeByAccountType", accountType);
+                }
+            }
+            """.trimIndent(),
+        )
+
+        val jdbcMarkers = fastMarkers(jdbc, dao)
+        val ibatisMarkers = slowMarkers(ibatis, dao)
+        assertEquals(
+            "@ 形态语句名：iBatis 侧仍产 1 枚（解析链 namespace 本就是任意字符串键）",
+            1,
+            markersOn(ibatisMarkers, "queryForObject").size,
+        )
+        assertEquals(
+            "@ 形态语句名：JdbcTemplate 通道必须让位（0 枚）：实际 " +
+                jdbcMarkers.map { (it.element as PsiElement).text },
+            0,
+            markersOn(jdbcMarkers, "queryForObject").size,
+        )
+    }
+
     // ------------------------------------------------------------------
     // 判据单元：形状门（O(1) 纯函数）正负例
     // ------------------------------------------------------------------
@@ -210,10 +259,22 @@ class JdbcTemplateIbatisMutualExclusionTest : BasePlatformTestCase() {
         assertTrue("id 形态", IbatisCallYieldGate.isStatementIdShape("selectById"))
         assertTrue("ns.id 形态", IbatisCallYieldGate.isStatementIdShape("User.selectById"))
         assertTrue("带下划线/美元符/数字", IbatisCallYieldGate.isStatementIdShape("app_user.get_by_$1"))
+        // T-IbatisAtShapeGate：站点自研封装的 `组名@命名空间.语句id` 形态（真机报障语句名全文）
+        assertTrue(
+            "带 @ 的自研语句名（真机全文）",
+            IbatisCallYieldGate.isStatementIdShape(
+                "cQAccountTypeByAccountType@custmg.qAccountTypeByAccountType",
+            ),
+        )
+        assertTrue("@ 在短形态里", IbatisCallYieldGate.isStatementIdShape("User@module.selectById"))
+        assertTrue("@ 在末段", IbatisCallYieldGate.isStatementIdShape("User.selectById@module"))
         assertTrue("SQL 文本不命中", !IbatisCallYieldGate.isStatementIdShape("SELECT ID FROM T_USER WHERE ID = ?"))
         assertTrue("带空格不命中", !IbatisCallYieldGate.isStatementIdShape("User.select ById"))
         assertTrue("含括号不命中", !IbatisCallYieldGate.isStatementIdShape("fn(x)"))
         assertTrue("空串不命中", !IbatisCallYieldGate.isStatementIdShape("   "))
         assertTrue("以数字开头不命中", !IbatisCallYieldGate.isStatementIdShape("1abc"))
+        // 放行 @ 不得连带放行段首：`@foo` 仍不是合法语句 id（段首字符集未变）
+        assertTrue("以 @ 开头不命中", !IbatisCallYieldGate.isStatementIdShape("@foo"))
+        assertTrue("含空格的 @ 形态不命中", !IbatisCallYieldGate.isStatementIdShape("User@mod ule.selectById"))
     }
 }

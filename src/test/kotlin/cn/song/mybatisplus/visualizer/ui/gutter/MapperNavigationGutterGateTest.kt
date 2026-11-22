@@ -144,7 +144,8 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
         val markers = collectMarkers(MapperJavaToXmlLineMarkerProvider(), methodNameLeaves())
         assertEquals("UserMapper.selectById 声明行应恰 1 标记", 1, markers.size)
         assertTrue("接口方法应触达 locate（正缓存入账）",
-            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains("com.demo.mapper.UserMapper#selectById"))
+            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys
+                .contains(MapperXmlToJavaLineMarkerProvider.cacheKey(project, "com.demo.mapper.UserMapper", "selectById")))
     }
 
     fun test关mapperXml组_零标记零定位触达() {
@@ -160,7 +161,7 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
             assertEquals("组关时 Java 侧零标记", 0, markers.size)
             assertEquals("组关时零触达 locate（正缓存不得入账）", false,
                 MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys
-                    .contains("com.demo.mapper.UserMapper#selectById"))
+                    .contains(MapperXmlToJavaLineMarkerProvider.cacheKey(project, "com.demo.mapper.UserMapper", "selectById")))
         } finally {
             settings.loadState(before)
         }

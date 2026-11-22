@@ -310,10 +310,21 @@ class ConvertToSqlAction : AnAction() {
     /**
      * JDBC 模板兜底（T-PreviewShortcut）：jdbcTemplate.queryForList / update 等 →
      * JdbcTemplateSqlPreviewService.preview（支持命名参数 / 字符串拼接）。
+     *
+     * T-IbatisAtShapeGate S4（错源兜底）：JDBC 通道认领后渲染失败（`isLikelySql` 拒绝——首参不是 SQL
+     * 而是某种语句名）时，**再试一次 iBatis 解析**（[IbatisCallTargets.resolveIgnoringShape]，跳过形状
+     * 正则、只判入口方法名 + 首参字面量）。命中才接管预览，未命中照旧落「未找到」——于是今后语句名
+     * 里再出现第三种自定义字符时，也不会把「语句明明存在」的调用打成错源提示。
+     * 解析在 `previewAsync` 的读锁内执行，EDT 只渲染结果。
      */
     private fun tryJdbcTemplateFallback(project: Project, element: PsiElement, sourceLocation: String?): Boolean {
         if (JdbcTemplateSqlLocator.locate(element) != null) {
-            SqlPreviewService.previewAsync(project, { JdbcTemplateSqlPreviewService.preview(element, project) }) { result ->
+            SqlPreviewService.previewAsync(project, {
+                JdbcTemplateSqlPreviewService.preview(element, project)
+                    ?: IbatisCallTargets.resolveIgnoringShape(element)?.let { target ->
+                        IbatisStatementPreview.previewResolvedOrNull(project, target.statementId, target.ownerNamespace)
+                    }
+            }) { result ->
                 SqlPreviewService.showResult(project, result, sourceLocation)
             }
             return true

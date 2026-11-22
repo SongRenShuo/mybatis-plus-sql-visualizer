@@ -78,6 +78,26 @@ class SqlLogEntryBuffer(
      */
     private val countFullRebuildPending = AtomicBoolean(false)
 
+    // ---------- T-HdAbsorb D216 第二刀：同线程滑动窗嫌疑戳 ----------
+
+    /**
+     * D216 第二刀（吸收 Hibernate Debugger `RepeatedParameterizedSelectCriterion` 事务分组思路，
+     * 本仓退化口径＝线程+滑动窗）：structureKey → 窗内 (timestamp, threadName) 戳队列（FIFO，
+     * 读取时按窗修剪）。与 presence 计数链**独立**维护：
+     *  - 入队埋戳**不受去重开关影响**（D237 解耦：N+1 是诊断能力，去重只是展示偏好），
+     *    structureKey 直接取条目自己的 `by lazy`（同实例一次，随条目淘汰回收）；
+     *  - **逐条出队不做摘戳**：头部淘汰/融合换实例留下的陈旧戳靠窗龄自愈（窗 60s 上限），
+     *    「刚被淘汰的条目让键多嫌疑 ≤ 一个窗」为如实登记的近似；[clear] 全量复位；
+     *  - **双帽兜底（T-PerfSweep33 券02）**：单键戳队列 [WINDOW_STAMP_MAX_PER_KEY] 上限（丢最旧
+     *    保最近段——窗口判定本就只看窗内，只降不升）+ 键数 [WINDOW_STAMP_MAX_KEYS] 上限（超限
+     *    整体清空、下一窗重建）。面板长期不打开时不再随捕获速率无界累积（性能分析第十期 §4.2）；
+     *  - 读取见 [windowSuspectKeys]（修剪 + 同线程分桶 + 阈值判定，null 线程单桶参与——
+     *    控制台回落通道条目无线程名，按会话级同窗计数回落口径）。
+     */
+    private class WindowStamp(val tsMs: Long, val thread: String?)
+
+    private val windowStamps = HashMap<String, ArrayDeque<WindowStamp>>()
+
     @Volatile
     var paused: Boolean = false
         internal set
@@ -584,6 +604,11 @@ class SqlLogEntryBuffer(
                         // presence 口径内——增量键集无法表达，面板回退全量重算（与全量重算的现状同价）。
                         countFullRebuildPending.set(true)
                     }
+                    // D237：窗口嫌疑戳**与去重开关解耦**——N+1 是诊断能力，去重只是展示偏好。
+                    // 此前该调用藏在上面 `if (dedupeEnabled && canDedupe)` 内，关掉去重即让 N+1 徽标
+                    // 与 D235 聚合全链静默失效（2026-11-19 用户真机验收发现）。成本实测：structureKey
+                    // 单条 3.8µs（10000 条 38ms）且条目上本就 lazy；ShardingSphere（canDedupe=false）同纳。
+                    markWindowStampLocked(added)
                     // T-DedupeDecouple：跨通道索引与去重开关**解耦**——去重关闭时它照样维护，
                     // 否则兜底查不到候选（真机：关掉「SQL 去重」后同一次执行又出现两条）。
                     // 券F1：不再做 5s 时间窗惰性清除——超窗键是越窗兜底的候选源（见 crossChannelIndex KDoc）。
@@ -863,6 +888,68 @@ class SqlLogEntryBuffer(
     }
 
     /**
+     * T-HdAbsorb D216 第二刀：窗口嫌疑戳登记（调用方须已持 `synchronized(entries)`）。
+     *
+     * D237：**不再经 `structureKeyByDedupe` 跨条目缓存**——该 map 只在 `clear()` 时清空、没有随
+     * 条目淘汰回收，是既有的无界累积点。改用条目自己的 `structureKey`：它本就在 [LogSqlEntry]
+     * 上 `by lazy`（同实例只算一次），成本实测单条 3.8µs；且随条目淘汰自动回收。
+     * 代价仅是同 dedupeKey 的多实例各算一次（收益本来也只有几 µs/条）。
+     */
+    private fun markWindowStampLocked(entry: LogSqlEntry) {
+        // T-PerfSweep33 券02：双帽兜底——戳只在「读取时修剪 / clear」清、淘汰不摘戳（窗龄自愈近似），
+        // 面板长期不打开时捕获速率 × 无读时段曾单调累积（性能分析第十期 §4.2）。键数超帽整体清空
+        // （当窗嫌疑判定一次精度损失，下一窗重建）；单键超帽丢最旧保最近段——窗口判定本就只看窗内，
+        // 只降不升，保守方向。
+        if (windowStamps.size >= WINDOW_STAMP_MAX_KEYS) windowStamps.clear()
+        windowStamps.getOrPut(entry.structureKey) { ArrayDeque() }.apply {
+            while (size >= WINDOW_STAMP_MAX_PER_KEY) removeFirst()
+            addLast(WindowStamp(entry.timestamp, entry.threadName))
+        }
+    }
+
+    /**
+     * T-HdAbsorb D216 第二刀：窗口嫌疑键集（面板每刷新拍调一次，替代逐格重算）。
+     *
+     * 判定口径：structureKey 的窗内戳按线程分桶，**任一线程桶**计数 ≥ [threshold] 即嫌疑；
+     * 线程名 null（控制台回落通道）单独一桶参与判定——按计划「推断不到就退化」的会话级回落，
+     * 使无线程名条目仍有嫌疑检出能力。读取时顺带修剪窗外戳（含被淘汰条目残留的陈旧戳，
+     * 窗龄自愈口径见字段 KDoc）。
+     *
+     * 与 [NplusOneSuspect.isSuspect] 的关系：本出口产出**数据**（键集），总开关与阈值语义由
+     * 调用方（徽章层）判定——本函数只按传入阈值做分桶计数，不读 Registry（buffer 不进 UI 门）。
+     */
+    internal fun windowSuspectKeys(
+        nowMs: Long,
+        windowMs: Long,
+        threshold: Int,
+    ): Set<String> = synchronized(entries) {
+        if (windowStamps.isEmpty() || threshold < 2) return emptySet()
+        val lo = nowMs - windowMs
+        val out = HashSet<String>()
+        val it = windowStamps.entries.iterator()
+        for (e in it) {
+            val q = e.value
+            while (q.isNotEmpty() && q.first().tsMs < lo) q.removeFirst()
+            if (q.isEmpty()) {
+                it.remove()
+                continue
+            }
+            val byThread = HashMap<String, Int>()
+            for (s in q) {
+                val k = s.thread ?: "\u0000"
+                byThread[k] = (byThread[k] ?: 0) + 1
+            }
+            if (byThread.values.any { it >= threshold }) out.add(e.key)
+        }
+        out
+    }
+
+    /** 测试访问器（T-PerfSweep33 券02 帽兜底）：（键数, 戳总数）。 */
+    internal fun windowStampShapeForTest(): Pair<Int, Int> = synchronized(entries) {
+        windowStamps.size to windowStamps.values.sumOf { it.size }
+    }
+
+    /**
      * 清空全部（去重计数一并归零——徽章与列表内容同生命周期；
      * T-LogRowNumber：捕获序号一并归零——清空后下一条从 #1 起计数）。
      */
@@ -872,6 +959,7 @@ class SqlLogEntryBuffer(
             dedupeIndex.clear() // T-SqlLogPerf P6：索引随队清空
             dedupeKeyPresence.clear() // F83：键级在队计数随队清空
             crossChannelIndex.clear() // T-CrossChannelDedupe：跨通道索引同生命周期清空
+            windowStamps.clear() // T-HdAbsorb D216 第二刀：窗口嫌疑戳同生命周期清空
             // 券B：清空后悬挂的变更键作废（面板全量重建不消费键集），集合一并清空保持有界口径。
             synchronized(changedCountKeys) { changedCountKeys.clear() }
         }
@@ -1169,6 +1257,12 @@ class SqlLogEntryBuffer(
 
         /** T-PerfSweep F3：去重丢弃计数键上限——超限淘汰最旧（见 [dedupeCounts] KDoc）。 */
         private const val MAX_DEDUPE_COUNT_KEYS = 4096
+
+        /** T-PerfSweep33 券02：窗口嫌疑戳单键队列上限（丢最旧保最近段；见 [windowStamps] KDoc）。 */
+        private const val WINDOW_STAMP_MAX_PER_KEY = 64
+
+        /** T-PerfSweep33 券02：窗口嫌疑戳键数上限——超限整体清空、下一窗重建（见 [windowStamps] KDoc）。 */
+        private const val WINDOW_STAMP_MAX_KEYS = 1024
 
         /** O-147 W0：归因诊断限频窗（10s）。 */
         private const val ATTRIB_DIAG_INTERVAL_NANOS = 10_000_000_000L

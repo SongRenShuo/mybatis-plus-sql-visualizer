@@ -48,10 +48,28 @@ class PremainRunConfigurationExtension : RunConfigurationExtension() {
                 PremainTaskScope.Decision.Inject -> Unit
             }
             val manager = configuration.project.getService(AgentManager::class.java) ?: return
-            val option = manager.preparePremainVmOption() ?: return
+            // T-OldJvmPremainGuard 券01：目标 JVM 版本探测前置——JDK 6/7 载不动 major 52 的入口类，
+            // -javaagent 处理失败会让目标 JVM 启动即终止（用户现场：JDK 1.6 项目起不来）。
+            // 探测失败按「未知」放行（结构性保护在 agent 侧引导类，见券02），不阻断注入。
+            val option = manager.preparePremainVmOption(probeTargetJvmMaxMajor(params)) ?: return
             params.vmParametersList.add(option)
             LOG.info("premain 注入完成（config=${configuration.name}）：$option")
         }.onFailure { LOG.warn("premain 注入链异常——本次不注入，回落 attach/桥（零劣化）", it) }
+    }
+
+    /**
+     * T-OldJvmPremainGuard 券01：目标 JVM 能加载的最高类文件 major。
+     *
+     * 事实来源是 `JavaParameters.getJdkPath()`（243 javap 实证：`public String getJdkPath()`）——
+     * 探测本体在纯函数 [TargetJvmCompat]（release 文件 → rt.jar 兜底 → 未知），结果按 JDK 路径缓存。
+     * 平台异常按「未知」处理（零突变：放行注入，由 agent 侧引导类兜底）；fatal 照例透传。
+     */
+    private fun probeTargetJvmMaxMajor(params: JavaParameters): Int? = runCatching {
+        TargetJvmCompat.maxSupportedMajor(params.jdkPath)
+    }.getOrElse { t ->
+        if (FatalErrors.isFatal(t)) throw t
+        LOG.warn("目标 JVM 版本探测失败——按未知处理（注入后由 agent 侧引导类兜底）", t)
+        null
     }
 
     /**

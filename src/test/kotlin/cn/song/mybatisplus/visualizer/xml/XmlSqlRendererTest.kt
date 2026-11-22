@@ -266,7 +266,11 @@ class XmlSqlRendererTest {
             </mapper>
         """.trimIndent())
         assertTrue(m.errors.any { it.contains("missing") })
-        assertEquals("SELECT * FROM t", compact(m.renderSql().sql))
+        // T-IncludePlaceholder：缺失片段留注释占位（旧契约是整段移除 → 残句）
+        assertTrue(
+            "缺失处应留 TODO 占位：${m.renderSql().sql}",
+            compact(m.renderSql().sql).contains("TODO: missing <sql id=\"missing\">"),
+        )
     }
 
     @Test

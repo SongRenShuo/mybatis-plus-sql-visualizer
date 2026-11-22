@@ -1,8 +1,9 @@
-date=2026-11-04T17:33:08+08:00
+date=2026-11-22T21:42:54+08:00
 probe_port=53999 app_port=8082 loglevel=info
 agent_jar=/f/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer/sub-projects/sql-visualizer-agent/build/dist/mps-sql-agent.jar
-agent_jar_sha256=4e62f5c97c9ecf652f7be21f25d4746448adc7f4d73cf85e230fb6f49cad4b26
+agent_jar_sha256=432624ff58e8b465825d8bf7df420dae0b97b1b7f442fe13da95ca941ab99004
 demo_dir=F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-demo/mybatis-plus-join-demo
+demo_profile=mysql app_main=cn.song.mpjdemo.MybatisPlusJoinDemoApplication e2e_script=/f/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer/dev-support/e2e-fake-ide/script-proxytrace.txt
 java=java version "1.8.0_181"
-demo_git_head=fc0094a02b19a9c5d24208aac156f590f69ebfef
-repo_git_head=b88d8fdb0ef62042343a973da9441edd61528848
+demo_git_head=2b46025a41de8fd33485834d5b060634dc955ad6
+repo_git_head=a4cb9026c325777cbac7a6237acda6d3994080a9
