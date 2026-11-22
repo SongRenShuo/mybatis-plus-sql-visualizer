@@ -31,7 +31,7 @@
          ③ 不使用 <hr/> 与 HTML 注释——Marketplace 会剥离（实测：本地 tag 2026.10.7 含 hr，线上同版本描述 hr=0）；
          ④ <img> 只允许自有文档站域名（sql-visualizer.jvtools.cn，第三方图床在 Marketplace 被 302 防盗链），
             截图仍走 Marketplace Media 区；
-         ⑤ 数字类声明（11 方言 / 10 工具 / Alt+Shift+Q / 2024.3）由 PluginXmlStructureGuardTest 与代码对账；
+         ⑤ 数字类声明（15 方言 / 11 工具 / Alt+Shift+Q / 2024.3）由 PluginXmlStructureGuardTest 与代码对账；
          ⑥ 二维码卡片必须给 <td> 显式 width：Marketplace 描述区样式 `.mdContent img{width:100%;max-width:800px}`
             会盖掉 <img> 的 width 属性，图片改按所在单元格宽度撑满——两个 <td> 不写 width 时列宽由下方
             说明文字长度决定（auto table layout），两张码就会一大一小（2026-11-03 按线上同款样式本地复现：
