@@ -6,6 +6,9 @@ SQL Visualizer 是 IntelliJ IDEA 的 SQL 调试插件。写代码时，不启动
 
 [官网与在线文档](https://sql-visualizer.jvtools.cn) · [插件市场](https://plugins.jetbrains.com/plugin/33633-sql-visualizer) · [快速开始](https://sql-visualizer.jvtools.cn/guide/getting-started) · [更新记录](CHANGELOG.md) · [问题反馈](https://sql-visualizer.jvtools.cn/about/feedback) · [GitHub](https://github.com/SongRenShuo/mybatis-plus-sql-visualizer)
 
+> 用着顺手的话，留一条评价吧——你的一句真实体验，比十次下载更能帮到后来的人：[JetBrains Marketplace 评分](https://plugins.jetbrains.com/plugin/33633-sql-visualizer/reviews)
+> If it saves you time, an honest review helps the next user find it: [Rate on JetBrains Marketplace](https://plugins.jetbrains.com/plugin/33633-sql-visualizer/reviews)
+
 支持 IntelliJ IDEA 2024.3 及以上版本。Community 版可使用静态预览、日志捕获、代码转换等核心能力；内嵌执行控制台与数据库表入口需要 Ultimate 的 Database Tools。MCP 接入需要 IDEA 2025.2+ 及可用的 MCP Server。
 
 ## 能解决什么问题
