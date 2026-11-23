@@ -139,8 +139,8 @@ class CustomWrapperServicePreviewTest : BasePlatformTestCase() {
             "自定义 wrapper 子类变量声明当前不亮 gutter 锚点",
             WrapperAnchorDetector.anchorElement(customVar.nameIdentifier),
         )
-        assertNull(
-            "selectJoinList 调用名当前不是锚点（不在批量注册表）",
+        assertNotNull(
+            "D256 M2：selectJoinList 调用行已独立承载锚点（MP Service receiver）",
             WrapperAnchorDetector.anchorElement(anchorOnSelectJoinList().methodExpression.referenceNameElement),
         )
 
