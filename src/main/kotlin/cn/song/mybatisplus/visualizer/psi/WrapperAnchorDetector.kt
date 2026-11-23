@@ -91,12 +91,17 @@ object WrapperAnchorDetector {
             // LambdaQueryWrapper）不标锚点——嵌套条件 lambda 参数不是独立 wrapper 变量（方法参数
             // `void del(LambdaQueryWrapper<X> w)` 父链是 PsiMethod，不受影响）。O(1) 语法级（parent 链）。
             if (variable is PsiParameter && (variable.parent?.parent) is PsiLambdaExpression) return null
-            if (WrapperLocator.detectWrapperType(variable.type) != null) return element
+            if (WrapperLocator.detectWrapperTypeDeep(variable.type) != null) return element
             // 降级：变量用抽象基类型声明（`Wrapper<X> w = new LambdaQueryWrapper<X>()...`），
             // 初始化表达式链首是具体 wrapper 构造 / Wrappers 工厂 → 仍应标变量声明。
             // 仅限 Wrapper 基类型（T-M15-01 回归）：`long total = service.lambdaQuery()...` 的 total 不是锚点
             val typeName = (variable.type as? com.intellij.psi.PsiClassType)?.className
-            if (typeName !in WRAPPER_BASE_TYPE_NAMES) return null
+            if (typeName !in WRAPPER_BASE_TYPE_NAMES) {
+                // D256 M1 规则 4：名字像 Wrapper（`*Wrapper`/`*Join`/`*Chain`）但父链接不到 MP/MPJ
+                // （内部复制改名库 / 依赖未索引）→ 与预览链路同一判定（isWrapperVariable 内含名字前门，
+                // 普通类型返回 false，不影响 `String`/`List` 等海量负例）
+                return if (typeName != null && WrapperLocator.isWrapperVariable(variable)) element else null
+            }
             val init = variable.initializer ?: return null
             if (initializerHeadIsWrapper(init)) return element
             return null
@@ -105,7 +110,7 @@ object WrapperAnchorDetector {
         // 场景 A：wrapper 构造的 new 关键字
         if (element is PsiKeyword && element.text == "new") {
             val newExpr = element.parent as? PsiNewExpression ?: return null
-            if (WrapperLocator.detectWrapperType(newExpr.type) == null) return null
+            if (WrapperLocator.detectWrapperTypeDeep(newExpr.type) == null) return null
             // 该 new 位于某 Wrapper 变量初始化表达式内（`w = new W()...`）→ 去重，只标变量声明
             return if (isInsideWrapperVariableInitializer(newExpr)) null else element
         }
@@ -252,7 +257,7 @@ object WrapperAnchorDetector {
         }
         return when {
             headCall?.methodExpression?.referenceName in WrapperLocator.wrapperFactoryMethodNames -> true
-            expr is PsiNewExpression -> WrapperLocator.detectWrapperType(expr.type) != null
+            expr is PsiNewExpression -> WrapperLocator.detectWrapperTypeDeep(expr.type) != null
             expr is PsiMethodCallExpression -> expr.methodExpression.referenceName in WrapperLocator.wrapperFactoryMethodNames
             else -> false
         }
@@ -276,7 +281,7 @@ object WrapperAnchorDetector {
             when (arg) {
                 is PsiMethodCallExpression -> initializerHeadIsWrapper(arg)
                 is PsiReferenceExpression -> {
-                    if (WrapperLocator.detectWrapperType(arg.type) != null) {
+                    if (WrapperLocator.detectWrapperTypeDeep(arg.type) != null) {
                         true
                     } else {
                         (runCatching { arg.resolve() }.getOrNull() as? PsiVariable)

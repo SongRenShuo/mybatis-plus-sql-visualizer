@@ -296,8 +296,12 @@ object WrapperLocator {
             return initializerIsWrapperChainWithoutTerminal(variable.initializer)
         }
         val typeName = (variable.type as? PsiClassType)?.className ?: return false
-        if (typeName !in wrapperBaseTypeNames) return false
-        return detectWrapperTypeFromInitializer(variable.initializer) != null
+        if (typeName in wrapperBaseTypeNames) return detectWrapperTypeFromInitializer(variable.initializer) != null
+        // T-ServiceJoinWrapperPreview（D256 M1 规则 4）：名字像 Wrapper（`*Wrapper`/`*Join`/`*Chain`）
+        // 但父链完全接不到 MP/MPJ（内部复制改名库、依赖未索引）→ 用链方法启发兜底。
+        // 只在名字前门命中后执行，普通类型零成本。
+        if (looksLikeWrapperName(typeName)) return wrapperTypeFromChainMethods(variable) != null
+        return false
     }
 
     /**
@@ -973,6 +977,8 @@ object WrapperLocator {
         val wrapperType = detectWrapperTypeDeep(variable.type)
             ?: detectWrapperTypeFromInitializer(variable.initializer)
             ?: (if (isVarDeclaration) wrapperTypeFromInitializerChain(variable.initializer) else null)
+            // D256 M1 规则 4：父链全断时的链方法启发（与 isWrapperVariable 同源）
+            ?: wrapperTypeFromChainMethods(variable)
             ?: return null
         // O-8（缺陷 A）：var/推断形态声明类型不可识别 → 泛型实参解析不到实体，
         // 从 initializer 链头补实体解析（`var w = Wrappers.<Device>query()` 显式类型实参 /
@@ -1861,6 +1867,65 @@ object WrapperLocator {
             collectSuperChain(resolved, depth + 1, visited, out)
         }
     }
+
+    /**
+     * D256 M1 规则 4：**链方法启发**——父链完全接不到 MP/MPJ（内部复制改名库、依赖未索引）时的最后兜底。
+     *
+     * 判据（严格，只在前置名字前门 `*Wrapper` / `*Join` / `*Chain` 命中后执行）：
+     *  - 初始化链含任一联表方法（`leftJoin`/`rightJoin`/`innerJoin`/`selectAs`/`selectCollection`/`on`）→ MPJ_LAMBDA；
+     *  - 否则链非空、**每个**方法名都在已知条件/结构方法集合内，且该变量被已知 MP 消费方法
+     *    （`selectList`/`list`/`page` 等，receiver 属 MP Service/Mapper 家族）引用 → LAMBDA_QUERY；
+     *  - 其它（链上有未知方法名 / 无消费引用）→ null，宁可不识别不可误判。
+     *
+     * 成本：只在名字前门命中且父链失败的兜底路径执行；消费侧引用扫描复用 [ReferencesSearch]，
+     * 与 [buildChain] 的既有引用扫描同量级（该路径本身已要为构造链做一次扫描）。
+     */
+    private fun wrapperTypeFromChainMethods(variable: PsiVariable): WrapperType? {
+        val init = variable.initializer ?: return null
+        val chainCalls = runCatching { ArgResolver.collectChainFromInitializer(init) }.getOrNull().orEmpty()
+        if (chainCalls.isEmpty()) return null
+        val methodNames = chainCalls.mapNotNull { it.methodExpression.referenceName }
+        if (methodNames.isEmpty()) return null
+        if (methodNames.any { it in JOIN_CHAIN_METHOD_NAMES }) return WrapperType.MPJ_LAMBDA
+        if (!methodNames.all { it in CONDITION_CHAIN_METHOD_NAMES }) return null
+        return if (isReferencedByMpConsumer(variable)) WrapperType.LAMBDA_QUERY else null
+    }
+
+    /** 变量是否被已知 MP 消费方法引用（实参位置 + receiver 属 MP 家族）——规则 4 第二半的证据门。 */
+    private fun isReferencedByMpConsumer(variable: PsiVariable): Boolean = runCatching {
+        ReferencesSearch.search(variable).any { ref ->
+            val refExpression = ref.element as? PsiReferenceExpression ?: return@any false
+            val call = consumerCallOf(refExpression) ?: return@any false
+            call.methodExpression.referenceName in MP_CONSUMER_METHOD_NAMES &&
+                BatchOperationConverter.hasMpCrudReceiver(call)
+        }
+    }.getOrDefault(false)
+
+    /** 联表链方法（规则 4 第一判据）：出现任一即视为 MPJ 语义。 */
+    private val JOIN_CHAIN_METHOD_NAMES: Set<String> = setOf(
+        "leftJoin", "rightJoin", "innerJoin", "fullJoin", "join",
+        "selectAs", "selectAsClass", "selectCollection", "selectAssociation", "on",
+    )
+
+    /**
+     * 已知条件 / 结构方法（规则 4 第二判据的闭集）：链上方法名全落此集合、且被 MP 消费方法引用，
+     * 才认作普通 lambda wrapper。**不做「未知方法也算」**——那是误判源头。
+     */
+    private val CONDITION_CHAIN_METHOD_NAMES: Set<String> = setOf(
+        "eq", "ne", "gt", "ge", "lt", "le", "like", "notLike", "likeLeft", "likeRight",
+        "notLikeLeft", "notLikeRight", "in", "notIn", "between", "notBetween", "isNull", "isNotNull",
+        "orderBy", "orderByAsc", "orderByDesc", "groupBy", "having", "exists", "notExists",
+        "and", "or", "nested", "not", "func", "last", "set", "select", "selectAll", "distinct",
+        "selectCount", "selectSum", "selectMax", "selectMin", "selectAvg",
+        "eqSql", "gtSql", "geSql", "ltSql", "leSql", "inSql", "notInSql", "apply", "comment",
+    )
+
+    /** MP 消费方法（规则 4 第二判据的消费侧门）。 */
+    private val MP_CONSUMER_METHOD_NAMES: Set<String> = setOf(
+        "selectList", "selectOne", "selectMaps", "selectObjs", "selectById", "selectCount", "selectPage",
+        "list", "listByIds", "getOne", "getById", "getOptById", "page", "one", "oneOpt", "count",
+        "remove", "delete", "update",
+    )
 
     /**
      * 从 Wrapper 泛型参数解析实体类：`LambdaQueryWrapper<DeviceInfoEntity>` → PsiClass。

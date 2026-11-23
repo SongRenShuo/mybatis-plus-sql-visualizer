@@ -4,6 +4,10 @@ import cn.song.mybatisplus.visualizer.model.WrapperType
 import com.intellij.psi.PsiLocalVariable
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 
 /**
  * T-ServiceJoinWrapperPreview（D256 M1）：[WrapperLocator.detectWrapperTypeDeep] 父链识别定向测试。
@@ -268,12 +272,74 @@ class WrapperTypeSuperChainTest : BasePlatformTestCase() {
     }
 
     // ------------------------------------------------------------------
-    // 8. 规则 4（链方法启发）本册不实现
+    // 8. 规则 4（链方法启发）：父链完全接不到 MP/MPJ 时的兜底
     // ------------------------------------------------------------------
 
-    fun testChainMethodHeuristicIsDeferredToLaterBatch() {
-        // M1 范围外：父链全断 + 初始化链含 leftJoin 的情形属计划 §四 规则 4（链方法启发），
-        // 由后续批次（M2 之后）接入。此处只登记范围边界，不做断言——
-        // 避免把「暂未实现」固化成契约（实现规则 4 时无需改本用例）。
+    /**
+     * 父链断（`extends Object`）+ 初始化链含联表方法 → [WrapperLocator.isWrapperVariable] 认作
+     * MPJ wrapper；`detectWrapperTypeDeep` 本身仍返回 null（规则 4 是变量级判定，不在类型级）。
+     */
+    fun testChainMethodHeuristicJoinMethodsResolveToMpjLambda() {
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                void run() {
+                    CustomJoinWrapper<Object> w = new CustomJoinWrapper<>();
+                    w.leftJoin(Object.class, "a", "b").eq("x", 1);
+                }
+            }
+
+            class CustomJoinWrapper<T> {
+                CustomJoinWrapper<T> leftJoin(Class<?> c, String a, String b) { return this; }
+                CustomJoinWrapper<T> eq(String column, Object value) { return this; }
+            }
+            """.trimIndent(),
+        )
+        val variable = PsiTreeUtil.findChildrenOfType(myFixture.file, PsiLocalVariable::class.java)
+            .first { it.name == "w" }
+        assertNull("类型级父链识别不应命中（无 MP/MPJ 祖先）", WrapperLocator.detectWrapperTypeDeep(variable.type))
+        assertTrue("规则 4：链上有 leftJoin → 认作 MPJ wrapper", WrapperLocator.isWrapperVariable(variable))
+        assertNotNull("规则 4 命中后预览链路应可定位", WrapperLocator.locateWithTable(variable))
+    }
+
+    /**
+     * 只有通用条件方法、且变量被 MP 消费方法引用 → LAMBDA_QUERY；无消费引用 → 不认。
+     */
+    fun testChainMethodHeuristicConditionChainRequiresMpConsumer() {
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private UserMapper mapper;
+                void withConsumer() {
+                    PlainWrapper<Object> w = new PlainWrapper<>();
+                    w.eq("a", 1);
+                    mapper.selectList(w);
+                }
+                void withoutConsumer() {
+                    PlainWrapper<Object> lonely = new PlainWrapper<>();
+                    lonely.eq("b", 2);
+                }
+            }
+
+            class PlainWrapper<T> {
+                PlainWrapper<T> eq(String column, Object value) { return this; }
+            }
+
+            interface BaseMapper<T> {}
+            interface UserMapper extends BaseMapper<Object> {}
+            """.trimIndent(),
+        )
+        val variables = PsiTreeUtil.findChildrenOfType(myFixture.file, PsiLocalVariable::class.java)
+            .associateBy { it.name }
+        assertTrue(
+            "被 MP mapper 消费的条件链应认作 LAMBDA_QUERY",
+            WrapperLocator.isWrapperVariable(variables.getValue("w")),
+        )
+        assertFalse(
+            "无 MP 消费引用的条件链不认（防误判）",
+            WrapperLocator.isWrapperVariable(variables.getValue("lonely")),
+        )
     }
 }
