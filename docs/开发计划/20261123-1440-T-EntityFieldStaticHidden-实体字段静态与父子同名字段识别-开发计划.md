@@ -153,8 +153,10 @@ object EntityFieldCollector {
 - **M5**（按用户令纳入本批）：新增 `psi/EntityInheritanceStamp.kt`（`inheritanceChainStamp`，链上父类文件 modificationStamp 滚动签名），`EntityResolver` / `JpaEntityResolver` 的缓存条目与命中判定都带上它。
 - **transient**（按用户令同批）：MP 轨与 JPA 轨都排除 Java `transient`；定向全绿，未触发回退。
 - 用户可感说明已回填 `CHANGELOG.md` `[Unreleased] / Fixed`。
-- 真机复现夹具：`dev-support/repro/D254-entity-fields`（最小 Maven 工程：父类 static 常量 + 三处同名重写字段，
-  五个预览触发点与「删掉重写字段」的反向对照；验证步骤见其 README）。
+- 真机复现语料：已移到 demo 仓（`mybatis-plus-sql-visualizer-demo`）——
+  `mybatis-plus-demo/src/main/java/cn/song/mybatisplusdemo/repro/d254/`（父类 / 子类 / Mapper / 触发点四个类）
+  + `src/main/resources/repro-d254/D254UserMapper.xml` + `mybatis-plus-demo/D254-REPRO.md`（五个触发点与反向对照判据）。
+  纯 PSI 语料：不进 `@MapperScan` 的 mapper 包、XML 不在 `mapper-locations` 目录，不注册 Bean、不连库、不影响 demo 启动。
 
 ### 定向测试读数
 
