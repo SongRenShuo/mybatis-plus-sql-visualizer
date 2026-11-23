@@ -87,8 +87,8 @@
         <p>两张二维码用途不同，请对照下方说明选择扫码（二维码为限时码）。</p>
         <table>
             <tr>
-                <td width="200" align="center"><img src="https://sql-visualizer.jvtools.cn/wechat-qr.jpg" width="200" alt="作者微信二维码"/><br/><b>作者微信</b><br/>扫码添加作者为朋友，欢迎交流插件使用与开发话题；加好友时请备注「SQL Visualizer」。</td>
-                <td width="200" align="center"><img src="https://sql-visualizer.jvtools.cn/group-qr.jpg" width="200" alt="交流群二维码"/><br/><b>交流群</b><br/>扫码加入 SQL Visualizer 交流群；群码失效时可添加作者微信。</td>
+                <td width="200" align="center" valign="top"><img src="https://sql-visualizer.jvtools.cn/wechat-qr.jpg" width="200" height="200" alt="作者微信二维码"/><br/><b>作者微信</b><br/>扫码添加作者为朋友，欢迎交流插件使用与开发话题；加好友时请备注「SQL Visualizer」。</td>
+                <td width="200" align="center" valign="top"><img src="https://sql-visualizer.jvtools.cn/group-qr.jpg" width="200" height="200" alt="交流群二维码"/><br/><b>交流群</b><br/>扫码加入 SQL Visualizer 交流群；群码失效时可添加作者微信。</td>
             </tr>
         </table>
         ]]></description>
