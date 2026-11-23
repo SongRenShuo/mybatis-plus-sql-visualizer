@@ -65,6 +65,21 @@ object WrapperAnchorDetector {
     private val MAPS_TERMINAL_NAMES: Set<String> = setOf("selectJoinMaps", "selectJoinMapsPage")
 
     /**
+     * D256（T-ServiceJoinWrapperPreview M2）：MPJ join 消费族（`JoinMapper` / `MPJBaseService`
+     * 以及自研 Service 封装里的同名转发方法）——**调用行独立承载锚点**。
+     *
+     * 与 [MAPS_TERMINAL_NAMES] 同口径，但**不进** [BatchOperationConverter] 的批量注册表：
+     * 批量 SELECT 模板会把首参 `XxxDTO.class` 当实体、把条件渲染成 `WHERE id IN (?, ?, ...)`，
+     * 语义错误（见 D256 M3 守卫）。这些调用的语句承载在 wrapper 实参链上，锚点由调用行承担，
+     * 用户在 Service 封装调用处即可点击预览。
+     *
+     * receiver 必须属 MP Service/Mapper 家族（复用 [BatchOperationConverter.hasMpCrudReceiver]），
+     * 普通类上的同名方法不亮图标。
+     */
+    private val MPJ_JOIN_CONSUMER_METHOD_NAMES: Set<String> =
+        setOf("selectJoinList", "selectJoinOne", "selectJoinMap", "selectJoinCount")
+
+    /**
      * 与 [WrapperLocator.wrapperFactoryMethodNames] / [WrapperLocator.serviceChainMethodNames] 撞名的
      * JPA 写方法名（T-JpaDeleteAnchor）：`repository.delete(entity)` / `ht.delete(entity)` / `ht.update(entity)`。
      *
@@ -173,6 +188,15 @@ object WrapperAnchorDetector {
                 }
                 // 该工厂/链调用位于某 Wrapper 变量初始化表达式内（`w = Wrappers.lambdaQuery()...`）→ 去重
                 return if (isInsideWrapperVariableInitializer(call)) null else element
+            }
+            // D256 M2：MPJ join 消费族调用行独立承载锚点（selectJoinList / One / Map / Count）。
+            // 必须**先于**场景 D：这几个名字不在批量注册表，落到后面会被 `return null` 挡掉；
+            // 且不能复用场景 D 的 `hasWrapperArgument` 让位（wrapper 实参必然存在，让位后永远不亮）。
+            // 无实参形态（`selectJoinCount()`）没有 SQL 可预览 → 不亮。
+            if (ref.referenceName in MPJ_JOIN_CONSUMER_METHOD_NAMES) {
+                val call = ref.parent as? PsiMethodCallExpression ?: return null
+                if (call.argumentList.expressions.isEmpty()) return null
+                return if (BatchOperationConverter.hasMpCrudReceiver(call)) element else null
             }
             // 场景 D：批量操作调用（`service.updateBatchById(list)` 等，F-15/M6）
             if (ref.referenceName in BatchOperationConverter.batchOperationMethodNames) {
