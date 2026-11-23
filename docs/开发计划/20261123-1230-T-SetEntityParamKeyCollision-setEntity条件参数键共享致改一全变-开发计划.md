@@ -153,16 +153,50 @@ public List<User> listByLambdaQuery2(User query) {
 
 ## 八、待拍板事项（默认按推荐执行，用户可改）
 
-| # | 事项 | 推荐 |
-|---|---|---|
-| Q1 | M3（SET 全列同根因）是否同批修 | 同批做（改动小、同根因；若想缩批次可拆成独立册） |
-| Q2 | source 命名用实参表达式（`query.id`）还是固定 `entity.id` | 用实参表达式，沿用 `BatchOperationConverter` 惯例，且导入参数的末段匹配天然可用 |
-| Q3 | 是否让同 source 的兄弟框在输入时实时跟随（M2 条件项） | 不做；M1 后正常场景无此形态，避免光标跳动 |
-| Q4 | 是否把条件行标签从 `id = ?` 改成 `query.id = ?` | 不改，保持现状（标签属产品口径，另行评估） |
+| # | 事项 | 推荐 | 实施结果 |
+|---|---|---|---|
+| Q1 | M3（SET 全列同根因）是否同批修 | 同批做（改动小、同根因；若想缩批次可拆成独立册） | 已同批做（`f9aa1b375`） |
+| Q2 | source 命名用实参表达式（`query.id`）还是固定 `entity.id` | 用实参表达式，沿用 `BatchOperationConverter` 惯例，且导入参数的末段匹配天然可用 | 按推荐：实参合法标识符/点链原样用，表达式文本回退 `entity` |
+| Q3 | 是否让同 source 的兄弟框在输入时实时跟随（M2 条件项） | 不做；M1 后正常场景无此形态，避免光标跳动 | 未做（保留写回函数全量覆盖） |
+| Q4 | 是否把条件行标签从 `id = ?` 改成 `query.id = ?` | 不改，保持现状（标签属产品口径，另行评估） | 未改 |
 
 ## 九、实施记录（实施期回填）
 
-- 落地提交：待填
-- 定向测试读数：待填
-- 反向验证读数：待填
-- 已审计未改的同族面：待填
+**落地提交（master，未 push）**
+
+- `33661f779` M1+M2+测试：setEntity 逐列独立参数键、`syncParamFieldText` 全量写回、新增 `ParamSourceNaming` 与三组定向测试。
+- `f9aa1b375` M3 同类面：`updatable(entity)` 与 `setUpdateEntity` 全列 SET 改用 `前缀.列名`。
+- 本册回填与 `CHANGELOG.md` 随第三个提交落账。
+
+**改动清单**
+
+| 文件 | 改动 |
+|---|---|
+| `converter/ParamSourceNaming.kt`（新） | 前缀清洗（标识符/点链合法，表达式回退 `entity`）、`source()` 拼接、`uniquePrefix()` 序号去重 |
+| `converter/QueryWrapperParser.kt` | `parseSetEntity(call)` 逐列 `Placeholder("${prefix}.${column}")`；`parse()` 重置 `setEntitySeq` |
+| `converter/EasyQueryConverter.kt` | `updatable(entity)` 全列 SET 与主键 WHERE 改唯一键，前缀取 entry 首实参文本 |
+| `converter/UpdateJoinConverter.kt` | `setUpdateEntity` / `setUpdateEntityAndNull` 全列 SET 改唯一键 |
+| `ui/SqlPreviewPanelParamPanel.kt` | `syncParamFieldText` 由 `firstOrNull` 改为遍历全部同 source 字段（值相同不重复写） |
+
+**定向测试读数（实际执行，非空跑）**
+
+| 测试类 | 用例 | 读数 |
+|---|---|---|
+| `converter.ParamSourceNamingTest` | 6 | 6/0/0 |
+| `converter.QueryWrapperParserSetEntityParamKeyTest` | 5 | 5/0/0 |
+| `ui.SqlPreviewPanelSetEntityParamKeyTest` | 4 | 4/0/0 |
+| 同类面回归 `UpdateJoinDeleteJoinConverterTest` | 11 | 11/0/0 |
+| 同类面回归 `ui.EasyQueryConverterTest` | 13 | 13/0/0 |
+| 既有 `QueryWrapperParserSelectTest`（setEntity 文本用例） | 18 | 18/0/0 |
+
+**反向验证（git 补丁方式，patch 放 `.local/tmp` 用完即删）**
+
+- M1：把 `parseSetEntity` 的值改回 `Placeholder("?")` → `QueryWrapperParserSetEntityParamKeyTest` 4 红（键唯一/前缀/回填来源三个断言 + SQL 用例的键断言）、`SqlPreviewPanelSetEntityParamKeyTest` 2 红（独立键/单框改值），合计 **9 tests / 6 failed**；还原后 9/0 绿。
+- M2：把 `syncParamFieldText` 改回 `firstOrNull` → `SqlPreviewPanelSetEntityParamKeyTest` **4 tests / 1 failed**，命中用例 `testSyncParamFieldTextWritesEveryMatchingField`；还原后 4/0 绿。
+- 说明：M2 反向时「清除全空」用例仍绿——M1 已让每个条件行只有自己的框，`firstOrNull` 也够用。M2 的有效性证据只能来自多框夹具，与 §六 的预设一致。
+
+**已审计未改的同族面**
+
+- `ui/SqlPreviewService.kt:1537`（乐观锁 version 条件）、`converter/EasyQueryConverter.kt:596`、`converter/jpa/SpecificationQueryConverter.kt:647`：单值兜底 `Placeholder("?")`，同语句内无第二个 `?` 时键撞车不成立，未改。
+- `BatchOperationConverter` / `CrudSqlGenerator` 的批量参数键本来就是 `entity.column`，与本次命名一致，未改。
+

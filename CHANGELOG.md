@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Fixed
+- **`setEntity(entity)` 预览的每个条件可以独立填值（T-SetEntityParamKeyCollision，D255）**：此前实体全列展开的所有条件共用一个匿名参数键——左侧参数栏改任意一个框，右侧整段 WHERE 都变成同一个值；点「清除」也只清掉第一个框，要关掉重开预览才恢复。现在每列独立参数键（`query.id`、`query.password`…），改哪个框只影响对应条件，清除立即清空全部条件框；`setUpdateEntity` / `updatable(entity)` 的全列 SET 同步修正。
 - **无数据源执行失败后结果区不再是整块绿空白（T-NoDataSourceGreenResultPanel，D253）**：独立工作台粘 SQL 点执行、确认框点「是」后，若项目没配数据源，结果区（原显示格式化 SQL 处）会变成整块纯色空白（真机呈亮绿）。根因＝确认框期间编辑器被释放、失败链无重渲染，结果区空置且容器透明，透出父级主题底色。修法＝结果区容器自带不透明主题底色（消除透出）+ 失败收口在无控制台且编辑器空时用最近结果重建预览编辑器（格式化 SQL 仍在）。有数据源执行路径不变。
 - **实体字段识别修正：静态字段与父子同名字段（T-EntityFieldStaticHidden，D254）**：预览里静态常量（`TABLE_NAME`、日志器等）不再被当成表列；父子类同名字段只保留子类声明（`@TableLogic`/`@TableId`/`@Version`/`@TableField` 随子类字段生效，不再总是取父类那份）。参数类型提示与 XML 属性补全同步去噪（`serialVersionUID` 不再出现在候选里，`@类@` 静态成员补全不受影响）；父类文件修改后预览立即按新字段解析，不再沿用旧缓存。
 
