@@ -1120,6 +1120,38 @@ internal fun openFileTypesSettings(proj: Project) {
  *
  * 没有 hint（普通 SQL 执行错误）时逐字退回 [SqlResultPanel.showError]，不干扰既有文案。
  */
+
+/**
+ * D253 T-NoDataSourceGreenResultPanel：无成因执行失败（无数据源等）收口后，恢复被确认框释放的
+ * 预览编辑器——headless 探针实证此时 editorHolder.componentCount=0、editor=null，结果区空白
+ * 会透出父容器主题底色（真机呈整块亮绿）。仅当「无内嵌控制台 + 编辑器已空 + 有最近结果」时重建，
+ * 展示口径与 renderSql 一致（compact 取 compactSql）。包 runCatching：重建失败只记日志，绝不覆盖
+ * 刚写入的真实错误（错误行在 SOUTH 细条，与 CENTER 编辑器分离）。
+ *
+ * @param forceSync 测试缝：true = 同步执行重建（测试跑在 EDT，invokeLater 回调在方法体内泵不到）；
+ *   生产恒 false 走正常 EDT 投递。
+ */
+/**
+ * D253：无成因执行失败收口后，决定是否恢复空置结果区。
+ * @return 是否决定重建（供测试断言；生产忽略）。
+ */
+internal fun SqlPreviewPanel.restoreResultAreaAfterExecFailure(forceSync: Boolean = false): Boolean {
+    if (embeddedConsole != null || editor != null) return false
+    val sqlToRestore = current?.let { if (compactMode) it.compactSql else it.sql }
+    if (sqlToRestore.isNullOrEmpty()) return false
+    val rebuild = {
+        if (!previewDisposed) {
+            runCatching { showSql(sqlToRestore) }.onFailure { e ->
+                com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                    .warn("[D253] rebuild preview editor after exec failure FAILED: ${e.javaClass.simpleName}: ${e.message}")
+            }
+        }
+    }
+    if (forceSync) rebuild()
+    else com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater(rebuild)
+    return true
+}
+
 internal fun SqlPreviewPanel.showTempFileError(errorMsg: String) {
     // F8：成因**从文案本身**取（` [hint=XXX]`）。前几轮靠共享字段传递，被三种机制各打掉一次
     //（预热入口清空 / 并发覆盖 / 第二次渲染时读方清空），动态重载后还可能是两份类实例。
@@ -1129,6 +1161,14 @@ internal fun SqlPreviewPanel.showTempFileError(errorMsg: String) {
     val proj = project
     if (cause == null || proj == null) {
         resultPanel.showError(shown)
+        // D253 T-NoDataSourceGreenResultPanel：无数据源等「无 hint 成因」执行失败时，确认框期间的
+        // removeNotify→releaseEditor 已把编辑器置空（headless 探针实证 editorHolder.componentCount=0、
+        // editor=null），失败链又无重渲染——结果区空白，透出父容器主题底色（真机呈整块亮绿）。
+        // M1 已让 editorHolder 自带不透明主题底色挡住透出；这里补回被释放的预览编辑器，让失败时
+        // 格式化 SQL 仍在（与用户截图「失败前有 SQL、失败后空白」对齐）。只在确实空置且有最近结果时
+        // 重建，包 runCatching 保证重建失败也不覆盖刚写入的真实错误；错误态在 SOUTH 细条，与 CENTER
+        // 编辑器分离，重建不会抹掉红条。
+        restoreResultAreaAfterExecFailure()
         return
     }
     var settingsLabel: String? = null
