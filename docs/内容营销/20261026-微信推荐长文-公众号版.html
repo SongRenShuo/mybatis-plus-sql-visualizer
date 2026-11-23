@@ -11,7 +11,7 @@
 <p style="margin:0 0 1.2em;font-size:16px;line-height:1.8;color:#3f3f3f;letter-spacing:.02em;">插件叫 MyBatis SQL Visualizer（原名 SQL Visualizer），免费开源（Apache-2.0），不发任何使用数据、无账号，支持 IntelliJ IDEA 2024.3 及以上。</p>
 <h2 style="margin:1.8em 0 .8em;padding-left:10px;border-left:4px solid #2f6feb;font-size:19px;font-weight:700;color:#1a1a1a;line-height:1.45;">三、写代码的时候</h2>
 <p style="margin:0 0 1.2em;font-size:16px;line-height:1.8;color:#3f3f3f;letter-spacing:.02em;">光标放在 Wrapper 链上按 <code style="padding:2px 5px;border-radius:3px;background:#f4f5f7;color:#c7254e;font-size:14px;font-family:Consolas,Monaco,monospace;">Alt+Shift+Q</code>，或者点行首的 gutter 图标。</p>
-<p style="margin:0 0 1.2em;font-size:16px;line-height:1.8;color:#3f3f3f;letter-spacing:.02em;"><img src="https://sql-visualizer.jvtools.cn/demo/perf-advice.gif" alt="Wrapper 预览：左侧勾选动态条件、填参数，右侧实时出 SQL" style="display:block;max-width:100%;height:auto;margin:0 auto 1em;border-radius:6px;" /></p>
+<p style="margin:0 0 1.2em;font-size:16px;line-height:1.8;color:#3f3f3f;letter-spacing:.02em;"><img src="https://sql-visualizer.jvtools.cn/demo/wrapper-preview.gif" alt="Wrapper 预览：左侧勾选动态条件、填参数，右侧实时出 SQL" style="display:block;max-width:100%;height:auto;margin:0 auto 1em;border-radius:6px;" /></p>
 <p style="margin:0 0 1.2em;font-size:16px;line-height:1.8;color:#3f3f3f;letter-spacing:.02em;">不启动 Spring 容器，不连数据库，纯静态解析。覆盖 MyBatis-Plus 各类 Wrapper 与服务链、MPJ 联表、mapper XML 动态标签、注解 SQL、JdbcTemplate 字符串 SQL，以及 xbatis、Easy-Query、Querydsl 这些链式框架。</p>
 <p style="margin:0 0 1.2em;font-size:16px;line-height:1.8;color:#3f3f3f;letter-spacing:.02em;"><code style="padding:2px 5px;border-radius:3px;background:#f4f5f7;color:#c7254e;font-size:14px;font-family:Consolas,Monaco,monospace;">.eq(condition, ...)</code> 里那个布尔首参，在面板上变成了复选框，勾上取消 SQL 实时重渲染。参数按类型填，LIKE 自动补 <code style="padding:2px 5px;border-radius:3px;background:#f4f5f7;color:#c7254e;font-size:14px;font-family:Consolas,Monaco,monospace;">%</code>。没填的参数默认保留 <code style="padding:2px 5px;border-radius:3px;background:#f4f5f7;color:#c7254e;font-size:14px;font-family:Consolas,Monaco,monospace;">?</code>。<code style="padding:2px 5px;border-radius:3px;background:#f4f5f7;color:#c7254e;font-size:14px;font-family:Consolas,Monaco,monospace;">amount &gt;= NULL</code> 恒不匹配，静默过滤比留个问号危险得多。填过的值按声明方法记住，两个方法互不串味。</p>
 <p style="margin:0 0 1.2em;font-size:16px;line-height:1.8;color:#3f3f3f;letter-spacing:.02em;">十一月的版本还加了个独立工作台：主侧边栏的「SQL 预览」页签，粘贴一段 SQL 或 mapper XML 片段就能格式化、填值、复制可执行 SQL；解析成功后自动跑一遍静态性能检查，<code style="padding:2px 5px;border-radius:3px;background:#f4f5f7;color:#c7254e;font-size:14px;font-family:Consolas,Monaco,monospace;">SELECT *</code>、缺 WHERE 这类问题直接标出来。群里同事发来的一段 XML、从日志里捡出来的一条语句，都往这里贴。</p>
@@ -61,21 +61,16 @@
 <p style="margin:0 0 1.2em;font-size:16px;line-height:1.8;color:#3f3f3f;letter-spacing:.02em;">打开业务工程，在能识别的 Wrapper、mapper XML、注解或 JPA 查询旁点 gutter 图标，或按 <code style="padding:2px 5px;border-radius:3px;background:#f4f5f7;color:#c7254e;font-size:14px;font-family:Consolas,Monaco,monospace;">Alt+Shift+Q</code>。三个入口记一下：<code style="padding:2px 5px;border-radius:3px;background:#f4f5f7;color:#c7254e;font-size:14px;font-family:Consolas,Monaco,monospace;">Alt+Shift+Q</code> 预览，<code style="padding:2px 5px;border-radius:3px;background:#f4f5f7;color:#c7254e;font-size:14px;font-family:Consolas,Monaco,monospace;">Alt+Shift+J</code> 转 Java，<code style="padding:2px 5px;border-radius:3px;background:#f4f5f7;color:#c7254e;font-size:14px;font-family:Consolas,Monaco,monospace;">Ctrl+Enter</code> 执行。</p>
 <p style="margin:0 0 1.2em;font-size:16px;line-height:1.8;color:#3f3f3f;letter-spacing:.02em;">文档在官网，常用页面：快速开始、Wrapper 预览、SQL 日志、JPA 预览、MCP 工具、需求反馈池。</p>
 <h2 style="margin:1.8em 0 .8em;padding-left:10px;border-left:4px solid #2f6feb;font-size:19px;font-weight:700;color:#1a1a1a;line-height:1.45;">微信交流</h2>
-<img src="https://sql-visualizer.jvtools.cn/wechat-qr.jpg" width="200" alt="作者微信"/> <img src="https://sql-visualizer.jvtools.cn/group-qr.jpg" width="200" alt="交流群"/>
+<table style="width:100%;border-collapse:collapse;margin:0 0 1em;">
+<tr>
+<td style="width:50%;text-align:center;padding:0 6px;vertical-align:top;"><img src="https://sql-visualizer.jvtools.cn/wechat-qr.jpg" alt="作者微信" style="width:100%;max-width:200px;height:auto;"/></td>
+<td style="width:50%;text-align:center;padding:0 6px;vertical-align:top;"><img src="https://sql-visualizer.jvtools.cn/group-qr.jpg" alt="交流群" style="width:100%;max-width:200px;height:auto;"/></td>
+</tr>
+</table>
 <p style="margin:0 0 1.2em;font-size:16px;line-height:1.8;color:#3f3f3f;letter-spacing:.02em;">左边是作者微信，加好友备注「MyBatis SQL Visualizer」；右边是交流群，群码失效时加作者微信，拉你进群。</p>
-<p style="margin:0 0 1.2em;font-size:16px;line-height:1.8;color:#3f3f3f;letter-spacing:.02em;">两张都是限时码，也可以点文末「阅读原文」进官网，那里始终是最新入口。</p>
 <h2 style="margin:1.8em 0 .8em;padding-left:10px;border-left:4px solid #2f6feb;font-size:19px;font-weight:700;color:#1a1a1a;line-height:1.45;">写在最后</h2>
-<p style="margin:0 0 1.2em;font-size:16px;line-height:1.8;color:#3f3f3f;letter-spacing:.02em;">这个插件从 8 月上架到现在三个多月，发了 24 个版本，还在迭代。</p>
+<p style="margin:0 0 1.2em;font-size:16px;line-height:1.8;color:#3f3f3f;letter-spacing:.02em;">这个插件从 8 月上架到现在 103 天，发了 41 个版本，还在迭代。</p>
 <p style="margin:0 0 1.2em;font-size:16px;line-height:1.8;color:#3f3f3f;letter-spacing:.02em;">如果你也在每天跟 Wrapper 和日志搏斗，装一下试试，用不上三分钟就知道合不合手。遇到问题来需求池说一声。你踩到的坑，多半别人也会踩到。</p>
 <p style="margin:0 0 1.2em;font-size:16px;line-height:1.8;color:#3f3f3f;letter-spacing:.02em;">服务未启，SQL 先知。</p>
 <hr style="border:none;border-top:1px solid #e5e7eb;margin:2em 0;" />
 <hr style="border:none;border-top:1px solid #e5e7eb;margin:2em 0;" />
-<h2 style="margin:1.8em 0 .8em;padding-left:10px;border-left:4px solid #2f6feb;font-size:19px;font-weight:700;color:#1a1a1a;line-height:1.45;">相关链接</h2>
-<p style="margin:0 0 1.2em;font-size:15px;line-height:1.9;color:#3f3f3f;">
-官网与文档：https://sql-visualizer.jvtools.cn<br/>
-插件市场：https://plugins.jetbrains.com/plugin/33633-mybatis-sql-visualizer<br/>
-快速开始：https://sql-visualizer.jvtools.cn/guide/getting-started<br/>
-SQL 日志：https://sql-visualizer.jvtools.cn/features/sql-log<br/>
-MCP 工具：https://sql-visualizer.jvtools.cn/features/mcp<br/>
-需求反馈池：https://sql-visualizer.jvtools.cn/about/feedback
-</p>

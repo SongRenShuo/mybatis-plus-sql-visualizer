@@ -1,6 +1,9 @@
 .gradle
 .intellijPlatform
 
+# Playwright MCP 会话产物（console 日志、页面快照）
+.playwright-mcp/
+
 target/
 logs/
 !.mvn/wrapper/maven-wrapper.jar
