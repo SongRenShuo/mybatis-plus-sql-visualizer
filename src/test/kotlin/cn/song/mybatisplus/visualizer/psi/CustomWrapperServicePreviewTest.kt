@@ -5,26 +5,25 @@ import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 
 /**
- * 复现：自研 Service 封装 + 自定义 Wrapper 子类时，SQL 预览在调用行无法触发。
+ * D256 修复验证：自研 Service 封装 + 自定义 Wrapper 子类的预览链路。
  *
  * 现场形态（用户 2026-11-23 截图）：
  *  - 自研 `CommonService<T> extends IService<T>` 把 MPJ 的 `selectJoin*` 全家桶再包一层，
  *    `CommonServiceImpl` 继承 MP `ServiceImpl`，方法体统一 `getBaseMapper().selectJoinList(...)`；
  *  - 业务层注入 `XxxRepository extends CommonService<Entity>`，调用
  *    `repository.selectJoinList(Dto.class, wrapper)`；
- *  - wrapper 是自研子类 `JoinLambdaWrapper<T> extends MPJLambdaWrapper<T>`（简单类名不在
- *    [WrapperLocator.detectWrapperType] 白名单）。
+ *  - wrapper 是自研四层子类（`JoinLambdaWrapper → AbstractLambdaJoinWrapper → AbstractJoinWrapper
+ *    → Wrapper → MPJLambdaWrapper`），简单类名不在浅层白名单。
  *
- * 本类固化两条现状事实（修复后断言须翻转）：
- *  1. 自定义子类变量在**声明行**与**调用行**都无法定位 → 预览链路整体不命中；
- *  2. 同一调用结构换成官方 `MPJLambdaWrapper`（简单类名命中白名单）时**可以**定位 →
- *     说明「Service 封装」本身不是阻断点，**Wrapper 类型识别**才是。
+ * 修复前（本类首版，提交 `fc2b90542`）固化的两条事实，现均已翻转：
+ *  1. 自定义子类变量在**声明行**与**调用行**都无法定位 → 现在可定位（M1 父链/规则 4）；
+ *  2. `SqlPreviewService.preview` 对现场返回 null → 现在产出 SQL（M1 + M2 锚点）。
  *
  * 测试内内联伪造 `MPJLambdaWrapper` / `IService`，仅提供可选链与父类型，
- * 不依赖真实 MPJ/MP jar（LightPlatform 无依赖索引）。
+ * 不依赖真实 MPJ/MP jar（LightPlatform 无依赖索引）；夹具走**规则 4**（链方法 + MP 消费引用），
+ * FQN 父链规则由 `WrapperTypeSuperChainTest` 用假 FQN 文件覆盖。
  */
 class CustomWrapperServicePreviewTest : BasePlatformTestCase() {
 
@@ -90,23 +89,24 @@ class CustomWrapperServicePreviewTest : BasePlatformTestCase() {
             .first { it.methodExpression.referenceName == "eq" }
 
     /**
-     * 现状事实 1：自定义子类在**调用行**无法定位（用户报障的位置）。
-     *
-     * 修复目标：`JoinLambdaWrapper` 经父链识别为 MPJ wrapper 后，此断言翻转为 notNull。
+     * 修复验证 1：自定义子类在**调用行**可定位（用户报障的位置）。
      */
-    fun testCustomWrapperSubclassAtCallSiteNotLocated() {
+    fun testCustomWrapperSubclassAtCallSiteLocated() {
         myFixture.configureByText("Demo.java", customSubclassCode)
-        assertNull(
-            "自研 wrapper 子类当前无法识别——调用行定位为空（复现用户现场）",
-            WrapperLocator.locateWithTable(anchorOnSelectJoinList()),
+        val located = WrapperLocator.locateWithTable(anchorOnSelectJoinList())
+        assertNotNull("自研 wrapper 子类应可识别——调用行定位非空", located)
+        assertEquals(
+            "链内条件调用应完整收集",
+            listOf("eq", "in"),
+            located!!.chain.calls.map { it.methodName },
         )
     }
 
-    /** 现状事实 1b：自定义子类在**链内**（eq 调用处）同样无法定位。 */
-    fun testCustomWrapperSubclassInsideChainNotLocated() {
+    /** 修复验证 1b：自定义子类在**链内**（eq 调用处）同样可定位。 */
+    fun testCustomWrapperSubclassInsideChainLocated() {
         myFixture.configureByText("Demo.java", customSubclassCode)
-        assertNull(
-            "自研 wrapper 子类当前无法识别——链内定位为空",
+        assertNotNull(
+            "自研 wrapper 子类应可识别——链内定位非空",
             WrapperLocator.locateWithTable(anchorOnWrapperDeclaration()),
         )
     }
@@ -128,15 +128,15 @@ class CustomWrapperServicePreviewTest : BasePlatformTestCase() {
     }
 
     /**
-     * 现状事实 3：gutter 锚点同样受类型白名单约束——
-     * 自定义子类变量声明不亮图标；官方类名照常亮。
+     * 修复验证 3：gutter 锚点——自定义子类变量声明与 `selectJoinList` 调用行都应亮；
+     * 官方类名对照组照常亮。
      */
     fun testGutterAnchorFollowsWrapperTypeWhitelist() {
         myFixture.configureByText("Demo.java", customSubclassCode)
         val customVar = PsiTreeUtil.collectElementsOfType(myFixture.file, com.intellij.psi.PsiLocalVariable::class.java)
             .first { it.name == "jwEpmfe" }
-        assertNull(
-            "自定义 wrapper 子类变量声明当前不亮 gutter 锚点",
+        assertNotNull(
+            "D256 M1：自定义 wrapper 子类变量声明应亮 gutter 锚点",
             WrapperAnchorDetector.anchorElement(customVar.nameIdentifier),
         )
         assertNotNull(
@@ -154,14 +154,15 @@ class CustomWrapperServicePreviewTest : BasePlatformTestCase() {
     }
 
     /**
-     * 现状事实 4（用户感知层）：预览服务对自定义子类返回 null——「点了没反应」的直接证据。
+     * 修复验证 4（用户感知层）：预览服务对自定义子类产出 SQL（「点了没反应」已修复）。
      */
-    fun testPreviewServiceReturnsNullForCustomSubclass() {
+    fun testPreviewServiceProducesSqlForCustomSubclass() {
         cn.song.mybatisplus.visualizer.testutil.PluginSettingsTestSupport.resetToFactoryDefaults()
         myFixture.configureByText("Demo.java", customSubclassCode)
         val preview = cn.song.mybatisplus.visualizer.ui.SqlPreviewService(project)
             .preview(anchorOnSelectJoinList())
-        assertNull("自定义 wrapper 子类在预览服务层同样无结果", preview)
+        assertNotNull("自定义 wrapper 子类在预览服务层应产出结果", preview)
+        assertNotNull("预览结果应带 SQL 文本", preview!!.sql.takeIf { it.isNotBlank() })
     }
 
     /**

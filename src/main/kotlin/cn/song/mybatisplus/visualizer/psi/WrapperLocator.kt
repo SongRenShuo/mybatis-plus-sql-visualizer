@@ -154,7 +154,33 @@ object WrapperLocator {
      * internal 供选择区扫描（[sqlCandidatesInRange]）与 ConvertToSqlAction 复用。
      */
     internal fun isSqlCandidate(call: PsiMethodCallExpression): Boolean =
-        isChainHeadCall(call) || BatchOperationConverter.isBatchOperationCall(call)
+        isChainHeadCall(call) || BatchOperationConverter.isBatchOperationCall(call) ||
+            isMpjJoinConsumerCall(call)
+
+    /**
+     * D256 M2：MPJ join 消费族方法名（`JoinMapper` / `MPJBaseService` 与自研 Service 封装的同名转发）。
+     *
+     * 这批名字**不进** [BatchOperationConverter] 的批量注册表——批量 SELECT 模板会拿首参
+     * `XxxDTO.class` 当实体、产出 `WHERE id IN (?, ?, ...)` 的错误 SQL（M3 守卫兜底）；
+     * 它们的 SQL 由 wrapper 链路径渲染，本集合只用于**锚点/候选入口**。
+     * `selectJoinMaps` / `selectJoinMapsPage` 已在批量注册表且既有独立锚点契约，不在此列。
+     */
+    internal val mpjJoinConsumerMethodNames: Set<String> =
+        setOf("selectJoinList", "selectJoinOne", "selectJoinMap", "selectJoinCount")
+
+    /**
+     * D256 M2：调用是否为 MPJ join 消费入口（锚点 / 选择区候选共用同一判定）。
+     *
+     * 三道门：方法名在 [mpjJoinConsumerMethodNames]、实参非空（无实参没有 SQL 可预览）、
+     * receiver 属 MP Service/Mapper 家族（复用 [BatchOperationConverter.hasMpCrudReceiver]，
+     * 普通类同名方法不亮）。
+     */
+    internal fun isMpjJoinConsumerCall(call: PsiMethodCallExpression): Boolean {
+        val name = call.methodExpression.referenceName ?: return false
+        if (name !in mpjJoinConsumerMethodNames) return false
+        if (call.argumentList.expressions.isEmpty()) return false
+        return BatchOperationConverter.hasMpCrudReceiver(call)
+    }
 
     /**
      * T-M23.7：扫描选择区（offset 范围）内全部 SQL 候选调用（wrapper 链首 + 批量操作方法，
