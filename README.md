@@ -4,10 +4,10 @@
 
 SQL Visualizer 是 IntelliJ IDEA 的 SQL 调试插件。写代码时，不启动应用就能预览 Wrapper、MyBatis / iBatis XML、注解、JPA / Hibernate 可静态推导的 SQL；运行应用后，捕获真实参数、耗时与调用位置，从慢查询直接跳回源码。预览结果可以继续执行、查看执行计划，也可以反向生成 MyBatis-Plus Java 代码。
 
-[官网与在线文档](https://sql-visualizer.jvtools.cn) · [插件市场](https://plugins.jetbrains.com/plugin/33633-sql-visualizer) · [快速开始](https://sql-visualizer.jvtools.cn/guide/getting-started) · [更新记录](CHANGELOG.md) · [问题反馈](https://sql-visualizer.jvtools.cn/about/feedback) · [GitHub](https://github.com/SongRenShuo/mybatis-plus-sql-visualizer)
+[官网与在线文档](https://sql-visualizer.jvtools.cn) · [插件市场](https://plugins.jetbrains.com/plugin/33633-mybatis-sql-visualizer) · [快速开始](https://sql-visualizer.jvtools.cn/guide/getting-started) · [更新记录](CHANGELOG.md) · [问题反馈](https://sql-visualizer.jvtools.cn/about/feedback) · [GitHub](https://github.com/SongRenShuo/mybatis-plus-sql-visualizer)
 
-> 用着顺手的话，留一条评价吧——你的一句真实体验，比十次下载更能帮到后来的人：[JetBrains Marketplace 评分](https://plugins.jetbrains.com/plugin/33633-sql-visualizer/reviews)
-> If it saves you time, an honest review helps the next user find it: [Rate on JetBrains Marketplace](https://plugins.jetbrains.com/plugin/33633-sql-visualizer/reviews)
+> 用着顺手的话，留一条评价吧——你的一句真实体验，比十次下载更能帮到后来的人：[JetBrains Marketplace 评分](https://plugins.jetbrains.com/plugin/33633-mybatis-sql-visualizer/reviews)
+> If it saves you time, an honest review helps the next user find it: [Rate on JetBrains Marketplace](https://plugins.jetbrains.com/plugin/33633-mybatis-sql-visualizer/reviews)
 
 支持 IntelliJ IDEA 2024.3 及以上版本。Community 版可使用静态预览、日志捕获、代码转换等核心能力；内嵌执行控制台与数据库表入口需要 Ultimate 的 Database Tools。MCP 接入需要 IDEA 2025.2+ 及可用的 MCP Server。
 
@@ -145,7 +145,7 @@ Claude Code、Cursor、JetBrains AI Assistant 等客户端可经 IDEA MCP Server
 
 ## 安装与开始使用
 
-1. 在 `Settings → Plugins → Marketplace` 搜索 **SQL Visualizer**，或打开 [插件市场页面](https://plugins.jetbrains.com/plugin/33633-sql-visualizer) 安装。
+1. 在 `Settings → Plugins → Marketplace` 搜索 **SQL Visualizer**，或打开 [插件市场页面](https://plugins.jetbrains.com/plugin/33633-mybatis-sql-visualizer) 安装。
 2. 打开业务工程，在可识别的 Wrapper、Mapper XML、注解或 JPA 查询旁点击预览图标；也可按 `Alt+Shift+Q`（macOS 为 `Option+Shift+Q`）。
 3. 在预览左侧切换条件、填写参数，右侧查看或复制 SQL。需要执行时先在 Database 工具窗口配置数据源。
 4. 要查看真实执行，直接运行应用即可（增强捕获默认开启）；在「SQL Visualizer」工具窗口查看日志。若在设置中关闭了增强捕获，可开启应用 SQL 日志后使用控制台通道。

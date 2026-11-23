@@ -50,7 +50,7 @@
     <description><![CDATA[
         <p><b>MyBatis SQL preview with real parameters.</b> Renders MyBatis-Plus, JPA, JdbcTemplate and iBatis queries into executable SQL with real parameter values, before the server starts.</p>
         <p><b>服务未启，SQL 先知</b>——在 IntelliJ IDEA 内把 MyBatis-Plus、JPA、JdbcTemplate 查询还原为可执行 SQL，参数自动回填。</p>
-        <p><a href="https://sql-visualizer.jvtools.cn">中文文档</a> · <a href="https://sql-visualizer.jvtools.cn/en/">English Docs</a> · <a href="https://sql-visualizer.jvtools.cn/about/feedback">需求池 / Feedback</a> · <a href="https://plugins.jetbrains.com/plugin/33633-sql-visualizer">Screenshots</a></p>
+        <p><a href="https://sql-visualizer.jvtools.cn">中文文档</a> · <a href="https://sql-visualizer.jvtools.cn/en/">English Docs</a> · <a href="https://sql-visualizer.jvtools.cn/about/feedback">需求池 / Feedback</a> · <a href="https://plugins.jetbrains.com/plugin/33633-mybatis-sql-visualizer">Screenshots</a></p>
 
         <h3>中文</h3>
         <ul>

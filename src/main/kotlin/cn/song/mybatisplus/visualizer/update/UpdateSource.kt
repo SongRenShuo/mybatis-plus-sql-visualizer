@@ -55,7 +55,7 @@ object UpdateSource {
      * 值与仓内发行页 `src/main/resources/html/marketplace-custom-page.html` 的 Marketplace 链接
      * 同源（此前无 Kotlin 常量，V114② 半数证伪——本常量为首个可复用落点）。
      */
-    const val MARKETPLACE_URL = "https://plugins.jetbrains.com/plugin/33633-sql-visualizer"
+    const val MARKETPLACE_URL = "https://plugins.jetbrains.com/plugin/33633-mybatis-sql-visualizer"
 
     /** 实际清单 URL（系统属性覆盖优先；属性空白视为未设置）。 */
     fun manifestUrl(): String =
