@@ -163,7 +163,7 @@ See the exact SQL your code will run — before the server starts. SQL Visualize
 | 中文文档 | `https://sql-visualizer.jvtools.cn/`（VitePress 中文站，导航含 /guide /features） |
 | English Docs | `https://sql-visualizer.jvtools.cn/en/`（英文站，实测在位） |
 | 需求池 | `https://sql-visualizer.jvtools.cn/about/feedback`（现描述里已用） |
-| Marketplace | `https://plugins.jetbrains.com/plugin/33633-sql-visualizer`（截图页） |
+| Marketplace | `https://plugins.jetbrains.com/plugin/33633-mybatis-sql-visualizer`（截图页） |
 
 形态：一条 `<p>` 内四个内联 `<a>`，`·` 分隔，**标签双语并列**（参考件的 `Issues \| BiliBili \| 中文文档` 同形；本仓站点本身分中英两入口，双语标签让任一语言读者都能找到自己那侧）。不再像现状那样在两种语言里各写一遍链接段与反馈段。
 

@@ -230,7 +230,7 @@ XmlSerializer 检测不到引用变化，不触发 XML 写入。
 
 ## 产品显示名（2026-09-10 用户定例，原独立记忆收编）
 
-- 显示名一律「SQL Visualizer」（v2026.9.2 更名），新写文案（官网/README/插件描述/文档）禁现旧名 MyBatis-Plus SQL Visualizer。例外：仓库 URL `mybatis-plus-sql-visualizer`、Marketplace slug `33633-sql-visualizer`、历史存档不改；更名说明句允许一次性「（原 MyBatis-Plus SQL Visualizer）」。
+- 显示名一律「SQL Visualizer」（v2026.9.2 更名），新写文案（官网/README/插件描述/文档）禁现旧名 MyBatis-Plus SQL Visualizer。例外：仓库 URL `mybatis-plus-sql-visualizer`、Marketplace slug `33633-mybatis-sql-visualizer`、历史存档不改；更名说明句允许一次性「（原 MyBatis-Plus SQL Visualizer）」。
 
 ## 临时截图不入 docs/images（2026-09-10 用户定例，原独立记忆收编）
 
