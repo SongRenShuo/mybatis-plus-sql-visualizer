@@ -145,7 +145,7 @@ Claude Code、Cursor、JetBrains AI Assistant 等客户端可经 IDEA MCP Server
 
 ## 安装与开始使用
 
-1. 在 `Settings → Plugins → Marketplace` 搜索 **SQL Visualizer**，或打开 [插件市场页面](https://plugins.jetbrains.com/plugin/33633-mybatis-sql-visualizer) 安装。
+1. 在 `Settings → Plugins → Marketplace` 搜索 **MyBatis SQL Visualizer**（作者 SongRenShuo），或打开 [插件市场页面](https://plugins.jetbrains.com/plugin/33633-mybatis-sql-visualizer) 安装。
 2. 打开业务工程，在可识别的 Wrapper、Mapper XML、注解或 JPA 查询旁点击预览图标；也可按 `Alt+Shift+Q`（macOS 为 `Option+Shift+Q`）。
 3. 在预览左侧切换条件、填写参数，右侧查看或复制 SQL。需要执行时先在 Database 工具窗口配置数据源。
 4. 要查看真实执行，直接运行应用即可（增强捕获默认开启）；在「SQL Visualizer」工具窗口查看日志。若在设置中关闭了增强捕获，可开启应用 SQL 日志后使用控制台通道。
