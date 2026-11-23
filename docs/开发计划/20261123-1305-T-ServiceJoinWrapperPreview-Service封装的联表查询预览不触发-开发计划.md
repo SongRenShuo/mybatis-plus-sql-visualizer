@@ -2,28 +2,28 @@
 
 - **日期**：2026-11-23 13:05
 - **编号声明**：本册新占 **D256**（D255 册 :4 声明「下一全新 D256 / V246 / O-164」；`grep -rn "D256" docs/` 除该指针外零占用）；下一全新 **D257 / V247 / O-165**。
-- **来源**：用户 2026-11-23 真机反馈（两张截图）——业务层 `expPreMasterFileRepository.selectJoinList(ExpPreMasterFileDTO.class, jwEpmfe)` 无法触发 SQL 预览；用户补充「ServiceImpl 是 plus 的」，即自研 `CommonServiceImpl` 继承 MyBatis-Plus `ServiceImpl`、把 MPJ 的 `selectJoin*` 再包了一层。
+- **来源**：用户 2026-11-23 真机反馈（两张截图）——业务层 `deviceJoinRepository.selectJoinList(DeviceStationDTO.class, wrapper)` 无法触发 SQL 预览；用户补充「ServiceImpl 是 plus 的」，即自研 `FrameworkServiceImpl` 继承 MyBatis-Plus `ServiceImpl`、把 MPJ 的 `selectJoin*` 再包了一层。
 - **范围**：`psi/WrapperLocator` 的 Wrapper 类型识别（父链/继承）+ `psi/WrapperAnchorDetector` 的锚点集合 + `psi/BatchOperationConverter` 的错误 SQL 守卫；不改 converter 渲染语义、不改执行链、不改面板布局。
 
 ## 一、现象与复现（按用户截图逐步对照）
 
 | # | 用户动作 | 实际观察 | 期望 |
 |---|---|---|---|
-| S1 | 光标放在 `expPreMasterFileRepository.selectJoinList(...)` 调用行，触发预览 | 无任何结果（不弹面板 / 提示无可用预览） | 产出 `SELECT ... FROM ... WHERE ...`（含联表时含 JOIN） |
-| S2 | 查看 `JoinLambdaWrapper<ExpPreMasterFileEntity> jwEpmfe = new JoinLambdaWrapper<>();` 声明行 | 无 gutter 预览图标 | 有图标，点击可预览 |
+| S1 | 光标放在 `deviceJoinRepository.selectJoinList(...)` 调用行，触发预览 | 无任何结果（不弹面板 / 提示无可用预览） | 产出 `SELECT ... FROM ... WHERE ...`（含联表时含 JOIN） |
+| S2 | 查看 `CustomJoinWrapper<DeviceInfoEntity> wrapper = new CustomJoinWrapper<>();` 声明行 | 无 gutter 预览图标 | 有图标，点击可预览 |
 | S3 | 把 wrapper 换成 `MPJLambdaWrapper`（官方类名），其余结构不动 | 可预览 | 与 S1/S2 一致 |
 
 ### 复现装置（已落地，两处）
 
 1. **demo 项目用例**（用户点验用）：`mybatis-plus-sql-visualizer-demo/mybatis-plus-join-demo`
-   - `cn/song/mpjdemo/customwrapper/BaseJoin.java`：自研 wrapper 公共基接口（`extends MPJBaseJoin`）
+   - `cn/song/mpjdemo/customwrapper/JoinBase.java`：自研 wrapper 公共基接口（`extends MPJBaseJoin`）
    - `cn/song/mpjdemo/customwrapper/Wrapper.java`：自研最底层抽象基类（`extends MPJLambdaWrapper`，复刻用户第四层）
-   - `cn/song/mpjdemo/customwrapper/AbstractJoinWrapper.java`：自研 join 抽象基类（`extends Wrapper<T>`，复刻用户第三层）
-   - `cn/song/mpjdemo/customwrapper/AbstractLambdaJoinWrapper.java`：自研 lambda 中间基类（`extends AbstractJoinWrapper`，复刻用户第二层）
-   - `cn/song/mpjdemo/customwrapper/JoinLambdaWrapper.java`：自研子类（`extends AbstractLambdaJoinWrapper`，复刻用户第一层）
-   - `cn/song/mpjdemo/customwrapper/CommonService.java` / `CommonServiceImpl.java`：自研 Service 封装（`extends ServiceImpl`）
-   - `cn/song/mpjdemo/customwrapper/ExpPreMasterFileRepository.java` / `...Impl.java`：Repository 形态
-   - `cn/song/mpjdemo/customwrapper/ExpPreMasterFileQueryService.java`：三个调用点（S1 原样 / 带 leftJoin / 官方 wrapper 对照）
+   - `cn/song/mpjdemo/customwrapper/AbstractJoinBaseWrapper.java`：自研 join 抽象基类（`extends BaseWrapper<T>`，复刻用户第三层）
+   - `cn/song/mpjdemo/customwrapper/AbstractLambdaJoinBaseWrapper.java`：自研 lambda 中间基类（`extends AbstractJoinBaseWrapper`，复刻用户第二层）
+   - `cn/song/mpjdemo/customwrapper/CustomJoinWrapper.java`：自研子类（`extends AbstractLambdaJoinBaseWrapper`，复刻用户第一层）
+   - `cn/song/mpjdemo/customwrapper/FrameworkService.java` / `FrameworkServiceImpl.java`：自研 Service 封装（`extends ServiceImpl`）
+   - `cn/song/mpjdemo/customwrapper/DeviceJoinRepository.java` / `...Impl.java`：Repository 形态
+   - `cn/song/mpjdemo/customwrapper/DeviceJoinQueryService.java`：三个调用点（S1 原样 / 带 leftJoin / 官方 wrapper 对照）
    - 编译验证：`mvnd -o -DskipTests compile` 通过（2026-11-23 12:35）
 2. **插件仓 PSI 复现测试**：`src/test/kotlin/.../psi/CustomWrapperServicePreviewTest.kt`
    - 定向读数：见 §九实施记录（本计划落盘时同步回填）
@@ -32,7 +32,7 @@
 
 | # | 事实 | 证据 |
 |---|---|---|
-| F1 | **Wrapper 类型识别只按简单类名白名单**：`detectWrapperType` 用 `PsiClassType.className` 与 13 个官方类名逐一匹配，`JoinLambdaWrapper` 不在集合内 | `psi/WrapperLocator.kt:1702-1727` |
+| F1 | **Wrapper 类型识别只按简单类名白名单**：`detectWrapperType` 用 `PsiClassType.className` 与 13 个官方类名逐一匹配，`CustomJoinWrapper` 不在集合内 | `psi/WrapperLocator.kt:1702-1727` |
 | F2 | **变量判定没有父链回退**：`isWrapperVariable` 先 `detectWrapperType(variable.type)`，再仅对字面基类型 `Wrapper` / `AbstractWrapper` 做 initializer 降级；声明类型是自研子类时直接 `return false` | `psi/WrapperLocator.kt:287-297`、`:337-338` |
 | F3 | **链解析三顺位共用同一浅层判定**：`buildChain` 依次 `detectWrapperType(variable.type)` → `detectWrapperTypeFromInitializer` → `wrapperTypeFromInitializerChain`，三者最终都落到 `detectWrapperType`，自定义子类全落空 → `locateWithTable` 返回 null | `psi/WrapperLocator.kt:963-971`、`:344-354` |
 | F4 | **Service 封装不是断点**：`findWrapperVariable` 已能在任何方法调用处扫「直接实参」，把实参引用 resolve 成 wrapper 变量；只要类型认得出，`repository.selectJoinList(..., wrapper)` 调用行即可定位 | `psi/WrapperLocator.kt:239-262`（③ 实参分支） |
@@ -43,13 +43,13 @@
 | F9 | **Maps 族既有契约**：`selectJoinMaps` / `selectJoinMapsPage` 在批量注册表内，且按 T-MapResultVo 契约「调用行独立承载锚点」；`selectJoinList` / `selectJoinMap` / `selectJoinCount` 在既有不变量用例里期望**只有变量声明 1 个锚点** | `test/.../WrapperAnchorDetectorJpaAndWholeFileTest.kt:191-337` |
 | F10 | **现有 MPJ 测试的锚点都在工厂链首**（`JoinWrappers.lambda(...)`），没有「anchor 落在 `selectJoinList` 调用行」的用例 | `test/.../WrapperLocatorTest.kt:498-537` |
 | F11 | **父链识别的同构先例已存在**：`hasMpCrudReceiver` 沿 `superTypes` 走 3 层判 `BaseMapper`/`IService`/`ServiceImpl`/`AbstractModel`（FQN 优先、简名兜底） | `psi/BatchOperationConverter.kt:341-392` |
-| F12 | **用户 `JoinLambdaWrapper` 的完整四层声明已取证**（2026-11-23 三张类声明截图）：<br>`JoinLambdaWrapper<T> extends AbstractLambdaJoinWrapper<T, JoinLambdaWrapper<T>> implements Query<JoinLambdaWrapper<T>>, Chain<T>, SelectWrapper<T, JoinLambdaWrapper<T>>`<br>`AbstractLambdaJoinWrapper<T, Children> extends AbstractJoinWrapper<T, Children> implements QueryJoin<Children, T>`<br>`AbstractJoinWrapper<T, Children> extends Wrapper<T> implements Compare<Children>, CompareStr<Children, String>, Nested<Children, Children> ...`<br>注意 `extends Wrapper<T>` 是**类继承**，而 MP 的 `com.baomidou...Wrapper` 是接口 → 这套是「MPJ 整套复制改名 + 自研 `Wrapper` 抽象类」的内部库 | 用户截图；`grep`/Maven 中央仓均 0 命中 `AbstractLambdaJoinWrapper` / `AbstractJoinWrapper`（非公开库） |
-| F13 | **继承链层数与落点（四层自研 + MPJ）**：`JoinLambdaWrapper`(0) → `AbstractLambdaJoinWrapper`(1) → `AbstractJoinWrapper`(2) → 自研 `Wrapper`(3) → 某一 MPJ 基类（`MPJAbstractLambdaWrapper` 1.3.x / `JoinAbstractLambdaWrapper` 1.4+，第 4 跳）→ `...AbstractWrapper`(5) → MP `Wrapper` 接口(6)。**简单类名白名单在 0~5 跳全部落空**；识别只能靠三样东西：①第 4~6 跳的 `com.github.yulichang.` / `com.baomidou.mybatisplus.` FQN；②接口同名组合（`QueryJoin` + `Chain` + `SelectWrapper` + `MPJBaseJoin`）；③链上 join 方法 | `javap` 1.5.8/1.3.8 基类名实证；用户四层声明 |
-| F14 | **自研 `Wrapper`(3) 的父类仍是未知数**：截图只显示 `AbstractJoinWrapper extends Wrapper<T>`，`Wrapper<T>` 自身的 `extends/implements` 未给——若它最终 `implements com.baomidou...Wrapper` 或 `extends ...AbstractWrapper`，父链可命中 MP 包；若完全独立，则只能靠接口同名组合/链方法启发或配置兜底 | 待用户补一行 `class Wrapper<T> extends ______` |
+| F12 | **用户 `CustomJoinWrapper` 的完整四层声明已取证**（2026-11-23 三张类声明截图）：<br>`CustomJoinWrapper<T> extends AbstractLambdaJoinBaseWrapper<T, CustomJoinWrapper<T>> implements Query<CustomJoinWrapper<T>>, Chain<T>, SelectWrapper<T, CustomJoinWrapper<T>>`<br>`AbstractLambdaJoinBaseWrapper<T, Children> extends AbstractJoinBaseWrapper<T, Children> implements QueryJoin<Children, T>`<br>`AbstractJoinBaseWrapper<T, Children> extends BaseWrapper<T> implements Compare<Children>, CompareStr<Children, String>, Nested<Children, Children> ...`<br>注意 `extends BaseWrapper<T>` 是**类继承**，而 MP 的 `com.baomidou...Wrapper` 是接口 → 这套是「MPJ 整套复制改名 + 自研 `BaseWrapper` 抽象类」的内部库 | 用户截图；`grep`/Maven 中央仓均 0 命中 `AbstractLambdaJoinBaseWrapper` / `AbstractJoinBaseWrapper`（非公开库） |
+| F13 | **继承链层数与落点（四层自研 + MPJ）**：`CustomJoinWrapper`(0) → `AbstractLambdaJoinBaseWrapper`(1) → `AbstractJoinBaseWrapper`(2) → 自研 `BaseWrapper`(3) → 某一 MPJ 基类（`MPJAbstractLambdaWrapper` 1.3.x / `JoinAbstractLambdaWrapper` 1.4+，第 4 跳）→ `...AbstractWrapper`(5) → MP `Wrapper` 接口(6)。**简单类名白名单在 0~5 跳全部落空**；识别只能靠三样东西：①第 4~6 跳的 `com.github.yulichang.` / `com.baomidou.mybatisplus.` FQN；②接口同名组合（`QueryJoin` + `Chain` + `SelectWrapper` + `MPJBaseJoin`）；③链上 join 方法 | `javap` 1.5.8/1.3.8 基类名实证；用户四层声明 |
+| F14 | **自研 `BaseWrapper`(3) 的父类仍是未知数**：截图只显示 `AbstractJoinBaseWrapper extends BaseWrapper<T>`，`BaseWrapper<T>` 自身的 `extends/implements` 未给——若它最终 `implements com.baomidou...Wrapper` 或 `extends ...AbstractWrapper`，父链可命中 MP 包；若完全独立，则只能靠接口同名组合/链方法启发或配置兜底 | 待用户补一行 `class BaseWrapper<T> extends ______` |
 
 ### 根因链
 
-1. **类型识别层**（F1/F2/F3/F6）：插件用「官方类名枚举」认 Wrapper。用户的 `JoinLambdaWrapper` 是自研子类（父链最终接到 MPJ/MP），简单类名不在枚举内 → 变量不是 Wrapper、链首不是 Wrapper、锚点不亮、预览返回 null。
+1. **类型识别层**（F1/F2/F3/F6）：插件用「官方类名枚举」认 Wrapper。用户的 `CustomJoinWrapper` 是自研子类（父链最终接到 MPJ/MP），简单类名不在枚举内 → 变量不是 Wrapper、链首不是 Wrapper、锚点不亮、预览返回 null。
 2. **调用点层**（F4/F8）：Service 封装、`getBaseMapper()` 转发、Repository 注入形态都**不是**阻断点——实参反查已能覆盖；同一结构换官方类名立刻可用，证明断点唯一。
 3. **锚点/注册表层**（F5/F9/F10）：`selectJoinList` / `selectJoinOne` / `selectJoinMap` 未在任何注册表，调用行天然不是锚点（这是既有契约，非本次新增缺陷，但用户期望在此处触发）。
 4. **错误 SQL 风险层**（F7）：若为了「调用行能点」而把 join 族塞进 `BATCH_OPERATIONS`，批量模板会用 DTO 当前实体、用 `WHERE id IN` 当条件，输出**比无预览更糟的错误 SQL**——修复必须同时加守卫。
@@ -85,12 +85,12 @@ fun detectWrapperTypeDeep(type: PsiType?): WrapperType? =
     }
 ```
 
-- `looksLikeWrapperName`：`endsWith("Wrapper") || endsWith("Join") || endsWith("Chain")`（`JoinLambdaWrapper` ✓、`BaseJoin` ✓、`String`/`List`/`Service` ✗）。
+- `looksLikeWrapperName`：`endsWith("Wrapper") || endsWith("Join") || endsWith("Chain")`（`CustomJoinWrapper` ✓、`JoinBase` ✓、`String`/`List`/`Service` ✗）。
 - `wrapperTypeFromSuperChain`：沿 `PsiClassType.resolve()?.superTypes` 递归（**深度上限 8**——F13 实测用户链路 0~6 跳，留一档余量），按以下顺序判定：
   1. **FQN 前缀族**（最强证据）：任意祖先/接口 `canonicalText` 以 `com.github.yulichang.` 开头 → `MPJ_LAMBDA`（`Chain`/`SelectWrapper`/`MPJBaseJoin`/`JoinAbstract*`/`MPJAbstract*` 均属此族）；以 `com.baomidou.mybatisplus.` 开头且简单名含 `Abstract*Wrapper`/`Wrapper` → **MP 家族确认**，继续第 3 步细分；
   2. **接口同名组合**（复制改名场景的兜底，F12）：祖先/接口简单名**同时**命中 `QueryJoin` 与 `Chain`（或 `SelectWrapper` / `MPJBaseJoin` 任一）→ `MPJ_LAMBDA`。单个 `Query`/`Chain` 不认（泛名，防误判）；三条任意组合出现即判定，因为这套接口名组合在其它 ORM 中不共存；
   3. **MP 家族细分**：家族已确认（第 1 步命中 baomidou）后，简单名含 `Lambda` → `LAMBDA_QUERY`；含 `Join` 或链上出现 `leftJoin`/`rightJoin`/`innerJoin`（3 参以上）→ `MPJ_LAMBDA`；否则 `QUERY`；
-  4. **链方法启发**（最后兜底，F14 场景）：父链完全不可得（依赖未索引 / 自研 `Wrapper` 不接 MP 包）时，若变量初始化链的方法名集合含 join 方法（`leftJoin`/`rightJoin`/`innerJoin`/`selectAs`/`selectCollection`）→ `MPJ_LAMBDA`；若只含 `eq/ne/like/orderBy` 等通用条件方法**且**变量被已知 MP 消费方法（`selectList`/`selectOne`/`list`/`page`）引用 → `LAMBDA_QUERY`；
+  4. **链方法启发**（最后兜底，F14 场景）：父链完全不可得（依赖未索引 / 自研 `BaseWrapper` 不接 MP 包）时，若变量初始化链的方法名集合含 join 方法（`leftJoin`/`rightJoin`/`innerJoin`/`selectAs`/`selectCollection`）→ `MPJ_LAMBDA`；若只含 `eq/ne/like/orderBy` 等通用条件方法**且**变量被已知 MP 消费方法（`selectList`/`selectOne`/`list`/`page`）引用 → `LAMBDA_QUERY`；
   5. 全部落空 → null（保持现状）。
 
 | 父链命中 | 映射 |
@@ -140,9 +140,9 @@ fun detectWrapperTypeDeep(type: PsiType?): WrapperType? =
 
 | # | 前提 | 证伪方式 | 不成立时的处置 |
 |---|---|---|---|
-| P1 | 用户的 `JoinLambdaWrapper` 继承 MPJ `MPJLambdaWrapper` 或最终继承 MP `AbstractWrapper` | **部分确认**：四层声明已取证（F12/F13），0~3 跳全是自研类名；第 4~6 跳是否落到 MPJ/MP 包**取决于最底层自研 `Wrapper` 的声明**（F14 未给） | 若自研 `Wrapper` 完全不接 MP 包：父链规则 1/3 失效，退到规则 2（接口同名组合）或规则 4（链方法启发）；仍不成立则走 M4 配置兜底 |
-| P1b | 最底层自研 `Wrapper<T>` 最终 `implements com.baomidou...Wrapper` 或 `extends ...AbstractWrapper` | **待用户补一行类声明**：`public abstract class Wrapper<T> extends ______` / `implements ______` | 同上：决定是走 FQN 父链（低风险）还是接口/链方法启发（需更严的反向负例） |
-| P2 | 用户的 `BaseJoin<T>` 继承 MPJ `MPJBaseJoin` | 同上 | 不影响定位（wrapper 实例类型是 `JoinLambdaWrapper`），只影响父子判定文案 |
+| P1 | 用户的 `CustomJoinWrapper` 继承 MPJ `MPJLambdaWrapper` 或最终继承 MP `AbstractWrapper` | **部分确认**：四层声明已取证（F12/F13），0~3 跳全是自研类名；第 4~6 跳是否落到 MPJ/MP 包**取决于最底层自研 `BaseWrapper` 的声明**（F14 未给） | 若自研 `BaseWrapper` 完全不接 MP 包：父链规则 1/3 失效，退到规则 2（接口同名组合）或规则 4（链方法启发）；仍不成立则走 M4 配置兜底 |
+| P1b | 最底层自研 `Wrapper<T>` 最终 `implements com.baomidou...Wrapper` 或 `extends ...AbstractWrapper` | **待用户补一行类声明**：`public abstract class BaseWrapper<T> extends ______` / `implements ______` | 同上：决定是走 FQN 父链（低风险）还是接口/链方法启发（需更严的反向负例） |
+| P2 | 用户的 `JoinBase<T>` 继承 MPJ `MPJBaseJoin` | 同上 | 不影响定位（wrapper 实例类型是 `CustomJoinWrapper`），只影响父子判定文案 |
 | P3 | 用户触发方式是 gutter 图标点击 / Ctrl+Enter / 右键菜单（三者至少其一） | 询问用户 | 若只用 gutter：M2 优先级提高；若只用快捷键：M2 可延后 |
 | P4 | 父链 resolve 在真实大工程 100ms 内、无 EDT 阻塞 | 在 demo/大语料上打点 | 加 per-class 缓存 + 名字前门；仍超标则只在预览链路启用、gutter 侧维持浅层 |
 | P5 | `selectJoinList(BaseJoin)` 单参重载也在使用 | 用户代码搜索 | 单参形态无实体类线索，需从 wrapper 泛型取实体（`buildChain` 已支持），M2 同批覆盖 |
@@ -151,10 +151,10 @@ fun detectWrapperTypeDeep(type: PsiType?): WrapperType? =
 
 | 来源 | 取证结论 |
 |---|---|
-| `com.github.yulichang:mybatis-plus-join-core`（当前本地 1.5.6~1.5.9 + Maven 历史 0.0.1~1.5.9） | 全部版本均无 `JoinLambdaWrapper` 类名（wrapper 类只有 `MPJLambdaWrapper` / `MPJQueryWrapper` / `UpdateJoinWrapper` / `DeleteJoinWrapper`）；基类名随版本变：**1.3.8 = `MPJAbstractLambdaWrapper` / `MPJAbstractWrapper`，1.4+ = `JoinAbstractLambdaWrapper` / `JoinAbstractWrapper`**（`javap` 实证），两者最终都 `extends com.baomidou...Wrapper`。用户类名 `AbstractLambdaJoinWrapper` 与之都不同 → **自研中间层**，其上才是 MPJ 基类 |
-| `icu.mhb:mybatis-plus-join-core`（另一套 MPJ，2.0.0~2.1.3） | 有 `icu.mhb.mybatisplus.plugln.core.JoinLambdaWrapper`，但：①无无参构造（构造器均带 `Class<T>`/`T`）；②Service 方法名是 `joinList(Wrapper, Class)` / `joinGetOne` / `joinCount`，**不是** `selectJoinList(Class, BaseJoin)`；③`JoinServiceImpl extends ServiceImpl<M,T>`（与用户的自研 `CommonServiceImpl` 同构但方法名不同）。与用户截图写法不匹配 |
-| 用户自研（`CommonService` / `CommonServiceImpl` / `BaseJoin` / `ExpPreMasterFileRepository`） | 与截图一致：自研 Service 基类 + 自研 wrapper 公共基接口，wrapper 为带继承的子类 |
-| 公开库整体搜索 | `AbstractLambdaJoinWrapper` / `AbstractJoinWrapper` 在 Maven 中央仓 **0 命中**、公开 Web 搜索也无同名类；`QueryJoin` 只存在于 yulichang MPJ（`com.github.yulichang.wrapper.interfaces.QueryJoin`）。结论：现场是**把 MPJ 整套复制改名**的内部库（自研 `Wrapper` 抽象类在最底层），不是任何已发布依赖的固定版本 |
+| `com.github.yulichang:mybatis-plus-join-core`（当前本地 1.5.6~1.5.9 + Maven 历史 0.0.1~1.5.9） | 全部版本均无 `CustomJoinWrapper` 类名（wrapper 类只有 `MPJLambdaWrapper` / `MPJQueryWrapper` / `UpdateJoinWrapper` / `DeleteJoinWrapper`）；基类名随版本变：**1.3.8 = `MPJAbstractLambdaWrapper` / `MPJAbstractWrapper`，1.4+ = `JoinAbstractLambdaWrapper` / `JoinAbstractWrapper`**（`javap` 实证），两者最终都 `extends com.baomidou...Wrapper`。用户类名 `AbstractLambdaJoinBaseWrapper` 与之都不同 → **自研中间层**，其上才是 MPJ 基类 |
+| `icu.mhb:mybatis-plus-join-core`（另一套 MPJ，2.0.0~2.1.3） | 有 `icu.mhb.mybatisplus.plugln.core.CustomJoinWrapper`，但：①无无参构造（构造器均带 `Class<T>`/`T`）；②Service 方法名是 `joinList(Wrapper, Class)` / `joinGetOne` / `joinCount`，**不是** `selectJoinList(Class, BaseJoin)`；③`JoinServiceImpl extends ServiceImpl<M,T>`（与用户的自研 `FrameworkServiceImpl` 同构但方法名不同）。与用户截图写法不匹配 |
+| 用户自研（`FrameworkService` / `FrameworkServiceImpl` / `JoinBase` / `DeviceJoinRepository`） | 与截图一致：自研 Service 基类 + 自研 wrapper 公共基接口，wrapper 为带继承的子类 |
+| 公开库整体搜索 | `AbstractLambdaJoinBaseWrapper` / `AbstractJoinBaseWrapper` 在 Maven 中央仓 **0 命中**、公开 Web 搜索也无同名类；`QueryJoin` 只存在于 yulichang MPJ（`com.github.yulichang.wrapper.interfaces.QueryJoin`）。结论：现场是**把 MPJ 整套复制改名**的内部库（自研 `BaseWrapper` 抽象类在最底层），不是任何已发布依赖的固定版本 |
 
 > M1 追加一条渲染兜底：父链命中 `AbstractLambdaWrapper`/`AbstractWrapper` 但无法细分 lambda/MPJ 时，若链上出现 `leftJoin`/`rightJoin`/`innerJoin`（3 参及以上）→ 按 `MPJ_LAMBDA` 渲染（保住 join 语义）；否则按 `LAMBDA_QUERY`。
 
@@ -165,7 +165,7 @@ fun detectWrapperTypeDeep(type: PsiType?): WrapperType? =
 | 测试 | 断言 |
 |---|---|
 | `CustomWrapperServicePreviewTest`（已落地） | 自定义子类调用行/链内 → null；官方类名 → 命中；gutter 锚点同口径；`SqlPreviewService.preview` 同口径 |
-| `WrapperTypeSuperChainTest`（新增） | ①用户真实四层链 `JoinLambdaWrapper → AbstractLambdaJoinWrapper → AbstractJoinWrapper → Wrapper → MPJLambdaWrapper` → MPJ_LAMBDA；②`Xxx extends LambdaQueryWrapper` → LAMBDA_QUERY；③`superTypes` 只剩接口 `QueryJoin` + `Chain` + `SelectWrapper`（父类 resolve 失败）→ 仍判 MPJ_LAMBDA；④只有单个 `Chain` 接口、无组合 → null（防泛名误判）；⑤普通类 `extends Object` → null；⑥名字不像 Wrapper 的类零 resolve（探针计数）；⑦深度超限（9 层）→ null；⑧链上有 `leftJoin`、父链全断 → MPJ_LAMBDA（规则 4） |
+| `WrapperTypeSuperChainTest`（新增） | ①用户真实四层链 `CustomJoinWrapper → AbstractLambdaJoinBaseWrapper → AbstractJoinBaseWrapper → BaseWrapper → MPJLambdaWrapper` → MPJ_LAMBDA；②`Xxx extends LambdaQueryWrapper` → LAMBDA_QUERY；③`superTypes` 只剩接口 `QueryJoin` + `Chain` + `SelectWrapper`（父类 resolve 失败）→ 仍判 MPJ_LAMBDA；④只有单个 `Chain` 接口、无组合 → null（防泛名误判）；⑤普通类 `extends Object` → null；⑥名字不像 Wrapper 的类零 resolve（探针计数）；⑦深度超限（9 层）→ null；⑧链上有 `leftJoin`、父链全断 → MPJ_LAMBDA（规则 4） |
 | `WrapperAnchorDetectorJpaAndWholeFileTest`（改期望） | 三个不变量期望集合加入 `selectJoinList` / `selectJoinMap` / `selectJoinCount` 的调用行锚点（契约更新） |
 | `BatchOperationConverterJoinGuardTest`（新增） | `mapper.selectJoinList(Dto.class, wrapper)` / `selectJoinMaps(unrecognizedWrapper)` → `convert` 返回 null，不产出 `WHERE id IN` |
 | `MpjJoinOnAliasConverterTest`（不改） | 回归保持 |
@@ -190,14 +190,14 @@ fun detectWrapperTypeDeep(type: PsiType?): WrapperType? =
 
 ## 七、验收标准（用户真机，编号步骤）
 
-1. 打开 demo 工程 `mybatis-plus-join-demo`，进入 `ExpPreMasterFileQueryService.checkAllFileRead`；
-   光标放 `expPreMasterFileRepository.selectJoinList(...)` 行 → Ctrl+Enter（或右键「转换为 SQL」）：
+1. 打开 demo 工程 `mybatis-plus-join-demo`，进入 `DeviceJoinQueryService.queryDeviceList`；
+   光标放 `deviceJoinRepository.selectJoinList(...)` 行 → Ctrl+Enter（或右键「转换为 SQL」）：
    应弹出预览，SQL 形如
    `SELECT id, device_name, station_id FROM car_device_info WHERE share_scheme_id = ? AND device_name IN (?, ?, ?, ?) AND station_id <> 0`（列名/表名以实体注解为准）。
 2. 同一行左侧 gutter 应出现预览图标（M2 生效后）；点击结果与步骤 1 一致。
-3. `JoinLambdaWrapper<DeviceInfoEntity> jwEpmfe = new JoinLambdaWrapper<>();` 声明行左侧应有图标，点击可预览（M1 生效后）。
-4. `checkAllFileReadWithJoin`：预览应含 `LEFT JOIN station_info`（联表语义不丢）。
-5. `checkAllFileReadOfficialWrapper`：行为与修复前一致（无回归）。
+3. `CustomJoinWrapper<DeviceInfoEntity> wrapper = new CustomJoinWrapper<>();` 声明行左侧应有图标，点击可预览（M1 生效后）。
+4. `queryDeviceListWithJoin`：预览应含 `LEFT JOIN station_info`（联表语义不丢）。
+5. `queryDeviceListOfficialWrapper`：行为与修复前一致（无回归）。
 6. 负例：普通类上的 `selectJoinList`（如自定义非 MP 服务）不亮图标、不弹预览。
 
 ## 八、待拍板事项（默认按推荐执行，用户可改）
@@ -213,10 +213,10 @@ fun detectWrapperTypeDeep(type: PsiType?): WrapperType? =
 
 ### 复现阶段已回填（2026-11-23 13:18）
 
-- demo 新增 10 个文件（`customwrapper` 包 9 个 + `dto/ExpPreMasterFileDTO.java`）+ `CUSTOM-WRAPPER-REPRO.md` 点验说明。
-  - 首版 `JoinLambdaWrapper extends MPJLambdaWrapper`，`mvnd -o -DskipTests compile` 通过（12:35）。
-  - 收到第二张类声明截图后改为三层链（`JoinLambdaWrapper → AbstractLambdaJoinWrapper → MPJLambdaWrapper`），编译通过（13:06）。
-  - 收到四层类声明截图后改为**与现场完全同构的四层链**：`JoinLambdaWrapper → AbstractLambdaJoinWrapper → AbstractJoinWrapper → Wrapper → MPJLambdaWrapper`，`mvnd -o -DskipTests compile` 再次通过（13:15）。
+- demo 新增 10 个文件（`customwrapper` 包 9 个 + `dto/DeviceStationDTO.java`）+ `CUSTOM-WRAPPER-REPRO.md` 点验说明。
+  - 首版 `CustomJoinWrapper extends MPJLambdaWrapper`，`mvnd -o -DskipTests compile` 通过（12:35）。
+  - 收到第二张类声明截图后改为三层链（`CustomJoinWrapper → AbstractLambdaJoinBaseWrapper → MPJLambdaWrapper`），编译通过（13:06）。
+  - 收到四层类声明截图后改为**与现场完全同构的四层链**：`CustomJoinWrapper → AbstractLambdaJoinBaseWrapper → AbstractJoinBaseWrapper → BaseWrapper → MPJLambdaWrapper`，`mvnd -o -DskipTests compile` 再次通过（13:15）。
 - `CustomWrapperServicePreviewTest` 复现读数（四层链夹具）：**6 用例 / 0 失败**，XML `tests="6" failures="0" errors="0"`（2026-11-23 13:18:01，`BUILD SUCCESSFUL in 57s`）：
   - `testCustomWrapperSubclassAtCallSiteNotLocated`：自定义子类在**调用行**定位为 null（复现 S1）
   - `testCustomWrapperSubclassInsideChainNotLocated`：自定义子类在**链内**定位为 null
@@ -241,7 +241,7 @@ fun detectWrapperTypeDeep(type: PsiType?): WrapperType? =
 
 ### 实施期抓到的两个真缺口（计划外，已修）
 
-1. **规则 4 只扫初始化链**：用户现场是「声明 + 后续分步调用」（`w = new JoinLambdaWrapper<>(); w.eq(...)`），
+1. **规则 4 只扫初始化链**：用户现场是「声明 + 后续分步调用」（`w = new CustomJoinWrapper<>(); w.eq(...)`），
    首版只扫 `initializer`，链为空 → 规则 4 静默失效。`WrapperTypeSuperChainTest` 的规则 4 夹具当时也写成
    分步形态，首跑 2 红暴露；修法＝`wrapperTypeFromChainMethods` 增加 `ReferencesSearch` 分步调用扫描。
 2. **规则 4 消费集合漏 join 族**：`MP_CONSUMER_METHOD_NAMES` 首版没有 `selectJoin*`，而现场 wrapper
@@ -279,3 +279,12 @@ ui.SqlPreviewServiceOfficialApiTest               21/0
 
 > 未跑全量 `testShards` / 构建校验：按仓库三档分层，定向清单 + 反向验证已覆盖本次改动面；
 > 全量与 `verifyGate` 留在用户点名的收口批或发版前执行。未做 GUI 自动化验收，真机点验按 §七 步骤由用户执行。
+
+### 脱敏修订（2026-11-23）
+
+按用户要求，demo 与本文档中的现场类名 / 方法名 / 业务串已全部替换为**结构等价的脱敏命名**
+（`CustomJoinWrapper` / `AbstractLambdaJoinBaseWrapper` / `AbstractJoinBaseWrapper` / `BaseWrapper` /
+`FrameworkService` / `FrameworkServiceImpl` / `DeviceJoinRepository` / `DeviceStationDTO` 等）。
+继承层数、接口同名组合（`QueryJoin` + `Chain` + `SelectWrapper` + `MPJBaseJoin`）、
+`selectJoinList(Class, JoinBase)` 签名、Service 封装转发与分步调用形态全部不变；
+原始类声明与业务命名仅保留在用户侧，不进入仓库。
