@@ -766,6 +766,15 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "灵敏度=按用例内合成样本自证（含合法/违规两向样本），实施轮已实测。",
             ),
             GuardEntry(
+                "psi/BatchOperationJoinGuardTest.kt",
+                emptyList(),
+                "D256-M3 守卫（MPJ join 消费族错误 SQL）：判定内核在**生产代码** " +
+                    "BatchOperationConverter.isJoinFamilyRejected（测试侧不可注入合成样本），用例只断言 " +
+                    "convert() 的产出为 null / 非 null——无「返回违规点集合」的测试侧判定函数，故 decisionFns 留空；" +
+                    "灵敏度=摘掉守卫分支并临时把 join 族登记进 BATCH_OPERATIONS（本守卫要防的将来形态）后 " +
+                    "三条拒绝用例转红，还原复绿（实施轮实测，读数见提交信息）。",
+            ),
+            GuardEntry(
                 "convention/EnhancedCaptureDefaultOnGuardTest.kt",
                 emptyList(),
                 "增强捕获默认开启/确认流删除守卫（T-EnhancedCaptureDefaultOn）：判定内核内联于三个用例——" +
