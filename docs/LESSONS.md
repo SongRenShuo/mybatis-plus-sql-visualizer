@@ -1166,6 +1166,24 @@ ISE）与 fork 启动失败不重试，直接红。
 
 **Seen 1× (2026-11-21)**
 
+### L97 Heavy 沙盒的跨文件继承夹具要凑齐四件事：同 root、package 目录、source root 注册、Document 重写
+
+**规则**：在 `HeavyPlatformTestCase` 里造「父类与子类分处两个文件」的夹具时，四件事缺一即假红：
+① `createTestProjectStructure()` 每次调用都会新建结构——所有文件必须复用**同一个** root（测试内缓存）；
+② 文件落盘目录必须与 `package` 声明一致（`src/com/example/X.java`）——索引版 `findClass` 能命中，
+但 `extends` 引用解析会因包目录不匹配而恒 null；③ `src` 必须显式注册为模块 source root
+（`ModuleRootModificationUtil.updateModel` + `entry.addSourceFolder(src, false)`），否则同样 `superClass == null`；
+④ 重写已存在文件必须走 Document 路径（`document.setText` + `PsiDocumentManager.commitDocument`），
+`VfsUtil.saveText` 直写 VFS 时 PSI 与 modificationStamp 不刷新，依赖戳的缓存失效判据读不到变化。
+判据顺序：先断言 `child.superClass?.name` 与「索引版 findClass 的 fields.size」，再断言业务行为。
+**证据**：D254（`8b2b15e13`）父类链缓存失效用例四轮试错：初版 2 红 `expected [id, name] but was [name]`；
+补 package 目录仍红；注册 source root 后首断言过、改父类断言红（`deleted` 为 null）；改 Document 重写后
+2/0/0 绿；反向（摘 `inheritanceStamp` 判据）恰 2 红。
+**正例**：先写一条诊断方法断言 superClass + fields，绿了再写业务断言，最后删掉诊断。
+**反例**：直接写业务断言调试——`[name]` 这种读数会被误判成「收集器丢了父类字段」的实现缺陷。
+
+**Seen 1× (2026-11-23)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |

@@ -144,4 +144,36 @@ object EntityFieldCollector {
 
 ## 八、实施记录（实施期回填）
 
-- 待填：提交哈希、定向测试读数、反向验证两次读数、真机验收结论、是否触发 M2 transient 回退。
+### 落地内容（提交 `8b2b15e13`，master）
+
+- **M1**：新增 `psi/EntityFieldCollector.kt`（`collectColumns` / `collectProperties` 两面共用一条继承链+同名合并规则）；`EntityResolver.collectFieldsIncludingSuper` 改为委托。`resolveColumns` 内 serialVersionUID 特判保留为第二道防线。
+- **M2**：`JpaEntityResolver.collectFieldsIncludingSuper` 改为委托；`distinctBy(columnName)` 保留并补注释（只挡不同字段撞同列名）；`JpaMetadataReader.flattenEmbeddableClass` 同步改走收集器。
+- **M3**：`XmlParamTypeResolver.collectFieldTypes` 改用 `collectProperties`（同名取子类、保留 static 常量、排除 `serialVersionUID`/`class`/`$` 前缀）。
+- **M4**：`ResultMapColumnCompletionContributor`、`XmlCompletionSymbols`（resultMap 属性 + foreach item）、`EasyQueryConverter.generatedKeyColumns` 改走收集器；`XmlSqlCompletionContributor.staticMembersOf`（`@类@` 语法）未动。
+- **M5**（按用户令纳入本批）：新增 `psi/EntityInheritanceStamp.kt`（`inheritanceChainStamp`，链上父类文件 modificationStamp 滚动签名），`EntityResolver` / `JpaEntityResolver` 的缓存条目与命中判定都带上它。
+- **transient**（按用户令同批）：MP 轨与 JPA 轨都排除 Java `transient`；定向全绿，未触发回退。
+- 用户可感说明已回填 `CHANGELOG.md` `[Unreleased] / Fixed`。
+
+### 定向测试读数
+
+- **152 例 0 失败**（17 类）：新增 4 类（收集器 7、MP 继承 4、JPA 继承 3、父类缓存失效 Heavy 2）+ `HeavyXmlParamTypeResolverTest` 新增 1 例（17 例全绿）+ 既有 13 类回归（Cache 8 / ColumnOrder 5 / Comment 17 / Embedded 4 / SerialVersionUid 3 / TableConfig 12 / JpaEntityResolver 26 / JpaJoinOn 17 / JpaEmbeddedNaming 8 / ResultMapColumns 6 / ResultMapColumnsGap 4 / XmlSymbolNameIndexCache 8 / SqlPreviewServiceConfig 18）。
+
+### 反向验证（git 还原 + 探针，三次）
+
+1. **摘掉 static/transient 过滤**（`collectColumns` 判据恒 true）→ Light 2 类恰 3 红：`[id, TABLE_NAME, LOG_TAG, runtimeCache, name]`、`[id, token, name]`（子类 static 遮蔽父类实例字段的顺序语义用例同时红）。还原复绿。
+2. **摘掉同名去重**（输出条件恒 true）→ 收集器 4 红（`[code, code, label]`、`[token, id, name]` 等）+ MP 继承 3 红（`@TableLogic` / `@Version` 又取父类）+ JPA 继承 2 红（`[id, create_time, created_at]` 重复列）。还原复绿。
+3. **摘掉 `inheritanceStamp` 命中判据**（两轨 `entry.stamp == stamp` 单条件）→ Heavy 缓存 2 红：父类新增 `@TableLogic` / `@Version` 后 `logicDeleteColumn` / `versionColumn` 仍为 null。还原复绿。
+
+### 装置坑（后续写同类 Heavy 测试直接抄结论）
+
+- Heavy 沙盒里 `createTestProjectStructure()` 每次调用会新建结构——父类与子类必须复用**同一个** root（测试内缓存）。
+- 目录必须与 `package` 声明一致（`src/com/example/X.java`）：索引版 `findClass` 能命中，但 `extends` 引用解析会因包目录不匹配而恒 null。
+- `src` 需显式注册为模块 source root（`ModuleRootModificationUtil.updateModel` + `entry.addSourceFolder`），否则同样 `superClass == null`。
+- 重写已存在文件必须走 **Document** 路径（`document.setText` + `commitDocument`）；`VfsUtil.saveText` 直写 VFS 时 PSI 与 modificationStamp 不刷新，缓存失效判据读不到变化。
+
+### 已审计未改（同族面，留痕防重复立项）
+
+- `JpaJoinOnResolver` 的 `allFields.firstOrNull { name == ... }`：`allFields` 顺序为本类先，取首项方向与「子类优先」一致；静态关联字段无现实形态，不改。
+- `JpaMetadataReader` 生成器注解扫描（`:346`）与「疑似实体」判定（`:531`）：同名列由 `distinctBy(name)` 兜底，注解收集对重复不敏感，不改。
+- `XmlSqlCompletionContributor.staticMembersOf`：`@类@静态成员` 是 MyBatis 3.5.10+ 静态引用语法，**必须**取 static，刻意保留。
+
