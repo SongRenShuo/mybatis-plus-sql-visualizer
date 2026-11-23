@@ -138,4 +138,26 @@ class BatchOperationJoinGuardTest : BasePlatformTestCase() {
         assertNotNull("selectList 不受 join 族守卫影响", preview)
         assertTrue("全列查询应含 FROM：${preview!!.sql}", preview.sql.contains("FROM"))
     }
+
+    /**
+     * 6. D256 收口：join 族在批量模板里**一律拒绝**——即使首参是实体、wrapper 已识别，
+     * 也不产出 `SELECT 全列 ... WHERE id IN (...)`（SQL 只由 wrapper 链路径渲染）。
+     */
+    fun testJoinFamilyRejectedEvenWithEntityAndKnownWrapper() {
+        val preview = convert("selectJoinList", """
+            class Demo {
+                void run(JoinMapper mapper, LambdaQueryWrapper<UserEntity> w) {
+                    mapper.selectJoinList(UserEntity.class, w);
+                }
+            }
+            interface BaseMapper<T> {}
+            interface JoinMapper extends BaseMapper<UserEntity> {}
+            class UserEntity {
+                private Long id;
+                private String name;
+            }
+            class LambdaQueryWrapper<T> {}
+        """)
+        assertNull("join 族 SQL 只由 wrapper 链渲染，批量模板一律拒绝", preview)
+    }
 }

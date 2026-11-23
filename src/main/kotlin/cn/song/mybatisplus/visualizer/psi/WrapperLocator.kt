@@ -1898,19 +1898,36 @@ object WrapperLocator {
      * D256 M1 规则 4：**链方法启发**——父链完全接不到 MP/MPJ（内部复制改名库、依赖未索引）时的最后兜底。
      *
      * 判据（严格，只在前置名字前门 `*Wrapper` / `*Join` / `*Chain` 命中后执行）：
-     *  - 初始化链含任一联表方法（`leftJoin`/`rightJoin`/`innerJoin`/`selectAs`/`selectCollection`/`on`）→ MPJ_LAMBDA；
+     *  - 链（**初始化表达式 + 变量引用上的分步调用**，如 `w = new X(); w.leftJoin(...)`）含任一联表方法
+     *    （`leftJoin`/`rightJoin`/`innerJoin`/`selectAs`/`selectCollection`/`on`）→ MPJ_LAMBDA；
      *  - 否则链非空、**每个**方法名都在已知条件/结构方法集合内，且该变量被已知 MP 消费方法
      *    （`selectList`/`list`/`page` 等，receiver 属 MP Service/Mapper 家族）引用 → LAMBDA_QUERY；
      *  - 其它（链上有未知方法名 / 无消费引用）→ null，宁可不识别不可误判。
      *
-     * 成本：只在名字前门命中且父链失败的兜底路径执行；消费侧引用扫描复用 [ReferencesSearch]，
-     * 与 [buildChain] 的既有引用扫描同量级（该路径本身已要为构造链做一次扫描）。
+     * 成本：只在名字前门命中且父链失败的兜底路径执行；需要一次 `ReferencesSearch` 收集分步调用
+     * （用户现场 `w = new JoinLambdaWrapper<>(); w.eq(...)` 的链在后续语句，只看 initializer 会漏）。
+     * 与 [WrapperAnchorDetector] 的 `BATCH_CHAIN_COLLISION_NAMES` 变量 resolve 同款文档化例外；
+     * 预览链路 [buildChain] 本就要为同一变量做一次引用扫描，实际增量有限。
      */
     private fun wrapperTypeFromChainMethods(variable: PsiVariable): WrapperType? {
-        val init = variable.initializer ?: return null
-        val chainCalls = runCatching { ArgResolver.collectChainFromInitializer(init) }.getOrNull().orEmpty()
-        if (chainCalls.isEmpty()) return null
-        val methodNames = chainCalls.mapNotNull { it.methodExpression.referenceName }
+        val methodNames = mutableSetOf<String>()
+        // ① 初始化表达式内的链（`new X().eq(...)` / `Wrappers.lambdaQuery()...`）
+        variable.initializer?.let { init ->
+            runCatching { ArgResolver.collectChainFromInitializer(init) }.getOrNull()
+                ?.mapNotNullTo(methodNames) { it.methodExpression.referenceName }
+        }
+        // ② 变量引用上的分步调用（`w.eq(...)` / `w.leftJoin(...)`）——现场主形态
+        runCatching {
+            ReferencesSearch.search(variable).forEach { ref ->
+                val refExpression = ref.element as? PsiReferenceExpression ?: return@forEach
+                val call = generateSequence(refExpression.parent) { it.parent }
+                    .filterIsInstance<PsiMethodCallExpression>()
+                    .firstOrNull() ?: return@forEach
+                if (call.methodExpression.qualifierExpression === refExpression) {
+                    call.methodExpression.referenceName?.let { methodNames += it }
+                }
+            }
+        }
         if (methodNames.isEmpty()) return null
         if (methodNames.any { it in JOIN_CHAIN_METHOD_NAMES }) return WrapperType.MPJ_LAMBDA
         if (!methodNames.all { it in CONDITION_CHAIN_METHOD_NAMES }) return null
@@ -1946,11 +1963,19 @@ object WrapperLocator {
         "eqSql", "gtSql", "geSql", "ltSql", "leSql", "inSql", "notInSql", "apply", "comment",
     )
 
-    /** MP 消费方法（规则 4 第二判据的消费侧门）。 */
+    /**
+     * MP 消费方法（规则 4 第二判据的消费侧门）。
+     *
+     * 含 **MPJ join 消费族**（`selectJoin*`）：用户现场的 wrapper 只被
+     * `repository.selectJoinList(Dto.class, w)` 消费，漏掉这一族会让规则 4 在自研封装场景失效
+     * （D256 实施期实测：`WrapperTypeSuperChainTest` 绿而 `CustomWrapperServicePreviewTest` 四条红）。
+     */
     private val MP_CONSUMER_METHOD_NAMES: Set<String> = setOf(
         "selectList", "selectOne", "selectMaps", "selectObjs", "selectById", "selectCount", "selectPage",
         "list", "listByIds", "getOne", "getById", "getOptById", "page", "one", "oneOpt", "count",
         "remove", "delete", "update",
+        "selectJoinList", "selectJoinOne", "selectJoinMap", "selectJoinCount",
+        "selectJoinMaps", "selectJoinMapsPage", "selectJoinPage",
     )
 
     /**
