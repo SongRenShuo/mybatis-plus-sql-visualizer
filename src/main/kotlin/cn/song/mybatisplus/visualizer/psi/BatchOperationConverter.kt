@@ -243,6 +243,9 @@ object BatchOperationConverter {
         injectTenantLine: Boolean = true,
     ): BatchPreview? {
         val methodName = call.methodExpression.referenceName ?: return null
+        // D256-M3：join 消费族错误 SQL 守卫——**必须早于注册表查询**（见 [isJoinFamilyRejected] KDoc：
+        // selectJoinList 族今天不在 [BATCH_OPERATIONS]，守卫放在注册表之后对它永远不会执行）
+        if (isJoinFamilyRejected(call, methodName)) return null
         val operation = BATCH_OPERATIONS[methodName] ?: return null
         val target = resolveEntityTable(call) ?: return null
         val table = target.table
@@ -270,6 +273,92 @@ object BatchOperationConverter {
             batchModel = build.model,
             warning = build.warning,
         )
+    }
+
+    // ------------------------------------------------------------------
+    // D256-M3：MPJ join 消费族的错误 SQL 守卫
+    // ------------------------------------------------------------------
+
+    /**
+     * D256-M3：MPJ join 消费族方法名（**只用于拒绝判定**，不并入 [BATCH_OPERATIONS]）。
+     *
+     * 集合本地自定、不引用 M1/M2 分支的改动（避免合并顺序耦合）：既有已注册的
+     * `selectJoinMaps` / `selectJoinMapsPage` + 尚未注册的 `selectJoinList` / `selectJoinOne` /
+     * `selectJoinMap` / `selectJoinCount` / `selectJoinPage`。
+     *
+     * 为什么不并入批量模板注册表（计划 §四 M3「不做」）：这些方法的 SQL 形状由 wrapper 决定
+     * （join 条件 + 自定义 select 列），[buildSelectBatch] 的 `WHERE id IN (?, ?, ...)` 与之语义不匹配。
+     */
+    private val JOIN_CONSUMER_METHOD_NAMES = setOf(
+        "selectJoinList", "selectJoinOne", "selectJoinMap", "selectJoinCount",
+        "selectJoinMaps", "selectJoinMapsPage", "selectJoinPage",
+    )
+
+    /**
+     * D256-M3：非实体命名后缀——join 族首参 `XxxDTO.class` / `XxxVO.class` 是**响应类型**，不是实体表。
+     *
+     * 为何在 [isLikelyEntity] 之外单列一条：`UserEntityDTO` 这类名字含 `Entity` 的响应类会被
+     * [isLikelyEntity] 误命中（它只判 `"Entity" in name`），后缀检查把它挡掉。
+     */
+    private val NON_ENTITY_CLASS_NAME_SUFFIXES = listOf("DTO", "Dto", "VO", "Vo")
+
+    /**
+     * D256-M3：join 族调用的错误 SQL 守卫（`true` = 拒绝产出模板 SQL，[convert] 返回 null）。
+     *
+     * **位置理由（放在 [convert] 而非 [isBatchOperationCall]）**：
+     *  - [isBatchOperationCall] 是选择区/锚点候选面（[WrapperLocator.isSqlCandidate] 等）的判定，
+     *    改它会连带改变「多 SQL 选择列表」的候选集合——那是 M2 的契约面，本券不动；
+     *  - 本条守卫的输入是**实参类型解析**（首参 Class 字面量、末参 wrapper 变量 resolve），
+     *    每次候选扫描都付这份 resolve 成本不合理；[convert] 是唯一产出 SQL 的入口，只付一次；
+     *  - 守卫的目标就是「不产出 SQL」，守在唯一产出点即覆盖全部预览入口。
+     *
+     * **位置理由（早于 `BATCH_OPERATIONS[methodName]`）**：`selectJoinList` 族今天不在注册表，
+     * 若放在注册表命中之后，守卫对它们永远不会执行；而本条守卫的价值恰恰是「将来有人把 join 族
+     * 登记进模板时，错误形态不会静默产出 `WHERE id IN (?, ?, ...)`」（F7 风险）。
+     *
+     * 拒绝形态（任一命中）：
+     *  1. **首参是 Class 字面量但不是实体**——[isLikelyEntity] 不命中，或简单名以 DTO/Dto/VO/Vo 结尾；
+     *     [resolveEntityTable] 会把响应 DTO 当实体表解析（`FROM user_dto` + DTO 字段列）。
+     *  2. **末实参（wrapper 位）类型无法被 [WrapperLocator.detectWrapperType] 识别**——join 条件与
+     *     自定义列全在 wrapper 里，识别不了就没有任何可用信息，产出只能是凭空条件。
+     *
+     * 不在此拒绝的形态：首参缺失（单参 `selectJoinList(wrapper)` 重载，wrapper 位由规则 2 覆盖）、
+     * 首参存在但 qualifier 解析不出实体（[resolveEntityTable] 自身返回 null，存量行为不变）。
+     */
+    private fun isJoinFamilyRejected(call: PsiMethodCallExpression, methodName: String): Boolean {
+        if (methodName !in JOIN_CONSUMER_METHOD_NAMES) return false
+        val args = call.argumentList.expressions
+        // 规则 1：首参 Class 字面量但不是实体（DTO/VO 响应类型；类型不可解析时按「宁可无预览」拒绝）
+        val firstArg = args.firstOrNull()
+        if (firstArg is PsiClassObjectAccessExpression) {
+            val clazz = (firstArg.operand.type as? PsiClassType)?.resolve() ?: return true
+            if (hasNonEntityNameSuffix(clazz) || !isLikelyEntity(clazz)) return true
+        }
+        // 规则 2：wrapper 位（末实参）类型不可识别
+        val wrapperArg = args.lastOrNull() ?: return false
+        return isUnrecognizedWrapperArg(wrapperArg)
+    }
+
+    /** 简单名是否以 DTO/Dto/VO/Vo 结尾（join 族响应类型命名约定）。 */
+    private fun hasNonEntityNameSuffix(clazz: PsiClass): Boolean {
+        val name = clazz.name ?: return false
+        return NON_ENTITY_CLASS_NAME_SUFFIXES.any { name.endsWith(it) }
+    }
+
+    /**
+     * 实参类型是否**无法**识别为 Wrapper（变量引用优先解析声明类型，与
+     * [cn.song.mybatisplus.visualizer.psi.WrapperLocator] 变量路径同口径）。
+     *
+     * 只用**浅层** [WrapperLocator.detectWrapperType]（简单类名白名单）：深版（父链/接口/链方法启发）
+     * 在 M1 分支，合并后主控统一改 `detectWrapperTypeDeep`——届时本条守卫自动获得自研子类识别能力，
+     * 无需再改结构。
+     */
+    private fun isUnrecognizedWrapperArg(expr: PsiExpression): Boolean {
+        val type = when (expr) {
+            is PsiReferenceExpression -> (expr.resolve() as? PsiVariable)?.type ?: expr.type
+            else -> expr.type
+        }
+        return WrapperLocator.detectWrapperType(type) == null
     }
 
     // ------------------------------------------------------------------
