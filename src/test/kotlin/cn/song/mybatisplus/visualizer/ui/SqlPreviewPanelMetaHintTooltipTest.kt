@@ -217,12 +217,15 @@ class SqlPreviewPanelMetaHintTooltipTest : BasePlatformTestCase() {
     // ======================== T-SAF-10：meta 行（可见行 + tooltip）低信任数据转义 ========================
 
     /**
-     * T-SAF-10（ui.swing-html-label.unescaped-lower-trust-text）回归：updateMeta 曾把
-     * result.tableName（实体注解字面量，低信任）、xmlModel.statementId、警示文本等未转义
-     * 地组合进 metaCoreText（:622/:629/:650），经 fullDisplayText/applyMetaTruncation 的
-     * <html> 包装（:719/:728）成为活 markup，并经 metaTooltipBase 到达 tooltip。
+     * T-SAF-10（ui.swing-html-label.unescaped-lower-trust-text）回归——D241 对齐轮改钉**结构不变式**
+     * （2026-11-23）：master T-PreviewInfoLayout（54af4e9f3）后，meta 可见行与 tooltip 组装全线
+     * 纯文本，原「组装点转义/<html> 包装边界转义」的注入面结构性消除（plain 渲染不执行 markup）。
+     * 本用例继续以恶意 tableName/警示载荷流经全链，断言两条铁律：
+     * ①可见行与 tooltip 都不得回退到 <html> 包装（回退且无转义即注入面复活，必红）；
+     * ②纯文本态不得出现转义实体残渣（双重转义即显示回归）。
      *
-     * **修复前失败断言**：`可见行不得含未转义标记`——修复前载荷原样进入可见行与 tooltip。
+     * 历史：修复前载荷原样进入可见行与 tooltip 的 <html> 包装（活 markup）——该形态已被
+     * 结构性移除；本用例由「转义断言」改为「禁包装断言」，安全不变式等强升级。
      */
     fun testMetaLineEscapesLowTrustTableNameAndWarning_TSAF10() {
         val panel = SqlPreviewPanel(project)
@@ -231,9 +234,11 @@ class SqlPreviewPanelMetaHintTooltipTest : BasePlatformTestCase() {
             panel.showResult(makeResult("").copy(tableName = payload, warning = "warn<$payload>"))
             waitForEdt()
             val visible = panel.metaLabelForTest()
-            assertFalse("可见行不得含未转义标记：$visible", visible.contains("<img"))
+            assertFalse("可见行必须保持纯文本（<html> 包装即注入面复活且无转义防线）：$visible", visible.startsWith("<html>"))
+            assertFalse("纯文本态不得残留转义实体（双重转义即显示回归）：$visible", visible.contains("&lt;"))
             val tooltip = panel.metaTooltipForTest().orEmpty()
-            assertFalse("tooltip 不得含未转义标记：$tooltip", tooltip.contains("<img"))
+            assertFalse("tooltip 必须保持纯文本（<html> 包装即注入面复活且无转义防线）：$tooltip", tooltip.startsWith("<html>"))
+            assertFalse("tooltip 纯文本态不得残留转义实体：$tooltip", tooltip.contains("&lt;img"))
         } finally {
             panel.clear()
         }

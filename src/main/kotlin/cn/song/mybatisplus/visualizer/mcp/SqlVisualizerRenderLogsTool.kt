@@ -33,6 +33,9 @@ open class SqlVisualizerRenderLogsTool : McpToolsetSupport("sqlv_render_logs") {
             "the plugin's log-capture settings. Each restored statement is prefixed with a '-- SQL #N' " +
             "comment line carrying its source format. Deterministic restoration, not validation — pair with " +
             "sqlv_check_sql to assess write risk before executing. Read-only: never executes SQL. " +
+            "Output tier (D219): 'detail' defaults to true (full restored SQL per statement, the historical " +
+            "contract); pass detail=false to get a bounded summary — one header line plus a 160-char SQL " +
+            "preview per statement — when only counts/shapes are needed and the AI context budget is tight. " +
             "Masking (R60): when the plugin's 'MCP output masking' setting is enabled, sensitive literals " +
             "(password-like columns, ID-card/mobile shapes) are masked as '***' in the restored statements " +
             "to keep real production values out of the AI context; disabled by default for diagnosability.",
@@ -49,9 +52,12 @@ open class SqlVisualizerRenderLogsTool : McpToolsetSupport("sqlv_render_logs") {
         hibernateSqlPrefix: String = "",
         hibernateParamPrefix: String = "",
         mixedPrefixMatching: Boolean? = null,
+        /** D219（T-HdAbsorb）：输出分档——null=明细（历史契约，不变）；false=摘要档（计数+160 字预览）；true=明细。 */
+        detail: Boolean? = null,
     ): String = audit("sqlv_render_logs") {
         renderLogs(
             logText, sqlPrefix, paramPrefix, hibernateSqlPrefix, hibernateParamPrefix, mixedPrefixMatching,
+            detail = detail,
         )
     }
 
@@ -66,6 +72,8 @@ open class SqlVisualizerRenderLogsTool : McpToolsetSupport("sqlv_render_logs") {
         defaults: LogPrefixDefaults? = null,
         /** R60（T-LaneB D96/D97）：MCP 面脱敏——null 读设置 mcpMaskEnabled（默认关，审计册口径）。 */
         maskLiterals: Boolean? = null,
+        /** D219：输出分档——null/true=明细（历史契约不变）；false=摘要档（每条一行头 + 160 字预览）。 */
+        detail: Boolean? = null,
     ): String {
         if (logText.isBlank()) {
             throwExpected(McpToolErrors.code(McpToolErrors.INVALID_ARGUMENT, "logText is empty."))
@@ -99,6 +107,23 @@ open class SqlVisualizerRenderLogsTool : McpToolsetSupport("sqlv_render_logs") {
             val maskOn = maskLiterals ?: runCatching {
                 PluginSettings.getInstance().state.mcpMaskEnabled
             }.getOrDefault(false)
+            // D219：输出分档——null/true=明细（历史契约逐字不变）；false=摘要档
+            if (detail == false) {
+                append("Restored ").append(entries.size).append(" statement(s) (summary — pass detail=true for full SQL):\n\n")
+                entries.forEachIndexed { index, entry ->
+                    append("-- SQL #").append(index + 1)
+                    append(" [").append(entry.source.name.lowercase()).append("]")
+                    if (entry.sourceLine > 0) append(" log line ").append(entry.sourceLine)
+                    entry.executionTimeMs?.let { append(" (").append(it).append("ms)") }
+                    cn.song.mybatisplus.visualizer.util.SqlStatementNamer.nameOf(entry.restoredSql)
+                        ?.let { append(" [").append(it).append("]") }
+                    append("\n")
+                        .append(cn.song.mybatisplus.visualizer.util.DisplayMasker.maskDisplay(
+                            entry.restoredSql.previewHead(), maskOn))
+                    if (index < entries.size - 1) append("\n\n")
+                }
+                return@buildString
+            }
             append("Restored ").append(entries.size).append(" statement(s):\n\n")
             entries.forEachIndexed { index, entry ->
                 append("-- SQL #").append(index + 1)
@@ -128,6 +153,12 @@ open class SqlVisualizerRenderLogsTool : McpToolsetSupport("sqlv_render_logs") {
     )
 
     companion object {
+        /** D219 摘要档单条 SQL 预览长度上限（非行为契约，明细档不受影响）。 */
+        private const val SUMMARY_PREVIEW_CHARS = 160
+
+        fun String.previewHead(): String =
+            if (length <= SUMMARY_PREVIEW_CHARS) this else substring(0, SUMMARY_PREVIEW_CHARS) + "…"
+
         /**
          * 纯函数核心（普通 JUnit 直测）：装配四解析器 → 逐行喂 → 合并条目。
          * 覆盖参数空串/null 回落 [defaults]；解析器装配与 `LogToSqlPanel.buildParsers` 同参同构。

@@ -862,16 +862,309 @@ unit-test 模式）会让延迟体跑在**已持读动作的测试线程**里，
 
 **Seen 1× (2026-11-16)**
 
-### L80 依赖校验清单只覆盖 CLI 解析过的构件——IDE 侧会多解析三类，必须同批放行
+### L80 反向验证的夹具要先算清「修复点之前还有几道闸门」
 
-**规则**：`gradle/verification-metadata.xml` 由 `--write-verification-metadata` 生成，**只记录那次构建真正解析过的构件**。IDE 的 Gradle 导入/脚本模型会额外解析三类清单外的东西：①**辅助构件**（`-sources.jar` / `-javadoc.jar`，挂源码导航）；②**平台 distro 的 POM**（`com.jetbrains.intellij.idea:ideaIU:<本机 IDE 版本>`）；③**Gradle 发行版自身的附属物**（`gradle:gradle:<ver>` 的 `-src.zip`、`org.apache.groovy` 的 `.module`——来自 Gradle custom / Gradle distributions / Gradle Libs 仓库）。三类都不在生成时的解析图里 → IDE 一同步就 `Dependency verification failed`，而 `./gradlew` 全绿。故开严格校验时必须同批写 `trusted-artifacts`：按文件模式信任 `.*-sources\.jar` / `.*-javadoc.jar`；按 group 信任 `com.jetbrains.intellij.idea` 的 `.*\.pom`（**不能**逐版本写死——平台版本随每个开发者本机 IDE 变化）；整组放行 `gradle` / `org.apache.groovy` / `org.codehaus.groovy`（Gradle 发行版已由 `distributionSha256Sum` 钉死，Maven 侧 checksum 无可信来源）。
+**规则**：给某个判据做反向验证（撤掉修复看是否变红）时，夹具的**每一个参数**都要过一遍它沿途的
+其它闸门——缺陷所在那道门之前若还有更早的短路（家族排除、名字启发、类型推断、开关），夹具参数
+恰好命中那个短路，撤掉修复也不会红，读数看着「红得不够」或干脆全绿。判定办法：加临时探针打印
+被测链的实际产出，先证明夹具真的走到了目标那一层，再谈反向。
 
-**证据**：T-SAF-14（`b51f664a`，2026-11-06）引入严格校验后，2026-11-09 用户在 IDE 里连续撞三次：①`jsqlparser-5.3-sources.jar`；②`ideaIU-243.28141.41.pom` / `ideaIU-2024.3.7.1.pom` / `ideaIU-263.7307.245-EAP-CANDIDATE.pom`（第三个版本＝该开发者本机 IDE 版本，来自 IntelliJ Repository (Snapshots)）；③`gradle-9.7.0-src.zip`（Gradle custom / Gradle distributions）与 `groovy-4.0.32.module`（Gradle Libs）。修复前清单里 `-sources.jar` / `-javadoc.jar` / `com.jetbrains.intellij.idea` / `gradle` / `org.apache.groovy` 条目数**全为 0**。探针复现与验证：解析 `jsqlparser:5.3@sources`、`ideaIU:243.28141.41@pom`，修复前都红、修复后都绿（`PROBE_RESOLVED` / `POM_PROBE_RESOLVED`）；同一轮探针里 `commons-math3` / `jmh-core` / `jopt-simple` 等**二进制**构件仍照旧失败——严格性只对上述三类开口。**证据边界**：③（`-src.zip` / `.module`）只在 IDE 脚本模型路径上出现，CLI 侧无可复现入口，故该条以用户同步读数为准，未取本地探针读数。（原入册为本支 L31，T-BranchAlignMerge master↔分支合流时让号改 L80——L31 已被主线 T-McpSettingsJump 占用）
+**证据**：T-IbatisAtShapeGate（2026-11-17，`164e6a884`）：给 iBatis 语句 id 形状门（正则不含 `@`）
+做反向验证，gutter 级用例第一次**没红**——夹具接收者叫 `baseDao`，命中
+`PreviewReceiverResolver.DAO_NAME_SUFFIXES` 里的 `BaseDao`，JDBC 通道在形状门**之前**就按家族排除
+让位（探针实测 `jdbcMarkers=[]`，即使撤掉 `@` 放行也不产图标）。把接收者改成 `client` 后同一轮反向
+3 红（形状门单测 / gutter 级 `实际 [queryForObject]` / action 级认领为 null），恢复后 36 用例全绿。
+同族旧账见 [[pitfall-reverse-probe-fixture-layer-mismatch]]（夹具放错缓冲层）——本条是它的「放错闸门」
+变体：不是数据形态不对，而是**夹具先被另一道合法闸门截走**。
 
-**正例**：开严格校验的同一提交里就写全三类 `trusted-artifacts`；改完必须用「CLI + IDE 双读数」验收，不能只看 `./gradlew` 绿。
-**反例**：只跑 CLI 就宣布「严格校验生效」；或遇到 IDE 报红时把整个 `verify-metadata` 关掉/删清单——那会把二进制构件的字节级保护一并撤掉；或按版本逐个补平台 POM checksum——下一个人换 IDE 版本立刻再红。
+**正例**：反向前先加探针读被测链的实际产出，确认夹具抵达目标层；夹具命名/类型避开沿途启发式。
+**反例**：看到「撤掉修复也没红」就去加固断言，而不去查夹具是不是被更早的门拦掉。
 
-**Seen 1× (2026-11-09)**
+**Seen 1× (2026-11-17)**
+
+### L81 `Registry.is` 的 `is` 是 Kotlin 关键字——读 Registry 必须反引号
+
+**规则**：Kotlin 里调平台 `Registry.is(key, default)` 一律写 `` Registry.`is`(...) ``。漏反引号的报错
+不像样地指向调用行，而是 `Cannot infer type for type parameter 'R'` / `Syntax error: Call has no
+callee` 三条叠在同一表达式上，看着像类型推断问题。
+
+**证据**：T-Nplus1Aggregate（2026-11-19，`cc8b2d960`）：子代理写的 `NplusOneAggregate.kt` 漏反引号，
+`compileKotlin` 直接失败（37s 白跑）。同仓既有 Registry 读取全带反引号（`NplusOneSuspect.kt`、
+`StandaloneSqlSourceResolver`）——照抄邻居即可避免。
+
+**正例**：新增 Registry 读取时从相邻同类文件复制写法；编译失败先怀疑 `is`/`in`/`object` 这类软关键字调用。
+**反例**：把 `Cannot infer type for type parameter 'R'` 当类型标注问题去补泛型。
+
+**Seen 1× (2026-11-19)**
+
+### L82 JList 渲染类测试的三个陷阱：wrapper 包裹 / model 实例 / 引用相等
+
+**规则**：给「按渲染几何命中」的交互写平台测试时，三条任一不满足就会得到看似「逻辑错」其实是
+「夹具错」的红：
+1. **`list.cellRenderer` 不是你的渲染器**——平台用 `ExpandedItemListCellRendererWrapper` 包裹真实
+   renderer，`as RailCellRendererBase` 抛 CCE。生产路径直接用面板字段（`entryCellRenderer`），测试
+   必须走面板暴露的缝。
+2. **渲染要用 model 里的实例，不是喂进去的原始对象**——buffer 入队会分发 `#N` 序号，原始对象的
+   header 少一段内容，宽度差几个像素，算出的徽章 x 就偏移。
+3. **条目匹配不能用引用相等**——刷新拍重建模型后是新实例，`===` 恒找不到，要用业务键
+   （restoredSql + timestamp）比。
+
+**证据**：T-Nplus1Aggregate（2026-11-19，`cc8b2d960`）：5 条面板用例连红三轮——第一轮 CCE（wrapper），
+第二轮「被点条目应在列表中」（`===`），第三轮「点击徽章应进入过滤态」（用原始 entry 渲染，2px 偏移
+让 `getFragmentTagAt` 落在片段外）。三处修完后 6/6 绿。
+
+**正例**：几何类测试先打印「实际渲染出的片段 tag 分布 + 命中点 x」，证明夹具与生产同源。
+**反例**：看到点击不命中就去改生产判定逻辑。
+
+**Seen 1× (2026-11-19)**
+
+### L83 平台列表/面板测试断言前必须泵 EDT——重建链是分批 `invokeLater` 追加的
+
+**规则**：`SqlLogPanel` 一类面板的刷新拍会把条目分批 `invokeLater { appendRebuildChunk() }` 追加
+（防长冻结的既有设计）。测试里调一次同步刷新方法**不等于**模型已填充：`list.model.size` 仍可能是
+0 或部分值。断言前要 `UIUtil.dispatchAllInvocationEvents()` 轮询到期望状态（带超时，超时消息里打出
+实际 size）；过滤态进出（页签增删 → 重建）同样要走一遍。
+
+**证据**：T-Nplus1Aggregate（2026-11-19，`cc8b2d960`）：5 条面板用例全红在「用可见条数做断言」，
+加 `pumpEdtUntil { model.size >= N }` 后通过。同仓 `SqlStandalonePreviewPanelDialogTest.awaitDialog`
+早就在用同款轮询，是对的既有先例。
+
+**正例**：任何「面板 → 模型 → 断言」链路，断言前泵 EDT 并轮询目标状态。
+**反例**：刷新方法返回后立刻断言条数；或为了过测试把断言放宽成 `>= 0`。
+
+**Seen 1× (2026-11-19)**
+
+### L84 测试断言 UI 文案要用 bundle 同源构造期望，别硬编码某一种语言
+
+**规则**：断言「摘要行含某某文案」时，期望值必须由 `MpSqlVisualizerBundle.message(key, args…)` 现算，
+或退到语言无关的结构判据（参数个数、结尾省略号、「参数前那段」前缀）。测试 JVM 的 locale 未必与
+开发机 IDE 一致，硬编码英文在中文环境必红、反之亦然——这类红与被测逻辑无关。
+
+**证据**：T-Nplus1Aggregate（2026-11-19，`cc8b2d960`）：`NplusOneAggregateSummaryTest` 两条用例把
+`"thread http-nio"` / `"spread across 4 threads"` 写死，运行环境取到中文 bundle 后全红；改成 bundle
+同源期望 + 跨线程段「参数前导前缀」判据后 8/8 绿。
+
+**正例**：文案类断言一律 bundle 同源；需要「不出现某段」的负例复用同一份前缀常量。
+**反例**：看到中文失败就把断言区改成中文——下个英文环境再红一次。
+
+**Seen 1× (2026-11-19)**
+
+### L85 改共享 UI 容器的组件构成，定向清单必须带上该容器的既有守卫类
+
+**规则**：往 `focusTabBar`/工具栏/列表宿主这类**共享容器**里加常驻组件前，先 grep 该容器名的既有
+测试类——它们常以「组件数 = 前缀 + N 项 + 尾项」或子件顺序做断言，加一个组件就恒红。本地只跑
+自己新写的测试类永远发现不了：跑一遍 `--tests "<该容器>Test"` 只要几十秒，比等 CI 分片红一遍
+（6 分钟 ×2 片）便宜得多。
+
+**证据**：T-Nplus1Aggregate（2026-11-19）：D235 把摘要 label + 返回按钮 `focusTabBar.add(...)`，
+本地 14/14 绿、反向也绿；推 master 后 CI run **44447731812** 分片 1（`SqlLogPanelRequestFocusTest`
+expected 10 was 12）与分片 2（`SqlLogPanelFocusTabTest` expected 4 was 6）各 1 红。修法不是改期望，
+而是把摘要挪到独立一行（`nplusOneSummaryBar`），页签栏恢复原构成——`846c66f3f` 后 4+3+6+8 全绿。
+
+**正例**：动共享容器前 grep 容器名找既有断言；改完先跑那几个类再跑自己的。
+**反例**：看到守卫红就把期望值改大——那等于把「页签栏只装页签」的语义契约拆掉。
+
+**Seen 1× (2026-11-19)**
+
+### L86 `testFast --tests` 对平台型测试类会静默不跑——定向读数必须用 `test`
+
+**规则**：`testFast` 的划桶规则是「测试源码零 `com.intellij` 引用」才进快桶
+（`buildSrc/src/main/kotlin/mpv-testing.gradle.kts:411`），而 `--tests` 过滤与该桶规则取**交集**——
+拿 `./gradlew testFast --tests "<平台型 FQCN>"` 跑定向，类被桶规则先排除，Gradle 不报错、不改退出码，
+只静默剩下几条纯逻辑用例。凡 `extends BasePlatformTestCase` 或 import `com.intellij.testFramework`
+的用例，定向一律用 `./gradlew test --tests "<FQCN>"`。
+
+**证据**：T-UserFreezeTriage（2026-11-19）：首次定向 `testFast --tests` 同时点名三个类，日志只有
+「3 tests completed」——那 3 例全是守卫类，`EdtDispatchTest`（4 例）与 `DynamicUnloadWriteSafeTest`
+（6 例）一条没跑，`build/test-results/testFast/` 下也只有守卫的 XML。换 `./gradlew test --tests` 后
+同一批拿到 4/0 + 6/0 + 3/0。
+
+**正例**：跑定向前先看该类有没有 `com.intellij` 引用；跑完数 `TEST-*.xml` 的 `tests=` 对不对得上预期例数。
+**反例**：看到 `BUILD SUCCESSFUL` + 少量用例就收工——静默跳过不改变退出码。
+
+**Seen 1× (2026-11-19)**
+
+### L87 新写「catch(Throwable) + 守卫类」会同时踩三条元守卫——定向清单必须带 convention 全包
+
+**规则**：往 `src/main` 新增这些形态时，改完先跑一次
+`./gradlew testFast --tests "cn.song.mybatisplus.visualizer.convention.*"`（秒级）再跑自建类：
+
+1. 任何 `catch (…: Throwable)` → 块内要么 `FatalErrors.isFatal(t)` 原样上抛，要么在
+   `BannedApiScanRuleTest.throwableCatchExemptions` 登记理由；
+2. 新增 `*Offenders`/`*Sites` 形状的守卫类 → 同时登记 `GuardSelfTestCoverageMetaGuardTest.GUARD_CLASSES`
+   （`decisionFns` + 自证语料说明），否则「未登记守卫类」与「未逐条登记的判定函数」两例同红；
+3. 往 `update` 包塞 `ModalityState.any()` → `// write-safe: <理由>` 必须紧贴那行上方
+   （豁免只认**调用行向上连续的注释块**，标注写在函数头上、`any()` 在实参行里等于没写）。
+
+**证据**：T-UserFreezeTriage（2026-11-19）本地定向 13/0/0/0 全绿，推 master 后 CI run **44480349798**
+两片 `fast` 各红 2 例，正是上面三条（`BannedApiScanRuleTest` 2 例 + `GuardSelfTestCoverageMetaGuardTest`
+2 例），`test` 五片全绿——功能没坏，全是形态口径。修法 `7a8f8f26b` 后 run **44483331061** 8/8 绿。
+
+**正例**：新类落地前先把 convention 全包跑一遍（43 类、秒级）；把「新增文件类型」和「会触发哪条元守卫」
+当成清单项写进实施步骤。
+**反例**：只跑自己新写的三个测试类就推 master——本地全绿与 CI 全红可以同时成立。
+
+**Seen 1× (2026-11-19)**
+
+### L88 运行期手写字节码给平台反射用：复制 metadata 就要把它的**全部成员**补齐，注解元素严格按声明类型编码
+
+**规则**：凡是给平台反射扫描（kotlin-reflect / 注解读取）手写 class 文件，三件事必须同时成立：
+
+1. **复制 `kotlin.Metadata` 时，metadata 描述到的每一个成员都要在类里按签名存在**。业务类的
+   metadata 会带上它的私有/内部辅助函数；壳类只声明工具方法时，kotlin-reflect 展开函数表抛
+   `KotlinReflectionInternalError: Could not compute caller for function: private final suspend fun …`
+   → 该 toolset 一个工具都出不来。做法：给其余方法生成同签名占位（方法体
+   `throw UnsupportedOperationException` 即可，平台不会调用它们），并跳过与基类同签名的
+   （否则 `IncompatibleClassChangeError: overrides final method`）。
+2. **枚举 `element_value` 的 `type_name` 必须与注解元素声明类型逐字相等**。
+   `javaClass.enclosingClass ?: superclass` 对无类体常量会退化成 `java.lang.Enum`，JDK
+   `AnnotationParser.parseEnumValue` 直接抛 `AnnotationTypeMismatchException … (Found data of type
+   java.lang.Enum.TRUE)`。用 `if (javaClass.isEnum) javaClass else superclass`。
+3. **Kotlin 的 `IntArray` 等不是 `Array<*>`**。`when (v) { is Array<*> -> … }` 匹配不到原始数组，
+   掉进 `else → toString()` 写出 `"[I@2b40ff9c"`，读回时同样抛类型不匹配（`Metadata.mv()` 必踩）。
+
+**证据**：D239 四层缺陷叠加（2026-11-19 真机 17:30→18:17 逐层读数），修复 `756011136`；
+单测 `TinyClassFileWriterD239Test` 5/0（枚举+原始数组读回探针）、`McpToolsetShellFactoryTest` 11/0
+（「工具方法保留 suspend 语义」「壳类覆盖业务类全部方法签名」两条守卫）。
+**正例**：真机诊断先打印「平台自己的 asTools 对每个壳类展开出哪个工具」，一轮就能定位到具体类与具体异常。
+**反例**：只看 `declaredMethods.size` 与 `getAnnotation(Metadata) != null` 就判「反射可见」——
+两者都真时 kotlin-reflect 仍可能在展开函数表时炸。
+
+**Seen 1× (2026-11-19)**
+
+### L89 平台「重算」类 API 往往复用旧结果：`requestUpdate` 之外还要摘 provider 缓存
+
+**规则**：调平台的重算入口前先确认它是否带 `previous` 参数复用缓存。
+`McpToolsListProvider.requestUpdate(reason)` 走 `computeAllMcpTools(previous)`，**只在 previous 里
+缺失时才真正计算**，所以注册初期那份「只含前 1 个工具」的结果会被永久沿用——连发三次重算请求
+读数仍只有 1 个。正路：先调平台私有 `invalidateReflectionProviders()`（走合成访问器
+`access$invalidateReflectionProviders`）摘掉反射 provider 的缓存条目，再 `requestUpdate`。
+另注：各版本清单形态不同（253 无 `McpToolsListProvider`、262 有类但无缓存/无 `requestUpdate`、
+263 带缓存），调用前按「方法在不在」分流——缺失属版本差异不是故障，记 INFO 别记 WARN。
+
+**证据**：D239（2026-11-19 18:20 真机）：11 个壳类各自 `asTools` 都出 1 个工具、自检全绿，
+但 `tools/list` 恒为 1 个；补 `invalidateReflectionProviders` 后连续三轮冷启稳定 165/11。
+**正例**：判「重算有没有生效」看聚合清单读数，不看自己发出的请求条数。
+**反例**：以为「多发几次重算总能收敛」，靠延迟重算兜底——实测 3 次（0s/3s/12s）全部无效。
+
+**Seen 1× (2026-11-19)**
+
+### L90 弹窗类测试打开后立即断言「异步填充的面板状态」会偶发空——断言前先轮询等条件成立
+
+**规则**：`awaitDialog()` 拿到弹窗 ≠ 弹窗内异步链路（警告横幅、摘要行、异步识别回填）已经跑完。
+`SqlStandalonePreviewPanelDialogTest.test在弹框中打开_未识别文本也弹窗` 在 `assertNotNull(dialog)` 之后
+**立即** `assertTrue(warning.isNotBlank())`，CI windows runner 上偶发 warning 尚未填充 → 假红
+（961 例只红这 1 例，同 src 在另一轮 run 44562342176 全绿）。判据：断言的是「最终会成立的状态」时，
+用带超时的轮询/await 断言，不用瞬时断言；判「打开动作本身」才允许 assertNotNull 后直读。
+**证据**：CI run 44567164326 首轮 `testShard4` 961 tests 1 failed（`AssertionFailedError` 于
+`SqlStandalonePreviewPanelDialogTest.kt:116`，warning 为空串）；`git diff 9dd35bb66 4596fa90b -- src/`
+为空（同代码在 run 44562342176 同分片全绿）→ 瞬态定性成立；`gh run rerun --failed` 后同 run 全绿。
+2026-11-20 本地复现同一形态（T-LoadFilePlacement 的 22 例定向首跑只红这一条，同 src 重跑全绿）；
+已按本规则把该用例改成轮询、`iBatis 片段不报 Unknown element` 改成装配期内持续观察（`0611f6ab2`）。
+**正例**：失败先做同 src 跨 run 对照（前一轮全绿 ⇒ 瞬态），再 rerun-failed-jobs，不改代码不前移 tag。
+**反例**：看到红就怀疑新改动引入回归，去动生产代码或重排队列——本轮 src 与上一轮完全相同。
+
+**Seen 2× (2026-11-20)**
+
+### L91 多个反向探针同批打会互相掩盖——每个探针单独打、单独记读数
+
+**规则**：一次改多处缺陷路径再跑一遍，读数只能证明「至少有一处被看见」。探针之间常常是**串联门控**
+（上游探针把下游探针的判据短路），合并打时下游那条恒绿，看起来像"这条本来就没问题"。
+判据：**预期红条数与实红条数逐条对号**，数目不符先查哪条被别的探针掩盖，再单独复打。
+**证据**：T-PreviewActionRow（2026-11-20，`81ebb4720`）四条探针一起打只得 4 红（预期 5）：
+「工作台不传 `sourceText`」没红——因为同时把面板的 handler 门控去掉后，提示行可见性不再由 handler 决定，
+「有原文才显示」这一类断言全部恒绿。单独打（先恢复门控探针）后该条精确 1 红。
+**正例**：探针按「最下游/最弱判据」排序，一次只留一个；每轮读数记「预期红 → 实红」。
+**反例**：拿到 4 红就宣布四条都验过了，其中一条从头到尾没被证明可见。
+
+**Seen 1× (2026-11-20)**
+
+### L92 解冲突「整份取 theirs」会把对方已死的入口一起带回来——合流后必须编译 + grep 已删入口
+
+**规则**：`git checkout --theirs -- <file>` 是**整文件**语义，不是「只取对方那批有效改动」。当 master 上已删除某个入口、
+而分支仍保留它时，取 theirs 会把这个死入口原样搬回来，连带它引用的已删除函数 / bundle 键一起复活——
+编译期或运行期才炸。判据：冲突解完**立刻编译**，再 `grep` 一遍「本分支已删除的函数名 / bundle 键」是否为 0。
+**证据**：T-Perf33MergeAlign（2026-11-20，`c55f48be6`）合 `t-perfsweep33` 时，为保住守卫所钉的 `resolveOffEdt` 形态而
+`--theirs` 取 `SqlPreviewDialog.kt`，结果把分支仍保留的 `loadFileIntoPreview` 与其底部「从文件加载」按钮一并带回，
+而该函数在 master 已随 T-LoadFilePlacement 删除、且引用已删除的 `dialog.preview.loadFile` 键 ⇒ 首次复跑直接
+`e: Unresolved reference 'loadFileIntoPreview'`（`SqlPreviewDialog.kt:332`）。处置＝再删一次该动作与函数并 amend 进 merge 提交。
+**正例**：解冲突时按「守卫/契约要求的最小差异」逐段挑，而不是整文件取边；取边后必编译、必 grep 已删符号。
+**反例**：合并冲突解完直接 `git add` + 提交，把不可编译的中间态留在历史里（bisect 会踩到）。
+
+**Seen 1× (2026-11-20)**
+
+### L93 premain 的入口类本身也得被目标 JVM 加载得了——类版本失配在 attach 只失败一次，在 premain 是杀死宿主
+
+**规则**：`-javaagent` 的 `Premain-Class` 若加载失败（最常见是类文件 major 高于目标 JVM 上限：JDK 6/7 只有
+50/51），JVM 会判为 agent 处理失败并**直接终止启动**（`FATAL ERROR in native method: processing of -javaagent failed`，
+主类一行都不跑）；同一个 jar 走 `loadAgent` 只抛 `AgentInitializationException`，目标进程照常运行。所以只要产品
+会在别人的 JVM 里注入，就必须有两道防线：① 注入前判定目标 JVM 认不认我们的字节码（拿不到就放行，别把能力关掉）；
+② 入口类做成**低版本引导类**（编译目标压到最老要支持的 major，只用对应年代的 API），由它在运行期判阈、再反射加载
+真正的 agent，并整段 `catch (Throwable)`。判据：`java.class.version` 就是该 JVM 的类版本上限（JDK 6 上是 `50.0`）。
+类内部的 `catch(Throwable)`（L7 那类兜底）管不到「类根本不加载」，别拿它当免责。
+**证据**：T-OldJvmPremainGuard（2026-11-20，计划 `docs/开发计划/20261120-1530-T-OldJvmPremainGuard-*`）：真机 Zulu
+JDK 1.6.0_119 上跑真实 `mps-sql-agent.jar`——`-javaagent` 报 `Unsupported major.minor version 52.0` + `FATAL ERROR`
++ 退出码 1、主类未执行；同 jar `loadAgent` 只失败一次、宿主跑到 `finished normally`。引导类原型（major 50，JDK 6
+javac 原生编）在 1.6 上 `skipped` 且应用正常起、在 1.8 上正常委托（`sqlvis.agent.active=port=1`）。
+**正例**：入口类按「最老要支持的 JDK」定 major，并用守卫测试钉住（读 jar 内字节断言 major + 常量池无 indy/Java7+ 类型）；
+**反例**：入口直接指生产类，靠「产品只支持 JDK 8+」的假设兜——一次真实用户的老项目就把宿主打死，且报错在用户的应用
+控制台里，看起来像插件崩了。
+
+**Seen 1× (2026-11-20)**
+
+### L94 构建脚本的「环境硬校验」严禁写在任务配置期——必须降到执行期，否则一次缓存变动连坐 IDE 全量同步
+
+**规则**：register 块内的 `error(...)` / `throw` 在 IDE Gradle 同步时必然被执行——同步会遍历全部任务触发惰性
+创建（task model warm-up 与 IdeaModelBuilder 两条路径）。任一任务配置期抛异常＝**整树同步失败**，IDE 里所有
+Gradle 驱动能力（runIde 沙盒、构建、测试、任务清单）全不可用。判据：配置期求值且不依赖命令行任务名的
+硬校验（缓存 jar / 发行目录 / 环境探测）就是违规形态。环境类校验一律写 doFirst（执行期）；配置期只扫描、
+可空时用哨兵值占位（classpath 接受不存在的路径，doFirst 先炸就永远走不到）。
+**证据**：2026-11-21 用户报「无法启动沙盒」，IDE 弹「Unable to warm-up Gradle task model」——根因是本机
+gradle 缓存丢 verifier-cli jar，`buildSrc/src/main/kotlin/mpv-verification.gradle.kts` 三处 classpath 扫描
+`?: error(...)` 在配置期抛 IllegalStateException（verifyGate 206 行 / registerMarketTarget 359 行 /
+verifyMarketplaceRefresh 483 行）。`33bc6bcb1` 降级修复后 `--no-configuration-cache` 实测：jar 缺失
+`gradlew help` BUILD SUCCESSFUL（修复前同路径即报障读数）；verifyGate 红在执行期 requireVerifierCliJar
+带播种指引；jar 在位时放行到既有 IDE 目录闸门。
+**正例**：配置期扫描可空 + 哨兵占位，doFirst 开头 requireVerifierCliJar（放水位闸门前，秒级红）；执行期
+lambda 要调的辅助函数落独立 .kt（VerifierHomeGuard.kt，CC 可序列化，脚本顶层函数会「cannot serialize」）；
+顺带配播种脚本 dev-support/seed-verifier-cli.ps1（照 CI 同名步骤）。
+**反例**：`classpath(扫缓存 ?: error("先跑一次 verifyPlugin 重建缓存"))`——错误信息还引导用户去跑一个
+同样会被配置期炸掉的操作，且崩溃只出现在 IDE 弹窗的堆栈里，本地命令行复现都要靠运气（CC 复用时不重跑
+配置期，反向验证必须 `--no-configuration-cache` 才算数）。
+
+**Seen 1× (2026-11-21)**
+
+### L95 Gradle console 的测试失败行不打断言消息——判失败源必须读 XML 的 `<failure>` 节点，别从「无消息」反推
+
+**规则**：`java.lang.AssertionError at X.kt:-1` 对**带消息**与**不带消息**的 AssertionError 显示完全相同——
+console 形态不含消息信息。拿「无消息」当证据去锁断言源（如「无消息⇒必是无参 assertTrue」）会走错分支；
+同理测试内 `println` 的诊断段**会**出现在 gradle 日志里（lifecycle 级可见），可作为排除项证据。判失败源
+读 `build/test-results/<task>/TEST-*.xml` 的 `<failure>` 与 `<system-out>`（含完整消息与子进程诊断全文），
+CI 上没工件时用本地定向跑（注意 `--tests` 在 testFast 上不按类过滤，实际整桶跑）。
+**证据**：run 407（2026-11-20，44723363747）O147HistoryUpgradeTest classMethod 红，console 只给
+`AssertionError at kt:-1`；按「无消息」先锁了 assertTrue 分支，后改用「exit 0 ⇔ 必打 OK」语义互斥收敛；
+本地反向跑读 XML 才拿到完整消息与 PREIMAGE 诊断（`33bc6bcb1` 之后的修复提交，见 L96 条）。
+**正例**：失败源三分支并列排查（消息断言/语义互斥/诊断段存在性），最终读 XML 定锤。
+**反例**：只看 console 一行就开写修复，改错位置再整轮 8 分钟重跑。
+
+**Seen 1× (2026-11-21)**
+
+### L96 测试基建「子进程输出走文件重定向」在 CI 有写丢/读缺瞬态面——失败断言必须带自曝现场 + 一次有界重试
+
+**规则**：子 JVM 输出重定向到文件再读回的测试链路（ProcessBuilder.redirectOutput + readText），在 CI
+runner 上存在「进程 exit 0 但读回内容缺行」的文件系统瞬态（写丢失/读不完整），形态为非确定性一红多绿。
+对策三件套：① 断言失败时打印完整现场（输出全文/文件 stat/磁盘 freeSpace/完整命令行）；② 重试一次同
+断言 fork——真缺陷（指纹不符等确定性失败）两轮同败照常暴露，仅多付一次 fork，瞬态被吸收；③ 最终失败
+的 AssertionError 带 first/second 两轮现场。注意「重试吸收」只对**断言级**失败成立——超时（check 抛
+ISE）与 fork 启动失败不重试，直接红。
+**证据**：O147HistoryUpgradeTest @AfterClass 在 CI 的第三类环境特异失败（20261024 字符集 / 20261025
+时区 / 本次 run 407 文件瞬态，同 sha 三跑 1 红 2 绿）；修复提交（2026-11-21）：反向坏指纹两轮 exit=1
+照抛带两轮现场，正向整桶 6m24s 全绿。
+**正例**：`problems` 列表归并 exit 与内容断言 → 非空即打印现场 → attempt 0 失败 retry、attempt 1 失败
+抛带双轮现场的 AssertionError。
+**反例**：裸 `assertTrue(childOutput.contains("OK"))` 无消息无重试——CI 瞬态红时只剩一行盲区堆栈。
+
+**Seen 1× (2026-11-21)**
 
 ## 升级记录
 

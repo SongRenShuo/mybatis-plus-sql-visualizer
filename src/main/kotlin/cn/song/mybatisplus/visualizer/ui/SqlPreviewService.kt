@@ -2048,6 +2048,18 @@ class SqlPreviewService(internal val project: Project) {
             result: PreviewResult?,
             sourceLocation: String? = null,
             sourceContext: cn.song.mybatisplus.visualizer.context.PreviewSourceContext? = null,
+            /**
+             * T-DialogPasteReparse：「先开弹窗、后贴内容」——弹窗挂防抖监听，用户往编辑器里
+             * 贴入内容后自动重新识别一次（仅独立工作台的空/原文态开窗时置 true；其余入口保持 false）。
+             */
+            autoParseOnPaste: Boolean = false,
+            /**
+             * T-PreviewActionRow D-7：产出本次预览的原始文本（仅独立工作台开窗传）。
+             *
+             * 面板展示的是渲染后的 SQL，缺 `<sql>` 片段要补齐必须用原文重解析；其余入口
+             * 没有原文，传 null ⇒ 弹窗不挂补齐入口（不制造点了没反应的链接）。
+             */
+            sourceText: String? = null,
         ) {
             // T-PreviewFast P7：请求→弹窗耗时（第二段锚点；后续控制台可见由面板记）
             runCatching {
@@ -2088,7 +2100,7 @@ class SqlPreviewService(internal val project: Project) {
             // 注：不再量「池线程→EDT 排队」——该值依赖全局单槽时间戳，并发预览会串读数（实测 651ms
             // 的请求被后一次请求覆盖成 1ms），不可信。
             val constructStarted = System.currentTimeMillis()
-            val dialog = SqlPreviewDialog(project, result, sourceLocation, sourceContext)
+            val dialog = SqlPreviewDialog(project, result, sourceLocation, sourceContext, autoParseOnPaste, sourceText)
             val constructMs = System.currentTimeMillis() - constructStarted
             activePreviewDialogs[project] = java.lang.ref.WeakReference(dialog)
             val showStarted = System.currentTimeMillis()
@@ -2142,8 +2154,20 @@ class SqlPreviewService(internal val project: Project) {
             // 「请求→弹窗」「弹窗→控制台可见」两段数字，取代靠多条阶段日志手工推时序
             lastPreviewRequestMs = System.currentTimeMillis()
             ApplicationManager.getApplication().executeOnPooledThread {
-                val result = try {
-                    ReadAction.compute<PreviewResult?, Throwable> { compute() }
+                var result: PreviewResult? = null
+                var retryPending = false
+                try {
+                    result = ReadAction.compute<PreviewResult?, Throwable> { compute() }
+                } catch (e: com.intellij.openapi.project.IndexNotReadyException) {
+                    // T-PerfSweep30 02d：索引未就绪（DumbMode）单独分流——原实现吞成 null＋WARN，
+                    // 用户点了没反应（性能分析 §4.1 账本②）。改为 runWhenSmart 重试一次：
+                    //   ① 重试成功 → 正常走 onResult（用户无感，仅晚一拍）；
+                    //   ② 仍失败 → 可见归因（通知），不得静默。
+                    // 与「runners=0 方言不匹配/NOT_A_SQL_DATASOURCE」归因链互斥：那是**执行**链的
+                    // 数据源归因（ExecDialectRouting/EmptyRunnersHint），本处是**转换**链的索引归因，
+                    // 两条链不共用入口、文案不混道（02e 夹具覆盖）。
+                    LOG.warn("[M36] previewAsync compute hit IndexNotReadyException — retry via runWhenSmart (T-PerfSweep30 02d): ${e.message}")
+                    retryPending = true
                 } catch (e: Throwable) {
                     // T-FatalPassthrough T-FP-02b（独立复核条件项，收口原豁免）：本处是**预览主链**
                     // （点击/快捷键 → PSI 转换 → 弹窗），不是「可选能力探测」——原豁免理由把主链写成
@@ -2153,40 +2177,110 @@ class SqlPreviewService(internal val project: Project) {
                     // 非 fatal 仍返回 null（既有降级语义逐字不变），但补一条 WARN 留排查锚点。
                     if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(e)) throw e
                     LOG.warn("[M36] previewAsync compute FAILED: ${e.javaClass.simpleName}: ${e.message}")
-                    null
+                    // T-PerfSweep30 01b：失败请求不得复用上一次请求的起点——compute 抛错时本段读数
+                    // 无产物可锚（showResult 也不会记 request→dialog），旧实现把 lastPreviewRequestMs
+                    // 留在失败前的值，下一次成功嵌入会打出跨请求的失真读数（真机 10151ms）。
+                    lastPreviewRequestMs = 0L
+                }
+                if (retryPending) {
+                    // T-PerfSweep30 02d：runWhenSmart 重试一次（仍在池线程执行 ReadAction）；
+                    // 成功 → 同主路径（预热派发 + onResult）；仍失败 → 可见归因后回 null。
+                    com.intellij.openapi.project.DumbService.getInstance(project).runWhenSmart {
+                        var retried: PreviewResult? = null
+                        var stillDumb = false
+                        try {
+                            retried = ReadAction.compute<PreviewResult?, Throwable> { compute() }
+                        } catch (e2: com.intellij.openapi.project.IndexNotReadyException) {
+                            stillDumb = true
+                            LOG.warn("[M36] previewAsync retry still IndexNotReady — visible attribution (T-PerfSweep30 02d): ${e2.message}")
+                        } catch (e2: Throwable) {
+                            if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(e2)) throw e2
+                            LOG.warn("[M36] previewAsync retry FAILED: ${e2.javaClass.simpleName}: ${e2.message}")
+                        }
+                        result = retried
+                        if (stillDumb) {
+                            lastPreviewRequestMs = 0L
+                            notifyIndexNotReady(project)
+                            ApplicationManager.getApplication().invokeLater { onResult(null) }
+                            return@runWhenSmart
+                        }
+                        if (result != null) {
+                            dispatchPrewarm(project, result!!)
+                        }
+                        ApplicationManager.getApplication().invokeLater { onResult(result) }
+                    }
+                    return@executeOnPooledThread
                 }
                 // T-ExecSlowOps F2：确定性 SQL（无参数开关/批量/XML 模型）预览成功即后台预热
                 // exec 临时文件（写盘→refresh→方言映射→findFile→填缓存槽），弹窗打开后
                 // prepareDefaultConsole 命中缓存，EDT 冷路径（refresh+findFile 慢操作 SEVERE 本体）
                 // 退化为兜底。独立池线程 fire-and-forget——预热含 VFS refresh 有界耗时，不得推迟
                 // 弹窗；带参/批量/XML 预览 SQL 随面板勾选变化，预热内容不可信，跳过。
-                // T-PreviewExecWriteDefer：惰性口径下**不预热 exec 文件**——预热本身就是「写带方言映射的
-                // mpsql-exec.sql」，会触发 PushedFilePropertiesUpdater ⇒ 工程进 dumb（用户 00:10 A/B：
-                // 第 1 次写→dumb、第 2 次不写→无 dumb）。执行链在用户真执行时会自己同步该文件。
-                if (PreviewConsoleEager.enabled() && result != null && result.previewModel == null &&
-                    result.batchModel == null &&
-                    result.xmlModel == null && result.fillClauses.isNullOrEmpty() &&
-                    cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable()
-                ) {
-                    ApplicationManager.getApplication().executeOnPooledThread {
-                        runCatching {
-                            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prewarmExecTempFile(
-                                project, result.sql, result.effectiveDialect?.name,
-                            )
-                        }.onFailure {
-                            // T-FatalPassthrough T-FP-02b（独立复核阻断 2 同族）：本 runCatching 包住整条
-                            // 预热链——不放行 fatal 会让 DataSourceSelector 预热链的 6 处透传（缓存命中
-                            // 刷新 / 写盘 / pre-refresh 收敛 / refresh / syncVf / findPsi）全部作废。
-                            // 非 fatal 仍 warn 降级（fire-and-forget 语义不变）；fatal 透传到池线程
-                            // 平台处理器记录现场。
-                            if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(it)) throw it
-                            LOG.warn("[M36] exec prewarm dispatch failed: ${it.javaClass.simpleName}: ${it.message}")
-                        }
-                    }
+                // T-PreviewExecWriteDefer（master 侧）：惰性口径下**不预热 exec 文件**——预热本身就是
+                // 「写带方言映射的 mpsql-exec.sql」，会触发 PushedFilePropertiesUpdater ⇒ 工程进 dumb
+                // （用户 00:10 A/B：第 1 次写→dumb、第 2 次不写→无 dumb）。执行链在用户真执行时会自己
+                // 同步该文件。
+                // T-PerfSweep30 01a（dev 移植）：预热派发改走 dispatchPrewarm——cache-only 形态，
+                // 同一预览打开内渲染回填与预热内容一致时零写盘。确定性 SQL 判据与执行可用性判据
+                // 均在 dispatchPrewarm 内。
+                if (PreviewConsoleEager.enabled() && result != null) {
+                    dispatchPrewarm(project, result!!)
                 }
                 ApplicationManager.getApplication().invokeLater { onResult(result) }
             }
         }
+
+        /**
+         * T-PerfSweep30 01a/02d：预览成功后的 exec 临时文件预热派发（确定性 SQL 才预热）。
+         * cache-only 形态——同一预览打开内渲染回填与预热内容一致时零写盘。
+         */
+        private fun dispatchPrewarm(project: Project, result: PreviewResult) {
+            if (result.previewModel == null && result.batchModel == null &&
+                result.xmlModel == null && result.fillClauses.isNullOrEmpty() &&
+                cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable()
+            ) {
+                ApplicationManager.getApplication().executeOnPooledThread {
+                    runCatching {
+                        // T-PerfSweep30 01a：预览首开预热同样 cache-only——同一预览打开内
+                        // 渲染回填（showSql nativeDoc 分支已内容判等）与本预热内容一致时零写盘。
+                        cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prewarmExecTempFile(
+                            project, result.sql, result.effectiveDialect?.name, cacheOnly = true,
+                        )
+                    }.onFailure {
+                        // T-FatalPassthrough T-FP-02b（独立复核阻断 2 同族）：本 runCatching 包住整条
+                        // 预热链——不放行 fatal 会让 DataSourceSelector 预热链的 6 处透传（缓存命中
+                        // 刷新 / 写盘 / pre-refresh 收敛 / refresh / syncVf / findPsi）全部作废。
+                        // 非 fatal 仍 warn 降级（fire-and-forget 语义不变）；fatal 透传到池线程
+                        // 平台处理器记录现场。
+                        if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(it)) throw it
+                        LOG.warn("[M36] exec prewarm dispatch failed: ${it.javaClass.simpleName}: ${it.message}")
+                    }
+                }
+            }
+        }
+
+        /**
+         * T-PerfSweep30 02d：DumbMode 重试仍失败的可见归因（复用既有平台通知基础设施）。
+         * 测试模式经 [indexNotReadyNoticeForTest] 捕获，不真发通知。
+         */
+        internal fun notifyIndexNotReady(project: Project) {
+            val notification = Notification(
+                NOTIFICATION_GROUP_ID,
+                MpSqlVisualizerBundle.message("action.notFound.title"),
+                MpSqlVisualizerBundle.message("action.indexNotReady.message"),
+                NotificationType.WARNING,
+            )
+            indexNotReadyNoticeForTest?.let {
+                it(notification)
+                return
+            }
+            if (ApplicationManager.getApplication().isUnitTestMode) return
+            runCatching { notification.notify(project) }
+        }
+
+        /** T-PerfSweep30 02d 测试缝：捕获可见归因通知（测试模式不真发）。 */
+        @Volatile
+        internal var indexNotReadyNoticeForTest: ((Notification) -> Unit)? = null
     }
 }
 

@@ -1,9 +1,13 @@
 package cn.song.mybatisplus.visualizer.mcp
 
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.extensions.ExtensionPoint
 import com.intellij.openapi.extensions.ExtensionPointName
 import java.lang.reflect.InvocationHandler
+import java.lang.reflect.Method
 import java.lang.reflect.Proxy
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.Continuation
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 
@@ -39,7 +43,17 @@ import kotlinx.coroutines.flow.emptyFlow
  *  - 未知方法按返回类型兜底（[defaultValueFor]：集合/Map/Flow/原始类型给空值，void 与对象给 null）；
  *  - 各实现体 runCatching，失败降级为「原样返回/空清单」。
  *
- * **加载纪律**：本对象只在 [McpGateFilterEpRegistrar.registerOnce] 探测通过（形态 A 或 B）后
+ * **T-McpGlobalBreakHardening（20261118）：契约白名单 + 运行期熔断**。上面的兜底只解决
+ * 「已知形态的方法名不同」，解决不了「平台给接口加了新方法」：`applyFilters` 仍在场时探测
+ * 仍判 A，新方法落兜底、对象返回类型给 null，事故原样复发。故补两层：
+ *  - **注册前**：接口上出现任何不认识的方法（不含 Object 基方法与编译器合成的 `$default`）
+ *    即判 UNKNOWN、不注册；已知方法的参数个数/返回类型/是否 suspend 也一并收窄
+ *    （[unknownContractMethods] / [detectFilterForm]）；
+ *  - **注册后**：平台真的调到不认识的方法时，记一条 SEVERE 并**立刻把本 provider 从 EP 摘掉**
+ *    （[onUnknownContract]），让后续清单请求不再经过本代理——门控失效，但平台 MCP 服务
+ *    保持可用。摘除后本次运行期不再重新注册（契约已漂移，重挂只会再炸一次）。
+ *
+ * **加载纪律**：本对象只在 [McpGateFilterEpRegistrar.sync] 探测通过（形态 A 或 B）后
  * 被触达；UNKNOWN 与更早平台（253/252/251、261.17801 及更早无此类）不注册，本类即便随 jar
  * 装载也**无任何平台过滤类型的链接要求**（方法体零平台类型，平台 API 全部经字符串在运行时解析）。
  *
@@ -62,18 +76,83 @@ internal object McpGateFilterEpBridge {
     private const val TOOL_FILTER_MODIFICATION_FQN =
         "com.intellij.mcpserver.McpToolFilterProvider\$McpToolFilterModification"
 
+    /** 已注册的 EP 与 provider 实例（摘除/熔断用）。null = 未注册。 */
+    private var registeredEp: ExtensionPoint<Any>? = null
+    private var registeredProvider: Any? = null
+
+    /** 熔断闸：平台调到未知契约方法后置位，本次运行期不再重新注册。 */
+    private val breakerTripped = AtomicBoolean(false)
+
+    /** 注册（幂等）。熔断后拒绝重挂——契约已漂移，重挂只会再炸一次。 */
+    @Synchronized
     fun register() {
+        if (registeredProvider != null) return
+        if (breakerTripped.get()) {
+            LOG.info("O-68: 熔断已置位，跳过 mcpToolFilterProvider 注册")
+            return
+        }
         val filterIface = Class.forName(FILTER_IFACE_FQN)
         val loader = McpGateFilterEpBridge::class.java.classLoader
-        val provider = Proxy.newProxyInstance(loader, arrayOf(filterIface), providerHandler())
-        val ep = ExtensionPointName.create<Any>(EP_NAME)
-        ep.getPoint(null).registerExtension(provider)
+        val provider = Proxy.newProxyInstance(
+            loader,
+            arrayOf(filterIface),
+            providerHandler { signature -> tripBreaker(signature) },
+        )
+        val ep = ExtensionPointName.create<Any>(EP_NAME).getPoint(null)
+        ep.registerExtension(provider)
+        registeredEp = ep
+        registeredProvider = provider
         LOG.info("O-68: sqlv gate filter registered onto mcpToolFilterProvider EP (proxy form)")
+    }
+
+    /** 从 EP 摘除（幂等）。总开关关闭 / Registry 逃生开关 / 熔断三处共用。 */
+    @Synchronized
+    fun unregister() {
+        val ep = registeredEp ?: return
+        val provider = registeredProvider ?: return
+        registeredEp = null
+        registeredProvider = null
+        runCatching { ep.unregisterExtension(provider) }
+            .onSuccess { LOG.info("O-68: sqlv gate filter unregistered from mcpToolFilterProvider EP") }
+            .onFailure { LOG.warn("O-68: 摘除 mcpToolFilterProvider 注册失败（门控仍生效，MCP 不受影响）", it) }
+    }
+
+    internal fun isRegistered(): Boolean = registeredProvider != null
+
+    internal fun isBreakerTripped(): Boolean = breakerTripped.get()
+
+    /**
+     * 置熔断位并摘除注册；只在首次返回 true（记 SEVERE + 摘除），后续调用静默。
+     * 测试直接调本方法验「只触发一次」的语义（[handlerForTest] 的回调是每次未知调用都触发）。
+     */
+    internal fun tripBreaker(signature: String): Boolean {
+        if (!breakerTripped.compareAndSet(false, true)) return false
+        // 用 WARN 而不是 ERROR：平台测试框架把 LOG.error 当测试失败，且这条不是插件内部错误
+        // （是平台契约变了、我们主动退让）。文案带 O-68 便于现场 grep。
+        LOG.warn(
+            "O-68: 平台调用了未识别的过滤器契约方法 $signature；已摘除 mcpToolFilterProvider 注册" +
+                "（门控失效，内置 MCP Server 不受影响）",
+        )
+        unregister()
+        return true
+    }
+
+    /** 测试缝：清空注册/熔断状态（应用级单例跨用例存活）。 */
+    internal fun resetForTest() {
+        breakerTripped.set(false)
+        registeredEp = null
+        registeredProvider = null
     }
 
     /** 平台对 provider 的全部调用分发（含 Object 基方法：代理不会绕过 handler）。
      *  形态 A/B 的入口共用一个 handler：平台只声明自己那一形态的方法，另一分支是死路。 */
-    private fun providerHandler() = InvocationHandler { proxy, method, args ->
+    private fun providerHandler(): InvocationHandler =
+        providerHandler { signature -> tripBreaker(signature) }
+
+    /** 可注入「未知契约方法」回调的 handler（测试缝；生产回调＝[tripBreaker]）。 */
+    internal fun handlerForTest(onUnknown: (String) -> Unit): InvocationHandler = providerHandler(onUnknown)
+
+    private fun providerHandler(onUnknown: (String) -> Unit) = InvocationHandler { proxy, method, args ->
         when (method.name) {
             "applyFilters" -> {
                 applyFilters(args?.firstOrNull())
@@ -86,7 +165,12 @@ internal object McpGateFilterEpBridge {
             "toString" -> "SqlVisualizerToolGateFilterProvider(proxy)"
             "hashCode" -> System.identityHashCode(proxy)
             "equals" -> args?.firstOrNull() === proxy
-            else -> defaultValueFor(method.returnType)
+            // 未知方法：先按返回类型给安全值（本次调用不炸），同时通知熔断层摘除注册
+            // （后续清单请求不再经过本代理）。顺序不能反——摘除只影响下一次调用。
+            else -> {
+                onUnknown(signatureOf(method))
+                defaultValueFor(method.returnType)
+            }
         }
     }
 
@@ -239,26 +323,79 @@ internal object McpGateFilterEpBridge {
 internal enum class FilterForm { A_APPLY, B_GET_LIST, UNKNOWN }
 
 /**
- * 契约感知探测（T-Mcp261FilterContract 券02）：**只按方法签名判形态，不看类是否存在**。
+ * 契约白名单（T-McpGlobalBreakHardening）：本桥认识的平台方法名。
+ *
+ * 白名单的意义是**否决未知**，而不是「找到已知就注册」。261 的事故形态是「方法名不同」，
+ * 而更危险的形态是「方法名都在、平台又加了一个」——只看有没有 `applyFilters` 会判 A 并注册，
+ * 新方法落兜底、对象返回类型给 null，事故原样复发。故接口上出现任何白名单外的方法（Object
+ * 基方法与编译器合成的 `$default` 桥除外）一律判 UNKNOWN、不注册。
+ */
+private val KNOWN_CONTRACT_METHODS = setOf("applyFilters", "getFilters", "getUpdates")
+
+/** 接口上所有「不认识」的方法（日志与测试用；非空即契约未知）。 */
+internal fun unknownContractMethods(iface: Class<*>): List<String> =
+    iface.methods.filter { method ->
+        !method.isSynthetic && !method.isBridge &&
+            method.declaringClass != Any::class.java &&
+            method.name !in KNOWN_CONTRACT_METHODS
+    }.map { signatureOf(it) }
+
+/** 方法签名摘要（日志/守卫共用）。 */
+internal fun signatureOf(method: Method): String =
+    "${method.name}/${method.parameterCount}->${method.returnType.simpleName}"
+
+/**
+ * Kotlin suspend 方法在 JVM 上表现为「末参 Continuation、返回 Object」。动态代理若对它返回
+ * null，平台会当成「协程已挂起且永不恢复」——比抛异常更糟（会话请求一直挂着）。探测期一律
+ * 按不可识别处理，不注册。
+ */
+private fun Method.isSuspendLike(): Boolean =
+    parameterTypes.any { Continuation::class.java.isAssignableFrom(it) }
+
+/**
+ * 契约感知探测（T-Mcp261FilterContract 券02 + T-McpGlobalBreakHardening 券01）：
+ * **只按方法签名判形态，不看类是否存在；未知方法直接否决**。
  *
  * 261 上类存在但方法名不同（`getFilters` 而非 `applyFilters`），旧探测「类在即注册」把
  * 一个按 262 签名写的代理挂上去 → `getFilters` 落兜底 → 平台 `addAll(collection, null)`
  * → 内置 MCP Server 对所有客户端 500。故此处：
- *  - `applyFilters` 在场 → A（262/263）；
- *  - `getFilters` 双参且返回 `List` → B（261.24374+ / 261.25134）；
+ *  - 白名单外出现任何方法 → UNKNOWN；
+ *  - `applyFilters` 四参、返回 void、非 suspend → A（262/263）；
+ *  - `getFilters` 双参且返回 `List`、非 suspend → B（261.24374+ / 261.25134）；
+ *  - `getUpdates` 若存在必须返回 `Flow` 且非 suspend；
  *  - 其余（含 261.22158 的 `StateFlow` 形态 C、未来新形态）→ UNKNOWN，不注册。
  *
- * 判据只看方法名 + 参数个数 + 返回类型可赋值性——这三项都写在 JVM 描述符里，不依赖 Kotlin
- * 元数据，也不产生任何类型引用（`List` 是 JDK 类型）。
+ * 判据只看方法名 + 参数个数 + 返回类型可赋值性 + 是否 suspend——这些都写在 JVM 描述符里，
+ * 不依赖 Kotlin 元数据，也不产生任何平台类型引用（`List`/`Flow`/`Continuation` 都来自
+ * JDK 或 kotlin 标准库）。
  */
-internal fun detectFilterForm(iface: Class<*>): FilterForm = when {
-    iface.methods.any { it.name == "applyFilters" } -> FilterForm.A_APPLY
-    iface.methods.any {
-        it.name == "getFilters" &&
+internal fun detectFilterForm(iface: Class<*>): FilterForm {
+    if (unknownContractMethods(iface).isNotEmpty()) return FilterForm.UNKNOWN
+    val methods = iface.methods
+    val updates = methods.filter { it.name == "getUpdates" }
+    if (updates.isNotEmpty() && updates.none {
+            Flow::class.java.isAssignableFrom(it.returnType) && !it.isSuspendLike()
+        }
+    ) {
+        return FilterForm.UNKNOWN
+    }
+    val apply = methods.filter { it.name == "applyFilters" }
+    if (apply.isNotEmpty()) {
+        val ok = apply.any {
+            it.parameterCount == 4 && it.returnType == Void.TYPE && !it.isSuspendLike()
+        }
+        return if (ok) FilterForm.A_APPLY else FilterForm.UNKNOWN
+    }
+    val getFilters = methods.filter { it.name == "getFilters" }
+    if (getFilters.isNotEmpty()) {
+        val ok = getFilters.any {
             it.parameterCount == 2 &&
-            List::class.java.isAssignableFrom(it.returnType)
-    } -> FilterForm.B_GET_LIST
-    else -> FilterForm.UNKNOWN
+                List::class.java.isAssignableFrom(it.returnType) &&
+                !it.isSuspendLike()
+        }
+        return if (ok) FilterForm.B_GET_LIST else FilterForm.UNKNOWN
+    }
+    return FilterForm.UNKNOWN
 }
 
 /** 形态的日志描述（注册日志里带形态，便于下一条版本线回溯）。 */

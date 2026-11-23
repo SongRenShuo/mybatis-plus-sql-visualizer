@@ -208,8 +208,16 @@ internal fun formatTimestampFragment(entry: LogSqlEntry): Pair<String, SimpleTex
     return "[$formatted] " to LIST_META_GRAY
 }
 
-/** 耗时片段：颜色分档与原 HTML 通道一致（选中白/无耗时灰/慢红/偏慢橙/正常绿）；无耗时显示 "—" 占位。 */
-internal fun formatDurationFragment(ms: Long?, isSelected: Boolean): Pair<String, SimpleTextAttributes> {
+/** 耗时片段：颜色分档与原 HTML 通道一致（选中白/无耗时灰/慢红/偏慢橙/正常绿）；无耗时显示 "—" 占位。
+ *
+ * T-HdAbsorb D215：近似档（[DurationKind.APPROXIMATE]，控制台日志解析通道）文本带 `~` 前缀；
+ * 精确档（agent）与 null（未知/旧条目）形态逐字节不变（零回归锚点）。
+ */
+internal fun formatDurationFragment(
+    ms: Long?,
+    isSelected: Boolean,
+    kind: DurationKind? = null,
+): Pair<String, SimpleTextAttributes> {
     val threshold = PluginSettings.getInstance().state.slowQueryThresholdMs
     val color = when {
         // T-UN-13（T-UiNative）：五档写死色 → namedColor（亮值不变）
@@ -219,7 +227,7 @@ internal fun formatDurationFragment(ms: Long?, isSelected: Boolean): Pair<String
         ms >= threshold / 2 -> MpvsUiColors.DURATION_WARN // 橙：偏慢
         else -> MpvsUiColors.DURATION_OK           // 绿：正常
     }
-    val text = ms?.let { "${it}ms" } ?: "—"
+    val text = ms?.let { "${if (kind == DurationKind.APPROXIMATE) "~" else ""}${it}ms" } ?: "—"
     return "$text " to SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, color)
 }
 
@@ -240,6 +248,35 @@ internal fun formatTemplateCountFragment(
     if (n < TEMPLATE_BADGE_MIN_COUNT) return null
     val color = if (isSelected) Color(0xFFFFFF) else MpvsUiColors.TEMPLATE_N1
     return MpSqlVisualizerBundle.message("log.panel.templateBadge", n) + " " to
+        SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, color)
+}
+
+/**
+ * T-HdAbsorb D216：N+1 嫌疑徽章（第一刀）——同模板计数达 [NplusOneSuspect.DEFAULT_MIN_COUNT]
+ * （Registry 可调）判嫌疑，落点与「×N 同模板」相邻（元信息行尾），红色加粗作行动信号。
+ * Registry `sqlvis.log.nplusOneSuspect` 关闭即不显示（回退通道）；与展示徽章并存
+ * （阈值 5 > 3，嫌疑条目两枚徽章都可见，语义分层：计数提示 vs 行动建议）。
+ *
+ * 第二刀（D216 收口）：[nplusOneSuspects] 非 null 时走**窗口判定**——嫌疑集由
+ * `SqlLogEntryBuffer.windowSuspectKeys` 按刷新拍产出（同线程滑动窗分桶 + null 线程会话级回落），
+ * 本函数只查键在场；null（历史页/未接线调用方）保持第一刀会话级计数判定，逐字不变。
+ */
+internal fun formatNplusOneSuspectFragment(
+    entry: LogSqlEntry,
+    counts: Map<String, Int>,
+    isSelected: Boolean,
+    nplusOneSuspects: Set<String>? = null,
+): Pair<String, SimpleTextAttributes>? {
+    val n = counts[entry.structureKey] ?: return null
+    if (!NplusOneSuspect.enabledProvider()) return null
+    val suspect = if (nplusOneSuspects != null) {
+        entry.structureKey in nplusOneSuspects
+    } else {
+        NplusOneSuspect.isSuspect(n)
+    }
+    if (!suspect) return null
+    val color = if (isSelected) Color(0xFFFFFF) else MpvsUiColors.NPLUS_ONE_SUSPECT
+    return MpSqlVisualizerBundle.message("log.panel.nplusOneBadge", n) + " " to
         SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, color)
 }
 
@@ -373,6 +410,15 @@ internal class LogEntryListCellRenderer : RailCellRendererBase() {
 
     /** O-90：同模板计数快照（「×N 同结构」徽章渲染数据源；refreshList 随 dedupeCounts 一并更新）。 */
     var templateCounts: Map<String, Int> = emptyMap()
+
+    /**
+     * T-HdAbsorb D216 第二刀：N+1 窗口嫌疑键集（buffer.windowSuspectKeys 每刷新拍产出；
+     * refreshCountMaps 更新）。null/空集语义见 formatNplusOneSuspectFragment——日志页恒非 null
+     * （空集=无嫌疑），历史页渲染器不设此字段走第一刀会话级判定。
+     */
+    var nplusOneSuspects: Set<String>? = null
+
+    override fun nplusOneSuspectsSnapshot(): Set<String>? = nplusOneSuspects
 
     /** 当前列表可见条目的最大耗时（refreshList 更新；进度条已退役，仍留作诊断读数与测试断言）。 */
     var maxDurationMs: Long? = null

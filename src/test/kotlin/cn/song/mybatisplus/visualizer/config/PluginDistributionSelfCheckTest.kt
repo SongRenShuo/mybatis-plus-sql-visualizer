@@ -35,10 +35,12 @@ class PluginDistributionSelfCheckTest {
     @Test
     fun `pluginXml_插件名统一为全名`() {
         val xml = resourceText("META-INF/plugin.xml")
-        assertTrue("插件名应为 SQL Visualizer", xml.contains("<name>SQL Visualizer</name>"))
+        assertTrue("插件名应为 MyBatis SQL Visualizer（T-D244 B1 更名）", xml.contains("<name>MyBatis SQL Visualizer</name>"))
         assertTrue("不应残留旧名 MP SQL Visualizer", !xml.contains("MP SQL Visualizer"))
         // 2026-08-28 更名：MyBatis-Plus SQL Visualizer → SQL Visualizer（ID 不变），旧名列入防回归
         assertTrue("不应残留旧名 MyBatis-Plus SQL Visualizer", !xml.contains("MyBatis-Plus SQL Visualizer"))
+        // 2026-11-21 更名（T-D244 B1）：SQL Visualizer → MyBatis SQL Visualizer（ID 不变），旧名列入防回归
+        assertTrue("不应残留旧名 SQL Visualizer 独名", !xml.contains("<name>SQL Visualizer</name>"))
     }
 
     @Test

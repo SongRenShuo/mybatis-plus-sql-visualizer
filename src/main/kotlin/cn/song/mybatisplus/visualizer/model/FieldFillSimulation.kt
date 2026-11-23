@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.model
 
+import cn.song.mybatisplus.visualizer.sql.PreQuotedLiteral
+
 /**
  * R92: explicit, literal-only preview overlay. This is NOT a MetaObjectHandler emulator:
  * no user class loading, scripts, clock, account lookup or implicit column selection.
@@ -14,10 +16,13 @@ object FieldFillSimulation {
     /** Null means invalid/unprovided; callers retain the placeholder rather than raw-inserting input. */
     fun literal(value: String, quote: Boolean?): String? {
         if (value.isBlank() || value.any { it == ';' || it == '\\' || it.isISOControl() }) return null
+        val trimmed = value.trim()
+        // T-PreQuotedLiteral：用户已手工加引号的值原样（放在安全闸门之后——分号/反斜杠拒绝语义不变）
+        if (quote != false && PreQuotedLiteral.isComplete(trimmed)) return trimmed
         return if (quote == false) {
-            value.trim().takeIf(number::matches)
+            trimmed.takeIf(number::matches)
         } else {
-            "'${value.replace("'", "''")}'"
+            "'${trimmed.replace("'", "''")}'"
         }
     }
 

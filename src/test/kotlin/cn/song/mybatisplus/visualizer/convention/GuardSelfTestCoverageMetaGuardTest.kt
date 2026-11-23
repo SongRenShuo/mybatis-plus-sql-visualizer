@@ -654,6 +654,39 @@ class GuardSelfTestCoverageMetaGuardTest {
          */
         val GUARD_CLASSES = listOf(
             GuardEntry(
+                "convention/EdtBoundedWaitGuardTest.kt",
+                listOf(DecisionFn("unboundedWaitOffenders", FnKind.VIOLATIONS)),
+                "T-UserFreezeTriage 守卫（2026-11-19 用户线程转储）：后台线程等 EDT 一律有界——src/main 除 " +
+                    "util/EdtDispatch.kt（派发器本体）与 update/DynamicInstallSupport.kt（一次性安装的同步卸载）" +
+                    "外不得出现 invokeAndWait。判定内核 unboundedWaitOffenders 返回命中文件清单；" +
+                    "自证语料=自证_裸invokeAndWait必被点名（裸调必报 / 白名单放行 / 空树不报三态），" +
+                    "另有「有界派发器必须真被接线」一条防空绿（接线被撤时不得静默恒绿）。",
+            ),
+            GuardEntry(
+                "convention/ShareExportOffEdtGuardTest.kt",
+                listOf(DecisionFn("offendersOf", FnKind.VIOLATIONS)),
+                "T-PerfSweep30 04a 守卫（T-PerfSweep31 券03 自 dev 移植）：ShareDialog 的 HTML 落盘必须在 " +
+                    "Task.Backgroundable.run 内、BrowserUtil.open 必须在 onSuccess 后。判定内核 offendersOf " +
+                    "返回违规说明集合（saveHtmlReport 出现多次 / 不在 run 内 / 打开不在 onSuccess 内）。" +
+                    "自证语料=testGuardCatchesEdtDirectWrite 用「落盘挪回 EDT 回调」的合成源码直接断言内核报出该形态。",
+            ),
+            GuardEntry(
+                "convention/MapperNavCacheKeyProjectIdentityGuardTest.kt",
+                listOf(DecisionFn("violationsIn", FnKind.VIOLATIONS)),
+                "T-PerfSweep32 券02 守卫（性能分析第九期 §5.2 P3）：resolvedStatementKeys（Mapper 双向导航" +
+                    "共享正缓存）的键必须带 project.locationHash 前缀——判定内核 violationsIn 返回违规说明" +
+                    "集合（缺统一 cacheKey 构造 / 函数体无 locationHash / 裸键旧形态 \"\$namespace# 残留 / " +
+                    "cacheKey(project, 调用点不足 2 处）。自证=含旧形态合成样本必被抓出 + 干净样本放行两用例。",
+            ),
+            GuardEntry(
+                "convention/TestClassVisibilityGuardTest.kt",
+                listOf(DecisionFn("violationsIn", FnKind.VIOLATIONS)),
+                "T-PerfSweep32 收口轮元守卫：测试类「有 test 方法却 JUnit3/JUnit4 双扫描器均不可见」的静默" +
+                    "零执行形态（IbatisTypeAliasResolverHotPathTest 三方法缺 @Test 且无 TestCase 血统，" +
+                    "守卫死了一整轮直到反向验证跑不红才暴露）——判定内核 violationsIn 返回违规说明集合。" +
+                    "自证=无注解无血统合成样本必被抓出 + 带 @Test / TestCase 血统样本放行两用例。",
+            ),
+            GuardEntry(
                 "update/HotUpdateSettingsGuardTest.kt",
                 emptyList(),
                 "T-HotUpdateSettingsGuard 守卫：热更新（动态装载）后设置页「确定」无反应的兜底判定——" +
@@ -897,6 +930,16 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "isUnitTestMode 收敛分支（围合函数体可见收敛标记）或登记豁免（豁免表反腐烂），" +
                     "调用面期望计数同步防扫面失明空绿。判定内核与自证用例同文件：" +
                     "`守卫自证_未收敛调用点必红_收敛豁免与注释形态各归其位`（六组合成样本双向判别）。",
+            ),
+            // ---- T-SyncK2JMaster180：CI 关键测试腿接线契约（2026-11-20） ----
+            GuardEntry(
+                "convention/CiWorkflowCoverageGuardTest.kt",
+                listOf(DecisionFn("violationsIn", FnKind.VIOLATIONS)),
+                "CI 关键测试腿接线契约守卫：build-plugin gate 必须有独立 agenttest job 跑 " +
+                    ":sql-visualizer-agent:test（且打包命令行不得串入该腿，防回退拖长关键路径）、nightly 必须" +
+                    "有 :sql-visualizer-agent:test 与 :testExternal、push-test 必须有 :testShard，凡跑 agent 腿" +
+                    "的命令行必须带 -PagentTestExclude（真库用例剔除口径一致）。判定内核 violationsIn 返回" +
+                    "违规说明集合；自证=缺腿与串行回退的合成样本必被抓出 + 完整样本放行两用例。",
             ),
 
             GuardEntry(
@@ -1416,6 +1459,18 @@ class GuardSelfTestCoverageMetaGuardTest {
                 ),
                 "本元守卫自身：判定内核为纯函数（fnDecls/selfTestFns/decisionShapedDecls/uncoveredNames），" +
                     "灵敏度由 `元守卫灵敏度自证_未自证的判定函数必红_自证与KDoc边界各归其位` 用例钉住",
+            ),
+            // ---- T-SqlPreviewStandalone 装配守卫（2026-11-14） ----
+            GuardEntry(
+                "ui/standalone/StandaloneTabRegistryGuardTest.kt",
+                emptyList(),
+                "T-SqlPreviewStandalone 装配守卫：判定内核内联于五个用例——registry 键常量与 " +
+                    "plugin.xml `<registryKey>` 同名（改名只改一处即静默失效）、消费点必须用带默认值 " +
+                    "的 Registry.`is`(key,true) 重载（缺键显式兜底）、action 注册面（ToolsMenu+键位）、" +
+                    "bundle 双语 standalone 族键位 parity、解析器/面板/通道三处接线在场。" +
+                    "无「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
+                    "灵敏度=删掉 plugin.xml 的 registryKey 或改键名、把消费点改成无参重载、" +
+                    "删 en 或 zh 任一侧 standalone 键，对应用例必红。",
             ),
         )
     }

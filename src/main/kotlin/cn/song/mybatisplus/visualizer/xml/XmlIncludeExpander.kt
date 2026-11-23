@@ -69,7 +69,7 @@ object XmlIncludeExpander {
                 if (external != null) {
                     val copies = externalChildren(element, external, props, errors)
                     if (copies == null) {
-                        element.parentNode?.removeChild(element)
+                        replaceWithMissingPlaceholder(element, refid)
                         return
                     }
                     replaceNode(element, copies)
@@ -84,7 +84,10 @@ object XmlIncludeExpander {
                 } else {
                     "Include refid '$refid' not found in this mapper (cross-namespace include is not supported)."
                 }
-                element.parentNode?.removeChild(element)
+                // T-IncludePlaceholder（MyBatis 侧对齐 iBatis）：整段抹掉会渲染出「SELECT 后面直接接
+                // FROM」的残句。改留一条注释占位——结构完整可读、复制出去也能看出缺哪一段；
+                // 注释不含 `#{}`，占位符位点与参数映射均不受影响。
+                replaceWithMissingPlaceholder(element, refid)
                 return
             }
             val copies = copyChildren(target, props)
@@ -193,5 +196,18 @@ object XmlIncludeExpander {
             anchor = copy
         }
         if (copies.isEmpty()) parent.removeChild(include)
+    }
+
+    /**
+     * T-IncludePlaceholder：缺失片段处留注释占位（与 iBatis 侧同形）。
+     *
+     * 为什么不是整段移除：移除后渲染出来是「SELECT 后面直接接 FROM」的残句，用户看不出缺什么；
+     * 留注释既保住结构，也让「复制 SQL」的产物自带缺口标记。注释里不含 `#{}`，占位符位点与
+     * 参数映射完全不受影响（缺的片段本来就不参与本次渲染）。
+     */
+    private fun replaceWithMissingPlaceholder(include: Element, refid: String) {
+        val parent = include.parentNode ?: return
+        val text = include.ownerDocument.createTextNode("/* TODO: missing <sql id=\"$refid\"> */")
+        parent.replaceChild(text, include)
     }
 }

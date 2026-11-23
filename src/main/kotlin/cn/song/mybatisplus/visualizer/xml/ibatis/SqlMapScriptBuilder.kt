@@ -113,7 +113,11 @@ internal class SqlMapScriptBuilder(
         if (fragment == null) {
             // 引擎此处抛 RuntimeException("Could not find SQL statement to include with refid '...'")
             warn("找不到 <include refid=\"$refid\"> 对应的 <sql> 片段（原文不保留，语句内容可能不完整）")
-            return emptyList()
+            // T-IncludePlaceholder：整段丢弃会渲染出「SELECT 后面直接接 FROM」的残句（用户 2026-11-18
+            // 截图实证）。改留一条注释占位——SQL 结构完整可读、复制出去也能看出缺哪一段；不引入任何
+            // 占位符（片段内的 `#x#` 本来就不参与本次渲染，`?` 位点与参数名序不受影响）。
+            val placeholder = "/* TODO: missing <sql id=\"$refid\"> */"
+            return listOf(IbatisTextNode(rawText = placeholder, postParseRequired = false, parsedText = placeholder))
         }
         usedFragmentIds.add(if (direct != null) refid else applyNamespace(refid))
         // 引擎：include 边界 postParseRequired 复位为 false（见类 KDoc 第 2 点）
