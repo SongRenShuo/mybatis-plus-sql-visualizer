@@ -173,6 +173,41 @@ class HeavyXmlParamTypeResolverTest : HeavyPlatformTestCase() {
         assertTrue(XmlParamTypeResolver.resolveQuotes(null, "com.example.SettlementMapper", "statistics").isEmpty())
     }
 
+    /**
+     * D254（T-EntityFieldStaticHidden）：DTO 继承 + 静态字段的参数键集。
+     *  - 同名属性取**子类**类型（父类 Integer 不得盖掉子类 String）；
+     *  - `serialVersionUID` 真机 `Reflector.isValidPropertyName` 排除 → 不产键；
+     *  - 其它 static 常量真机可读（static final 仍注册 getter）→ 保留键（防过度收紧）。
+     */
+    fun testInheritedDtoFieldsAndStaticPropertyRules() {
+        addSourceFile(
+            "InheritedDtoMapper.java",
+            """
+            package com.example;
+
+            public class BaseQuery {
+                private Integer status;
+                private static final long serialVersionUID = 1L;
+            }
+
+            public class QueryDto extends BaseQuery {
+                private String status;
+                private String name;
+                public static final String TABLE = "query_dto";
+            }
+
+            public interface InheritedDtoMapper {
+                void q(@org.apache.ibatis.annotations.Param("p") QueryDto p);
+            }
+            """.trimIndent(),
+        )
+        val quotes = XmlParamTypeResolver.resolveQuotes(project, "com.example.InheritedDtoMapper", "q")
+        assertEquals("同名属性应取子类 String（引号）而非父类 Integer", true, quotes["p.status"])
+        assertEquals(true, quotes["p.name"])
+        assertFalse("serialVersionUID 真机取不到，不应产键", quotes.containsKey("p.serialVersionUID"))
+        assertTrue("static 常量真机可读，应保留键", quotes.containsKey("p.TABLE"))
+    }
+
     // ------------------------------------------------------------------
     // T-PT-01：类型类别映射（Heavy 真实 PSI resolve）
     // ------------------------------------------------------------------

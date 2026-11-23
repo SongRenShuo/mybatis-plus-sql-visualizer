@@ -21,6 +21,7 @@ import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.model.UpdateStatement
 import cn.song.mybatisplus.visualizer.model.WrapperArg
 import cn.song.mybatisplus.visualizer.psi.ArgResolver
+import cn.song.mybatisplus.visualizer.psi.EntityFieldCollector
 import cn.song.mybatisplus.visualizer.psi.ExpressionEvaluator
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaMetadataReader
@@ -767,7 +768,8 @@ object EasyQueryConverter {
 
         /** EQ8：@Column(primaryKey = true, generatedKey = true) 的主键列（INSERT 排除）。 */
         val generatedKeyColumns: Set<String> by lazy {
-            entityClass.allFields.mapNotNull { field ->
+            // D254：allFields 不按名去重、不过静态——按实体列语义收（同名取子类定义、排除 static/transient）
+            EntityFieldCollector.collectColumns(entityClass).mapNotNull { field ->
                 val column = JpaMetadataReader.findFlex(field, JpaMetadataReader.FQN_EASY_QUERY_COLUMN)
                     ?: return@mapNotNull null
                 val fieldName = field.name ?: return@mapNotNull null

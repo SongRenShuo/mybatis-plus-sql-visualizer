@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui.inject
 
+import cn.song.mybatisplus.visualizer.psi.EntityFieldCollector
 import com.intellij.codeInsight.completion.CompletionContributor
 import com.intellij.codeInsight.completion.CompletionParameters
 import com.intellij.codeInsight.completion.CompletionProvider
@@ -106,7 +107,9 @@ class ResultMapColumnCompletionContributor : CompletionContributor(), DumbAware 
         } else {
             PsiShortNamesCache.getInstance(project).getClassesByName(typeName, scope).firstOrNull()
         }
-        clazz?.allFields?.mapNotNull { it.name?.takeIf { n -> n.isNotBlank() } }?.distinct().orEmpty()
+        // D254：不用 allFields（平台不按名去重、不过静态）——resultMap property 候选按实体列语义收
+        clazz?.let { EntityFieldCollector.collectColumns(it) }
+            ?.mapNotNull { it.name?.takeIf { n -> n.isNotBlank() } }?.distinct().orEmpty()
     }.getOrElse { emptyList() }
 }
 

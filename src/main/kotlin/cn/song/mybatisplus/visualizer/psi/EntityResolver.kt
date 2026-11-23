@@ -55,6 +55,7 @@ class EntityResolver {
      * 缓存键：PsiFile + classQualifiedName + configSignature（三维）。
      * 失效机制：
      *  - 文件修改（modificationStamp 变化）→ 缓存自然失效
+     *  - 父类链文件修改（[inheritanceChainStamp] 变化，D254）→ 缓存失效（继承实体的列来自父类字段）
      *  - 配置签名变化（tablePrefix/tableSuffix/tableNameInference 等设置变更）→ 缓存失效
      *
      * O-58（列名数据源校正）：缓存**继续只存未校正的 PSI 产物**，校正在返回前作为一步廉价后处理
@@ -77,14 +78,19 @@ class EntityResolver {
         // 永久驻留是长会话内存泄漏源；URL 相同的 PSI 重建由 modificationStamp 维度失效）
         val key = EntityCacheKey(file.virtualFile?.url, System.identityHashCode(file), qName, configSig)
         val stamp = file.modificationStamp
+        // D254（M5）：父类链修改戳一并参与命中判定——父类文件被改（加 @TableLogic / 改字段 / 换列名）
+        // 后子类解析结果必须失效；只看当前文件会让预览继续沿用旧映射。
+        val inheritanceStamp = inheritanceChainStamp(entityClass)
         cache[key]?.let { entry ->
-            if (entry.stamp == stamp) return ColumnNameCalibrator.calibrate(project, entry.value)
+            if (entry.stamp == stamp && entry.inheritanceStamp == inheritanceStamp) {
+                return ColumnNameCalibrator.calibrate(project, entry.value)
+            }
         }
 
         val value = resolveInternal(entityClass)
         // 券02（T-PerfSweep27-02）：写入前容量守卫——超限整体清空再写（上限语义见 maxCacheEntries）。
         if (cache.size >= maxCacheEntries) cache.clear()
-        cache[key] = Entry(stamp, value)
+        cache[key] = Entry(stamp, inheritanceStamp, value)
         return ColumnNameCalibrator.calibrate(project, value)
     }
 
@@ -146,16 +152,15 @@ class EntityResolver {
     }
 
     /**
-     * 递归收集类及其所有父类的字段（T-M16.2-02）：
-     *  - **父类字段在前、子类字段在后**（对齐 MP 声明顺序语义）；
-     *  - 仅沿 `superClass` 类继承链——接口字段不纳入（M16.2-R2），`Object` 无字段天然过滤；
-     *  - `seen` 集合防循环继承（异常 PSI 场景防御）。
+     * 继承链字段收集（T-M16.2-02；D254 起委托 [EntityFieldCollector.collectColumns]）：
+     *  - **父类字段在前、子类字段在后**（T-M23.3 既有顺序契约；同名冲突时输出子类字段对象、占父类槽位）；
+     *  - 同名合并（子类优先）＋ 排除 `static` / `transient`——对齐 MP `ReflectionKit.getFieldList`
+     *    （先去重后过滤，顺序语义见 [EntityFieldCollector] 类 KDoc）；
+     *  - 仅沿 `superClass` 类继承链——接口字段不纳入（M16.2-R2）；
+     *  - `seen` 集合防循环继承（异常 PSI 场景防御）由收集器内部处理。
      */
-    private fun collectFieldsIncludingSuper(clazz: PsiClass, seen: MutableSet<PsiClass> = mutableSetOf()): List<PsiField> {
-        if (!seen.add(clazz)) return emptyList()
-        val superFields = clazz.superClass?.let { collectFieldsIncludingSuper(it, seen) } ?: emptyList()
-        return superFields + clazz.fields.toList()
-    }
+    private fun collectFieldsIncludingSuper(clazz: PsiClass): List<PsiField> =
+        EntityFieldCollector.collectColumns(clazz)
 
     /**
      * 解析单个字段为列信息（T-Embedded D3 起可能展开为多列——嵌入对象展平）；
@@ -551,8 +556,13 @@ class EntityResolver {
             val configSignature: String,
         )
 
-        /** 缓存条目：文件修改戳 + 解析结果。 */
-        private data class Entry(val stamp: Long, val value: TableInfo)
+        /**
+         * 缓存条目：文件修改戳 + 父类链修改戳 + 解析结果。
+         *
+         * D254（M5）：[inheritanceStamp] 见 [inheritanceChainStamp]——继承实体的列集合来自父类，
+         * 父类文件改动必须让条目失效，否则预览沿用旧列。
+         */
+        private data class Entry(val stamp: Long, val inheritanceStamp: Long, val value: TableInfo)
 
         /** 缓存键 → 条目（项目级，跟随 EntityResolver 生命周期）。 */
         private val cache = ConcurrentHashMap<EntityCacheKey, Entry>()

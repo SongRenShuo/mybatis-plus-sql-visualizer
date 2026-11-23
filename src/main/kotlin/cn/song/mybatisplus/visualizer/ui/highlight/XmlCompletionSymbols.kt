@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui.highlight
 
+import cn.song.mybatisplus.visualizer.psi.EntityFieldCollector
 import cn.song.mybatisplus.visualizer.ui.SourceSqlContext
 import com.intellij.ide.highlighter.XmlFileType
 import com.intellij.openapi.project.DumbService
@@ -123,7 +124,8 @@ internal object XmlCompletionSymbols {
     /** 类名（FQN 或简单名）→ 全部字段名；不可解析 → 空。 */
     fun fieldsOfClass(project: Project, typeName: String): List<String> = runCatching {
         val clazz = resolveClass(project, typeName) ?: return emptyList()
-        clazz.allFields.mapNotNull { it.name?.takeIf { n -> n.isNotBlank() } }.distinct().take(CAP)
+        EntityFieldCollector.collectColumns(clazz)
+            .mapNotNull { it.name?.takeIf { n -> n.isNotBlank() } }.distinct().take(CAP)
     }.getOrElse { emptyList() }
 
     /** 类名（FQN 优先，简单名兜底）→ PsiClass（不可解析 → null）。 */
@@ -165,7 +167,9 @@ internal object XmlCompletionSymbols {
             val parameter = matchParameter(method.parameterList.parameters, collectionExpr) ?: return emptyList()
             val classType = parameter.type as? PsiClassType ?: return emptyList()
             val element = classType.parameters.singleOrNull() as? PsiClassType ?: return emptyList()
-            element.resolve()?.allFields?.mapNotNull { it.name?.takeIf { n -> n.isNotBlank() } }?.distinct().orEmpty()
+            // D254：foreach 元素属性候选同样按实体列语义（合集未必是实体，仍走同一收集器）
+            element.resolve()?.let { EntityFieldCollector.collectColumns(it) }
+                ?.mapNotNull { it.name?.takeIf { n -> n.isNotBlank() } }?.distinct().orEmpty()
         }.getOrElse { emptyList() }
     }
 
