@@ -153,6 +153,8 @@ object EntityFieldCollector {
 - **M5**（按用户令纳入本批）：新增 `psi/EntityInheritanceStamp.kt`（`inheritanceChainStamp`，链上父类文件 modificationStamp 滚动签名），`EntityResolver` / `JpaEntityResolver` 的缓存条目与命中判定都带上它。
 - **transient**（按用户令同批）：MP 轨与 JPA 轨都排除 Java `transient`；定向全绿，未触发回退。
 - 用户可感说明已回填 `CHANGELOG.md` `[Unreleased] / Fixed`。
+- 真机复现夹具：`dev-support/repro/D254-entity-fields`（最小 Maven 工程：父类 static 常量 + 三处同名重写字段，
+  五个预览触发点与「删掉重写字段」的反向对照；验证步骤见其 README）。
 
 ### 定向测试读数
 
