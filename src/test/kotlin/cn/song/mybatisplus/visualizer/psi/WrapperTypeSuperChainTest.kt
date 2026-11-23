@@ -78,20 +78,20 @@ class WrapperTypeSuperChainTest : BasePlatformTestCase() {
             import com.github.yulichang.wrapper.MPJLambdaWrapper;
 
             public class Demo {
-                static abstract class Wrapper<T> extends MPJLambdaWrapper<T> {
+                static abstract class BaseWrapper<T> extends MPJLambdaWrapper<T> {
                 }
 
-                static abstract class AbstractJoinWrapper<T, C> extends Wrapper<T> {
+                static abstract class AbstractJoinBaseWrapper<T, C> extends BaseWrapper<T> {
                 }
 
-                static abstract class AbstractLambdaJoinWrapper<T, C> extends AbstractJoinWrapper<T, C> {
+                static abstract class AbstractLambdaJoinBaseWrapper<T, C> extends AbstractJoinBaseWrapper<T, C> {
                 }
 
-                static class JoinLambdaWrapper<T> extends AbstractLambdaJoinWrapper<T, JoinLambdaWrapper<T>> {
+                static class CustomJoinWrapper<T> extends AbstractLambdaJoinBaseWrapper<T, CustomJoinWrapper<T>> {
                 }
 
                 public void run() {
-                    JoinLambdaWrapper<String> jw = new JoinLambdaWrapper<>();
+                    CustomJoinWrapper<String> jw = new CustomJoinWrapper<>();
                 }
             }
             """,

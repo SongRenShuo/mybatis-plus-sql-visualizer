@@ -467,7 +467,7 @@ object WrapperLocator {
         anchor: PsiElement? = null,
         preferredConsumption: ConsumptionKind? = null,
     ): LocatedWrapper? {
-        // T-ServiceJoinWrapperPreview（D256 M1）：内联 new 的自研子类（`new JoinLambdaWrapper<>()`）走父链识别
+        // T-ServiceJoinWrapperPreview（D256 M1）：内联 new 的自研子类（`new CustomJoinWrapper<>()`）走父链识别
         val wrapperType = detectWrapperTypeDeep(newExpr.type) ?: return null
         // T-M20-03：`new MPJLambdaWrapper<>(userEntity)` 菱形 + 实体变量实参（无泛型实参，
         // entityInfoFromType 解析不到实体）时，从构造第一参表达式类型解析实体；
@@ -1795,7 +1795,7 @@ object WrapperLocator {
     /**
      * T-ServiceJoinWrapperPreview（D256 M1）：Wrapper 类型识别——先走浅层白名单
      * （[detectWrapperType]，命中时零额外成本），未命中时按**父链**识别，覆盖自研子类
-     * （`JoinLambdaWrapper extends ... -> MPJLambdaWrapper`）。
+     * （`CustomJoinWrapper extends ... -> MPJLambdaWrapper`）。
      *
      * 性能红线（M10）：只有简单名以 `Wrapper` / `Join` / `Chain` 结尾才 resolve（O(1) 文本前门），
      * 其余类型直接返回 null——gutter / 预览每次判型都会经过这里，不能对任意类型做 `resolve()`。
@@ -1845,7 +1845,7 @@ object WrapperLocator {
      * 第 2 步先于第 3 步：用户自研最底层 `Wrapper`（F12/F14）若 `implements com.baomidou...Wrapper`，
      * 仅按 MP 家族细分只能得到 QUERY，会丢掉联表语义；而 `QueryJoin` + `Chain`/`SelectWrapper`
      * 组合是该内部库确认联表家族的更强证据。第 3 步细分按 `Join` 优先于 `Lambda`
-     * （用户链上 `AbstractLambdaJoinWrapper` 两者都含，Join 才是家族信号）。
+     * （用户链上 `AbstractLambdaJoinBaseWrapper` 两者都含，Join 才是家族信号）。
      */
     private fun classifySuperChain(root: PsiClass): WrapperType? {
         val ancestors = mutableListOf<Pair<String, String?>>()
@@ -1905,7 +1905,7 @@ object WrapperLocator {
      *  - 其它（链上有未知方法名 / 无消费引用）→ null，宁可不识别不可误判。
      *
      * 成本：只在名字前门命中且父链失败的兜底路径执行；需要一次 `ReferencesSearch` 收集分步调用
-     * （用户现场 `w = new JoinLambdaWrapper<>(); w.eq(...)` 的链在后续语句，只看 initializer 会漏）。
+     * （用户现场 `w = new CustomJoinWrapper<>(); w.eq(...)` 的链在后续语句，只看 initializer 会漏）。
      * 与 [WrapperAnchorDetector] 的 `BATCH_CHAIN_COLLISION_NAMES` 变量 resolve 同款文档化例外；
      * 预览链路 [buildChain] 本就要为同一变量做一次引用扫描，实际增量有限。
      */
