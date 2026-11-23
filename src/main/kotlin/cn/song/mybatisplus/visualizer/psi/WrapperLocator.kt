@@ -41,6 +41,8 @@ import com.intellij.psi.PsiTypeParameter
 import com.intellij.psi.PsiVariable
 import com.intellij.psi.search.searches.ReferencesSearch
 import com.intellij.psi.util.PsiTreeUtil
+import java.util.Optional
+import java.util.WeakHashMap
 
 /**
  * Wrapper 定位器（M1-02，F-01 入口）：从光标所在元素定位 Wrapper 调用链。
@@ -115,7 +117,7 @@ object WrapperLocator {
         return when {
             chainHead.methodExpression.qualifierExpression is PsiNewExpression ->
                 (chainHead.methodExpression.qualifierExpression as PsiNewExpression)
-                    .takeIf { detectWrapperType(it.type) != null }
+                    .takeIf { detectWrapperTypeDeep(it.type) != null }
                     ?.let { buildChainFromNew(it, resolveVariables, anchor, preferredConsumption) }
             isWrapperFactoryCall(chainHead) -> buildChainFromFactory(chainHead, resolveVariables, anchor, preferredConsumption)
             else -> null
@@ -128,7 +130,7 @@ object WrapperLocator {
      */
     internal fun isChainHeadCall(call: PsiMethodCallExpression): Boolean {
         val qualifier = call.methodExpression.qualifierExpression
-        return (qualifier is PsiNewExpression && detectWrapperType(qualifier.type) != null) ||
+        return (qualifier is PsiNewExpression && detectWrapperTypeDeep(qualifier.type) != null) ||
             isWrapperFactoryCall(call)
     }
 
@@ -136,7 +138,7 @@ object WrapperLocator {
     private fun wrapperTypeOfChainHead(call: PsiMethodCallExpression): WrapperType? {
         val qualifier = call.methodExpression.qualifierExpression
         return when {
-            qualifier is PsiNewExpression -> detectWrapperType(qualifier.type)
+            qualifier is PsiNewExpression -> detectWrapperTypeDeep(qualifier.type)
             isWrapperFactoryCall(call) -> factoryWrapperType(call)
             else -> null
         }
@@ -285,7 +287,9 @@ object WrapperLocator {
      * 链首回溯，无 resolve），符合 M10 性能红线。
      */
     internal fun isWrapperVariable(variable: PsiVariable): Boolean {
-        if (detectWrapperType(variable.type) != null) return true
+        // T-ServiceJoinWrapperPreview（D256 M1）：自研 Wrapper 子类（声明类型不在浅层白名单）走父链识别。
+        // 名字前门 + 类级缓存见 [detectWrapperTypeDeep]（gutter 热路径性能口径与 BATCH_CHAIN_COLLISION 例外同源）。
+        if (detectWrapperTypeDeep(variable.type) != null) return true
         // var 声明的语法判定走 typeElement 文本（不依赖 getType() 推断成败，O(1) 纯文本）；
         // var 仅限局部变量，字段/形参不可能命中
         if ((variable as? PsiLocalVariable)?.typeElement?.text == "var") {
@@ -312,7 +316,7 @@ object WrapperLocator {
             expr = expr.methodExpression.qualifierExpression
         }
         return when {
-            expr is PsiNewExpression -> detectWrapperType(expr.type)
+            expr is PsiNewExpression -> detectWrapperTypeDeep(expr.type)
             lastCall != null && isWrapperFactoryCall(lastCall) -> factoryWrapperType(lastCall)
             else -> null
         }
@@ -347,7 +351,7 @@ object WrapperLocator {
             expr = expr.methodExpression.qualifierExpression
         }
         return when (expr) {
-            is PsiNewExpression -> detectWrapperType(expr.type)
+            is PsiNewExpression -> detectWrapperTypeDeep(expr.type)
             is PsiMethodCallExpression -> factoryWrapperType(expr)
             else -> null
         }
@@ -408,11 +412,11 @@ object WrapperLocator {
         // T-M29-03：扫锚点子树全部 new 表达式取**首个 wrapper 构造**（原 findChildOfType 只取第一个——
         // `selectPage(new Page<>(...), new LambdaQueryWrapper<>()...)` 的 Page 先于 wrapper 时漏检）
         PsiTreeUtil.collectElementsOfType(anchor, PsiNewExpression::class.java)
-            .firstOrNull { detectWrapperType(it.type) != null }
+            .firstOrNull { detectWrapperTypeDeep(it.type) != null }
             ?.let { return it }
         var current: PsiElement? = anchor
         while (current != null) {
-            if (current is PsiNewExpression && detectWrapperType(current.type) != null) return current
+            if (current is PsiNewExpression && detectWrapperTypeDeep(current.type) != null) return current
             current = current.parent
         }
         return null
@@ -433,7 +437,8 @@ object WrapperLocator {
         anchor: PsiElement? = null,
         preferredConsumption: ConsumptionKind? = null,
     ): LocatedWrapper? {
-        val wrapperType = detectWrapperType(newExpr.type) ?: return null
+        // T-ServiceJoinWrapperPreview（D256 M1）：内联 new 的自研子类（`new JoinLambdaWrapper<>()`）走父链识别
+        val wrapperType = detectWrapperTypeDeep(newExpr.type) ?: return null
         // T-M20-03：`new MPJLambdaWrapper<>(userEntity)` 菱形 + 实体变量实参（无泛型实参，
         // entityInfoFromType 解析不到实体）时，从构造第一参表达式类型解析实体；
         // (Class) / (Class, alias) 构造（第一参 PsiClassObjectAccessExpression）不受影响
@@ -964,7 +969,8 @@ object WrapperLocator {
         // 基类型声明降级：类型不是具体 Wrapper 时从初始化表达式链首推断（`Wrapper<X> w = new LambdaQueryWrapper<X>()...`）；
         // O-8（缺陷 A）：var 推断形态（typeElement 文本 "var"）工厂链头原实现不识别，补第三顺位
         val isVarDeclaration = (variable as? PsiLocalVariable)?.typeElement?.text == "var"
-        val wrapperType = detectWrapperType(variable.type)
+        // T-ServiceJoinWrapperPreview（D256 M1）：第一顺位走父链识别（自研 Wrapper 子类），后两顺位保持浅层
+        val wrapperType = detectWrapperTypeDeep(variable.type)
             ?: detectWrapperTypeFromInitializer(variable.initializer)
             ?: (if (isVarDeclaration) wrapperTypeFromInitializerChain(variable.initializer) else null)
             ?: return null
@@ -1723,6 +1729,136 @@ object WrapperLocator {
             "LambdaQueryChainWrapper" -> WrapperType.LAMBDA_QUERY
             "LambdaUpdateChainWrapper" -> WrapperType.LAMBDA_UPDATE
             else -> null
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // T-ServiceJoinWrapperPreview（D256 M1）：Wrapper 类型父链识别
+    // ------------------------------------------------------------------
+
+    /** MPJ 官方包前缀——父链命中该族任何类型/接口即联表 wrapper（最强证据）。 */
+    private const val MPJ_FQN_PREFIX = "com.github.yulichang."
+
+    /** MyBatis-Plus 官方包前缀——父链命中共根基类/接口，确认 MP 家族后再细分。 */
+    private const val MP_FQN_PREFIX = "com.baomidou.mybatisplus."
+
+    /** 父链识别深度上限：F13 实测用户四层自研 + MPJ 基类链路为 0~6 跳，留一档余量。 */
+    private const val WRAPPER_SUPER_CHAIN_MAX_DEPTH = 8
+
+    /** 父链遍历节点上限（防御性：宽接口 / 异常 PSI 下避免遍历爆炸）。 */
+    private const val WRAPPER_SUPER_CHAIN_MAX_NODES = 64
+
+    /**
+     * 父链识别结果**类级缓存**：键 = resolve 后的 [PsiClass]。
+     *
+     * 用 [WeakHashMap] 而非项目级 / PSI 版本缓存：键随类 PSI 释放自动回收，改文件后旧 [PsiClass]
+     * 实例被新实例取代、旧条目自然失效（L64 口径：反查类缓存别挂 `PsiModificationTracker`；
+     * 本链路的键本身就是 PSI 元素，失效随重建发生）。
+     * `WeakHashMap` 不保存 null 值，故用 [Optional] 包一层，使「确认不是 Wrapper」的否定结果
+     * 也能缓存（自研子类常见：名字像 Wrapper 但父链不接 MP/MPJ，每次重复 resolve 无意义）。
+     */
+    private val wrapperSuperChainCache = WeakHashMap<PsiClass, Optional<WrapperType>>()
+    private val wrapperSuperChainCacheLock = Any()
+
+    /**
+     * T-ServiceJoinWrapperPreview（D256 M1）：Wrapper 类型识别——先走浅层白名单
+     * （[detectWrapperType]，命中时零额外成本），未命中时按**父链**识别，覆盖自研子类
+     * （`JoinLambdaWrapper extends ... -> MPJLambdaWrapper`）。
+     *
+     * 性能红线（M10）：只有简单名以 `Wrapper` / `Join` / `Chain` 结尾才 resolve（O(1) 文本前门），
+     * 其余类型直接返回 null——gutter / 预览每次判型都会经过这里，不能对任意类型做 `resolve()`。
+     * 与 [WrapperAnchorDetector] 的 `BATCH_CHAIN_COLLISION_NAMES` 例外同款口径：名字前门 + 类级缓存。
+     *
+     * 接入范围：仅预览定位链路（[buildChain] 三顺位、[isWrapperVariable]、内联 new 判定）；
+     * [detectWrapperType] 保持浅层语义，供补全 / 锚点快速路径复用。
+     */
+    internal fun detectWrapperTypeDeep(type: PsiType?): WrapperType? {
+        detectWrapperType(type)?.let { return it }
+        val className = (type as? PsiClassType)?.className ?: return null
+        if (!looksLikeWrapperName(className)) return null
+        return runCatching { wrapperTypeFromSuperChain(type) }.getOrNull()
+    }
+
+    /** 名字前门：只对「像 Wrapper 的简单名」付出 resolve 成本（见 [detectWrapperTypeDeep]）。 */
+    private fun looksLikeWrapperName(simpleName: String): Boolean =
+        simpleName.endsWith("Wrapper") || simpleName.endsWith("Join") || simpleName.endsWith("Chain")
+
+    /**
+     * 沿 `PsiClass.superTypes` 递归识别 Wrapper 家族（深度上限 [WRAPPER_SUPER_CHAIN_MAX_DEPTH]）。
+     * `superTypes` 同时含 extends 类与 implements 接口，故「自研类继承自研抽象类、抽象类实现
+     * MPJ 接口」这类链路可见。resolve 失败按未命中处理（[runCatching]，索引未就绪不抛）。
+     * 结果按类缓存（含否定结果），见 [wrapperSuperChainCache]。
+     */
+    private fun wrapperTypeFromSuperChain(type: PsiType?): WrapperType? {
+        val root = (type as? PsiClassType)?.resolve() ?: return null
+        synchronized(wrapperSuperChainCacheLock) {
+            wrapperSuperChainCache[root]?.let { return it.orElse(null) }
+        }
+        val result = runCatching { classifySuperChain(root) }.getOrNull()
+        synchronized(wrapperSuperChainCacheLock) {
+            wrapperSuperChainCache[root] = Optional.ofNullable(result)
+        }
+        return result
+    }
+
+    /**
+     * 收集 root 自身与全部祖先/接口（canonicalText + 简单名），按固定优先级判定：
+     *  1. 任一祖先/接口 canonicalText 以 `com.github.yulichang.` 开头 → [WrapperType.MPJ_LAMBDA]；
+     *  2. 接口同名组合 `QueryJoin` + (`Chain` | `SelectWrapper` | `MPJBaseJoin`) → MPJ_LAMBDA
+     *     （复制改名内部库的兜底；单个 `Query` / `Chain` 属泛名，不认）；
+     *  3. 命中 `com.baomidou.mybatisplus.` 的 `*Wrapper` / `*Abstract*` → MP 家族确认，细分：
+     *     链上有简单名含 `Join` → MPJ_LAMBDA；含 `Lambda` → [WrapperType.LAMBDA_QUERY]；否则 [WrapperType.QUERY]；
+     *  4. 全落空 → null。
+     *
+     * 第 2 步先于第 3 步：用户自研最底层 `Wrapper`（F12/F14）若 `implements com.baomidou...Wrapper`，
+     * 仅按 MP 家族细分只能得到 QUERY，会丢掉联表语义；而 `QueryJoin` + `Chain`/`SelectWrapper`
+     * 组合是该内部库确认联表家族的更强证据。第 3 步细分按 `Join` 优先于 `Lambda`
+     * （用户链上 `AbstractLambdaJoinWrapper` 两者都含，Join 才是家族信号）。
+     */
+    private fun classifySuperChain(root: PsiClass): WrapperType? {
+        val ancestors = mutableListOf<Pair<String, String?>>()
+        collectSuperChain(root, 0, HashSet(), ancestors)
+        val simpleNames = ancestors.mapNotNull { it.second }.toSet()
+        if (ancestors.any { it.first.startsWith(MPJ_FQN_PREFIX) }) return WrapperType.MPJ_LAMBDA
+        val interfaceCombo = simpleNames.contains("QueryJoin") &&
+            (simpleNames.contains("Chain") ||
+                simpleNames.contains("SelectWrapper") ||
+                simpleNames.contains("MPJBaseJoin"))
+        if (interfaceCombo) return WrapperType.MPJ_LAMBDA
+        val hasMpFamily = ancestors.any { (canonical, simple) ->
+            canonical.startsWith(MP_FQN_PREFIX) &&
+                simple != null && (simple.contains("Wrapper") || simple.contains("Abstract"))
+        }
+        if (!hasMpFamily) return null
+        return when {
+            simpleNames.any { it.contains("Join") } -> WrapperType.MPJ_LAMBDA
+            simpleNames.any { it.contains("Lambda") } -> WrapperType.LAMBDA_QUERY
+            else -> WrapperType.QUERY
+        }
+    }
+
+    /**
+     * DFS 收集 root 及其祖先/接口（含 resolve 失败父类型的**文本** canonicalText / 简单名——
+     * 源码里的名字仍可为接口同名组合提供线索）。
+     *
+     * @param depth 当前节点深度（root = 0）；达到 [WRAPPER_SUPER_CHAIN_MAX_DEPTH] 后不再展开
+     */
+    private fun collectSuperChain(
+        clazz: PsiClass,
+        depth: Int,
+        visited: MutableSet<PsiClass>,
+        out: MutableList<Pair<String, String?>>,
+    ) {
+        if (visited.size >= WRAPPER_SUPER_CHAIN_MAX_NODES) return
+        if (!visited.add(clazz)) return
+        val simpleName = clazz.name
+        out += (runCatching { clazz.qualifiedName }.getOrNull() ?: simpleName ?: "") to simpleName
+        if (depth >= WRAPPER_SUPER_CHAIN_MAX_DEPTH) return
+        clazz.superTypes.forEach { superType ->
+            val canonical = runCatching { superType.canonicalText }.getOrNull()
+            if (canonical != null) out += canonical to (superType as? PsiClassType)?.className
+            val resolved = runCatching { superType.resolve() }.getOrNull() ?: return@forEach
+            collectSuperChain(resolved, depth + 1, visited, out)
         }
     }
 
