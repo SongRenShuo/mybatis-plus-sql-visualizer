@@ -147,10 +147,18 @@ object UpdateJoinConverter : WrapperConverter {
             )
         }
         // setUpdateEntity / setUpdateEntityAndNull：实体字段静态不可得 → 主表非主键全列占位近似
-        SET_UPDATE_ENTITY, SET_UPDATE_ENTITY_AND_NULL ->
+        // D255：每列独立参数键（`entity.col`），避免多列 SET 在参数面板共用一个值。
+        SET_UPDATE_ENTITY, SET_UPDATE_ENTITY_AND_NULL -> {
+            val prefix = ParamSourceNaming.prefixOf(call.args)
             table.columns
                 .filter { !it.isId }
-                .map { SetClause(column = ColumnRef(tableAlias = mainAlias, columnName = it.columnName), value = SqlValue.Placeholder("?")) }
+                .map {
+                    SetClause(
+                        column = ColumnRef(tableAlias = mainAlias, columnName = it.columnName),
+                        value = SqlValue.Placeholder(ParamSourceNaming.source(prefix, it.columnName)),
+                    )
+                }
+        }
         else -> emptyList()
     }
 
