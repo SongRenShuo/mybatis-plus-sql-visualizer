@@ -211,8 +211,6 @@ fun detectWrapperTypeDeep(type: PsiType?): WrapperType? =
 
 ## 九、实施记录（实施期回填）
 
-（待实施后回填：提交哈希、定向读数、反向读数、demo 编译读数。）
-
 ### 复现阶段已回填（2026-11-23 13:18）
 
 - demo 新增 10 个文件（`customwrapper` 包 9 个 + `dto/ExpPreMasterFileDTO.java`）+ `CUSTOM-WRAPPER-REPRO.md` 点验说明。
@@ -226,3 +224,58 @@ fun detectWrapperTypeDeep(type: PsiType?): WrapperType? =
   - `testPreviewServiceReturnsNullForCustomSubclass`：`SqlPreviewService.preview` 对用户现场返回 null（「点了没反应」直接证据）
   - `testOfficialWrapperAtCallSiteLocated` / `testPreviewServiceProducesSqlForOfficialWrapper`：同结构换官方 `MPJLambdaWrapper` 后**定位命中 / 预览出 SQL**（证明 Service 封装不是断点，S3 对照）
 - 并行冲突记录：期间另一会话（D255）共用 build 目录跑 test，`in-progress-results-generic.bin` 被清除导致一次 `NoSuchFileException`；重试后取得上述读数。收口阶段如需权威读数，按登记表在独立沙盒复跑本类。
+
+### 实施阶段已回填（2026-11-23 15:xx）
+
+实施在四个独立工作树上并行（`d256-m1` / `d256-m2` / `d256-m3` + `d256-integration` 集成），
+子代理 A 做 M1、子代理 B 做 M3、主控做 M2 与收口。
+
+| 节点 | 提交 | 内容 | 定向读数 | 反向验证 |
+|---|---|---|---|---|
+| M1 | `cd3934c6c` | `detectWrapperTypeDeep` 父链识别（四档规则）+ 8 例测试 | `WrapperTypeSuperChainTest` 8/0、`WrapperLocatorTest` 31/0 | 摘父链分支 → 3 红；还原 → 绿 |
+| M2 | `ab6c7110a` | join 消费族调用行锚点 + 契约用例期望更新 | `MpjJoinConsumerAnchorTest` 4/0、契约 18/0、复现 6/0 | 由收口反向验证覆盖 |
+| M3 | `84ae88a2d` | join 族错误 SQL 守卫 + 元守卫登记 | `BatchOperationJoinGuardTest` 5/0、`MpjJoinOnAliasConverterTest` 7/0、元守卫 8/0 | 仅摘守卫 1 红（join 族未登记时本就 null）；摘守卫 + 临时登记 3 红；还原绿 |
+| 收口 1 | `7f2e87a2a` | 锚点侧接深层识别、规则 4 链方法启发、补全链路同步 | — | — |
+| 收口 2 | `d78a7dffc` | 锚点判定收敛单一来源 `isMpjJoinConsumerCall` + `isSqlCandidate` 接入；复现测试四条断言翻转 | — | — |
+| 收口 3 | `0c15797e5` | 规则 4 补分步调用扫描 + `MP_CONSUMER_METHOD_NAMES` 补 join 族；M3 收口为「join 族一律拒绝」+ 第 6 例 | 复现 6/0、父链 9/0、守卫 6/0 | 见下 |
+
+### 实施期抓到的两个真缺口（计划外，已修）
+
+1. **规则 4 只扫初始化链**：用户现场是「声明 + 后续分步调用」（`w = new JoinLambdaWrapper<>(); w.eq(...)`），
+   首版只扫 `initializer`，链为空 → 规则 4 静默失效。`WrapperTypeSuperChainTest` 的规则 4 夹具当时也写成
+   分步形态，首跑 2 红暴露；修法＝`wrapperTypeFromChainMethods` 增加 `ReferencesSearch` 分步调用扫描。
+2. **规则 4 消费集合漏 join 族**：`MP_CONSUMER_METHOD_NAMES` 首版没有 `selectJoin*`，而现场 wrapper
+   只被 `repository.selectJoinList(...)` 消费 → `LAMBDA_QUERY` 那一半永远不成立。
+   表现很隐蔽：`WrapperTypeSuperChainTest`（用 `selectList`）绿、`CustomWrapperServicePreviewTest` 四条红；
+   修法＝集合补 join 全族。两条都补了回归用例。
+
+### 反向验证（主控在集成树上逐项实测，2026-11-23）
+
+| # | 摘掉的分支 | 红灯读数 | 还原 |
+|---|---|---|---|
+| R1 | `detectWrapperTypeDeep` 的父链调用（改 `return null`） | `WrapperTypeSuperChainTest` **恰 3 红**：`testUserFourLayerCustomChainResolvesToMpjLambda`、`testCustomSubclassOfMpLambdaQueryWrapperResolvesToLambdaQuery`、`testInterfaceNameCombinationSurvivesUnresolvedParent`；规则 4 两条仍绿（独立于父链，符合设计） | `git checkout` 还原，复跑绿 |
+| R2 | `WrapperAnchorDetector` 的 `isMpjJoinConsumerCall` 分支 | `MpjJoinConsumerAnchorTest` 1 红（`testJoinConsumerCallsAreAnchorsOnMpReceiver`）+ `CustomWrapperServicePreviewTest` 1 红（`testGutterAnchorFollowsWrapperTypeWhitelist`） | 还原，复跑绿 |
+| R3a | `isJoinFamilyRejected` 恒 `false` | `BatchOperationJoinGuardTest` **仅 1 红**（`testJoinMapsWithUnrecognizedWrapperProducesNoSql`）——其余 join 名今天不在注册表，摘守卫也走不到批量模板 | 还原 |
+| R3b | R3a + 临时把 `selectJoinList` 登记进 `BATCH_OPERATIONS`（模拟守卫要防的「将来登记」形态） | `BatchOperationJoinGuardTest` **4 红**：`testJoinMapsWithUnrecognizedWrapperProducesNoSql`、`testJoinListWithDtoClassFirstArgProducesNoSql`、`testJoinListWithEntityClassButUnrecognizedWrapperProducesNoSql`、`testJoinFamilyRejectedEvenWithEntityAndKnownWrapper` | 还原（`git checkout`），探针零残留 |
+
+> R3a 的「只 1 红」是真实结论而非漏检：守卫的真实保护面是「join 族被登记进批量模板」这一危险形态，R3b 用临时登记把该形态造出来并拿到 4 红。
+
+### 最终门禁读数
+
+**10 类 / 146 用例 / 0 失败**（2026-11-23，`d256-integration`，还原全部反向探针后）：
+
+```
+convention.GuardSelfTestCoverageMetaGuardTest      8/0
+converter.MpjJoinOnAliasConverterTest              7/0
+psi.BatchOperationJoinGuardTest                    6/0
+psi.CustomWrapperServicePreviewTest                6/0
+psi.MpjJoinConsumerAnchorTest                      4/0
+psi.WrapperAnchorDetectorJpaAndWholeFileTest      18/0
+psi.WrapperAnchorDetectorTest                     36/0
+psi.WrapperLocatorTest                            31/0
+psi.WrapperTypeSuperChainTest                      9/0
+ui.SqlPreviewServiceOfficialApiTest               21/0
+```
+
+> 未跑全量 `testShards` / 构建校验：按仓库三档分层，定向清单 + 反向验证已覆盖本次改动面；
+> 全量与 `verifyGate` 留在用户点名的收口批或发版前执行。未做 GUI 自动化验收，真机点验按 §七 步骤由用户执行。
