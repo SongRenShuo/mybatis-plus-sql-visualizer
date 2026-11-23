@@ -1,7 +1,7 @@
 {
-  "version": "2026.11.21",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.21/mybatis-plus-sql-visualizer-2026.11.21.zip",
-  "changeNotes": "新增 SQL 预览独立工作台: 粘贴 SQL 或 mapper XML 片段即可格式化/填值/执行/复制, 支持 iBatis 2 语法\n工作台粘贴即体检: 解析后自动跑静态性能检查, SELECT * / 缺 WHERE 直接出现在性能建议行\n工作台底部新增动作行, 页签里即可一键复制可执行 SQL; 缺 sql 片段可点提示当场补齐重解析\nSQL 日志新增疑似 N+1 红色徽章与聚合视图, 耗时按测量来源分档并补偿调试器挂起时段\nMCP 工具输出新增可选摘要档, 数据源记忆新增指纹兜底, 调用栈代理帧反解为业务类型\n修复 IDEA 2026.3 上 MCP 工具清单只剩 1 个的问题, 2025.3/2026.2 同链一并修; 子页改动无需重启生效\nMCP 加固: 未知契约自动不注册并熔断摘除, 总开关关后不碰平台过滤链, 设置页给门控状态行与逃生开关; 公开工具灰字描述改为双语简介\n修复 IDE 被第三方长读锁卡住时插件跟着卡死; 关掉 SQL 去重后 N+1 检测与聚合不再失效\n修复补齐片段框点从文件选择没反应的问题, 选择器此前被模态框压住或干脆不显示\n修复多模块并行只挂一个 agent 时另一模块控制台 SQL 被让位吞掉的问题; 老驱动建连接的内部语句不再混进增强捕获日志\n增强捕获状态行对目标 JDK 低于 8 的项目如实说明已跳过注入并回落控制台捕获, 状态行以本次运行事实为准\n修复交流群弹窗二维码图片引用, 统一改用站点 jpg 版防部分客户端拒渲染\n优化: 聚合摘要行排版重做与 iBatis 别名表索引化等一批预览提速与稳定性修复, 详见发行说明\n优化: 预览识别与文件读盘移出界面线程, 结果区信息分区, 性能建议独占一行不再被挤成半句\n优化: N+1 嫌疑戳登记加双帽兜底, EXPLAIN 前置预热对齐同内容跳写, 从文件加载入口移到工作台",
-  "publishDate": "2026-11-21",
+  "version": "2026.11.23-beta.1",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.23-beta.1/mybatis-plus-sql-visualizer-2026.11.23-beta.1.zip",
+  "changeNotes": "插件显示名改为 MyBatis SQL Visualizer, 补上名称里的 mybatis 搜索词, 插件 ID 与界面品牌文案不变\nMarketplace 描述关键词批: 首行 40 字符关键词句, 补 iBatis/GoldenDB/openGauss 词面与搜索短语\n描述补国产库增强捕获覆盖句: 达梦/人大金仓/GaussDB/磐维/OceanBase/GoldenDB 等, 中英双语同步\n裸 SQL 也加直接替换风险横幅: 工作台或弹窗粘贴的纯 SQL 含未转义 ${} 时, 结果区顶部提示直替处数",
+  "publishDate": "2026-11-23",
   "sinceBuild": "243"
 }
