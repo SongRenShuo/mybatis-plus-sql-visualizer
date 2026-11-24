@@ -216,3 +216,12 @@ public final class UastMetaLanguage extends MetaLanguage {
 - 探针：把 Java 侧让位门临时加回（`git` 提交后 `git checkout` 还原）。
 - 读数：`MapperNavigationGutterGateTest` **11 tests / 1 failure**、`MapperNavCoexistUastReproTest` **6 tests / 1 failure**；失败恰为 `test竞品在位且让位开_Java侧仍保留图标`（期望 1、实际 0）与 `test竞品在位且让位开方法行仍2枚图标`（期望 2、实际 1），其余用例全绿。
 - 还原后复跑：两测试类全绿（读数见提交记录）。
+
+### 11.5 CI 回归修复（推送后首轮 `45400815977` test(5) 红）
+
+- 失败用例：`IbatisNavigationLineMarkerProvidersTest.test竞品在位_iBatis箭头仍产出_MyBatis对照仍让位`——
+  该用例的对照半边把「MyBatis 两侧都让位」当作夹具健康判据，`assertEmpty(markers(mybatisJavaToXml, iface))`
+  在 Java 侧不再让位后必然红（实际出 1 枚 `mapperMethod`）。
+- 修法：用例更名为 `…_MyBatis对照XML让位Java不让`；XML 侧保留 `assertEmpty`，Java 侧改断言 1 枚，
+  KDoc 同步写清 T-MapperNavYieldJavaSideKeep 语义。横向审计（`mybatisJavaToXml` 其它断言）无第二处依赖。
+- 读数：`IbatisNavigationLineMarkerProvidersTest` **34/0**；连同前 5 类合计 **77/0**。
