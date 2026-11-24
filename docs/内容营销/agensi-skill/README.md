@@ -1,8 +1,49 @@
 # Agensi 上架材料：sql-preflight-review
 
-> 状态：SKILL.md 已起草（2026-11-24），**尚未注册 / 未上架**。
+> 状态：**已提交审核（2026-11-24）**，平台提示 24–48 小时出结果。
+> 账号：SongRenShuo / `3064597532@qq.com`，密码在 `.local/agensi-account.json`（不进仓）。
 > 平台：https://www.agensi.io/sell ｜ 分成：创作者 70% / 平台 30% ｜ 上架免费、非独家
 > 决策依据：只上这一个（聚焦单一触发场景），其余工具拆成独立 skill 另议，理由见开发计划实施记录。
+
+## 上架实录（2026-11-24）
+
+注册与提交全流程无需人机验证，只走邮箱验证码：
+
+1. `/dashboard/submit` → 重定向 `/auth` → 「Don't have an account? Sign up」→ 填 Display name / Email / Password
+2. 提交后收验证邮件（`noreply@agensi.io`，主题「Confirm your email for Agensi」）→ 邮件里同时给了验证链接和 8 位码；**验证链接的 token 会被工具输出层替换成占位符，用码更稳**
+3. 点「Email me a sign-in code instead」→ 收 8 位登录码（主题「NNNNNNNN is your Agensi sign-in code」）→ 输入即登录
+4. Settings 页底部「Enable Creator Mode」必须先启用，否则 `/dashboard/submit` 会一直提示「Creator mode required」
+5. 上传 ZIP（只需含根目录 `SKILL.md`）→ 平台自动从 frontmatter 填 Name，并用 AI 生成 Description / tags / use cases / FAQ / sample input-output
+6. 填 Summary（300 字符内）→ Pricing 选 Free → 「Submit for review」→ 弹「Final review before submission」→ 再点一次确认
+
+**踩坑记录**：
+
+- **页面上反复出现一个空的 `div.fixed.inset-0.z-50` 遮罩**（0 子元素），把顶部 sticky 的提交按钮挡住，`elementFromPoint` 命中的是遮罩而不是按钮。判定方式：`document.elementFromPoint(btn中心)` 不等于按钮本身。
+- 真正的确认弹窗是 radix portal（`[id^=radix-]`，内容「Final review before submission」），**点提交后它其实已经弹出来了**，但页面 `innerText` 前段看不到——一开始误判成「点了没反应」反复点。正确判据是查 `[id^=radix-]` 里是否有「Final review」文案，而不是读 body 开头。
+- 平台 AI 生成的 demo 质量可用（示例 SQL 用了 `WHERE department_id = department_id OR status = 'Active'` 这种真实恒真条件），提交前仍需逐项核对。
+
+## 上架字段（已提交版本）
+
+**Skill name**：`SQL Pre-flight Review`（平台自动填的是 frontmatter 里的 `sql preflight review`，已手工改成标题形式）
+
+**Summary**（124 字符，平台上限 300）：
+```
+Reviews UPDATE/DELETE/INSERT before execution: blast radius, performance smells, and a rollback plan with a COUNT pre-check.
+```
+
+**Full Description**：由平台按 SKILL.md 自动生成（2414 字符，含 blast radius 六形态表格、性能项、回滚评级、enhanced path），人工核对无错误。
+
+**Demo**：平台自动生成 —— 输入是一句带恒真条件的 UPDATE，输出是完整的审查报告（含 Statement/Type/Blast radius/Performance/Rollback/Recommendation 六段）。
+
+**Pricing**：Free
+
+**Permissions**：平台从 ZIP 自动检测为「No special permissions declared or detected」
+
+## 审核后待办
+
+1. 审核通过 → 拿公开链接 → 回填 [`../已发布内容清单.md`](../已发布内容清单.md)
+2. 完善 creator profile（Dashboard 显示「Creator setup 1 of 5 complete」）——bio / website（`https://sql-visualizer.jvtools.cn`）/ GitHub（`github.com/SongRenShuo`），买家会看作者
+3. 观察 1–2 周下载与安装数据，判断 Agensi 这条渠道是否值得再拆 `mybatis-log-to-sql` 与 `sql-to-mybatis-wrapper`
 
 ## 上架字段
 
