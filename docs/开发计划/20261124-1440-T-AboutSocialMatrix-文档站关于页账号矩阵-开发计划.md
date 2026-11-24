@@ -63,9 +63,87 @@
 
 微信公众号没有公开主页（只有文章链接 + 二维码），已在「微信交流」区覆盖，**不放进矩阵**。
 
-## 五、设计方案
+## 五、设计方案（2026-11-24 调研定稿）
 
-> 待补充：子代理调研「大厂/开发者站/动效组件」的结论落地。需要回答三个问题——13 个图标用网格还是滚动态；logo 单色还是彩色；hover/入场动效用哪一档。
+调研对象：Vercel / Supabase / Resend / Linear / Tailwind 的 footer、GitHub 个人 profile、MagicUI IconCloud、Aceternity logo-clouds、若干开发者个人站（Dan Abramov / Lee Robinson / 阮一峰）。
+
+**核心结论：13 个入口在头部产品里没有先例**——他们普遍只放 3–5 个，且多是纯文字链接（Vercel、Linear、Tailwind 均如此）。到这个数量只能自建，且必须靠「分组 + 文字标签」来保证可读性。
+
+### 排除的方案
+
+| 方案 | 为什么不用 |
+|---|---|
+| VitePress 原生 `socialLinks` | 源码固定 36px 命中区 + 20px 图标、无文字标签，13 个横排溢出 |
+| 纯文字链接列（Vercel/Linear 式） | 不满足「要有 logo」 |
+| IconCloud（canvas 3D 球） | 球体背面图标反向、无法扫读；需为 Vue 重写拖拽/旋转 |
+| logo marquee 滚动带 | 一次只露 4–5 个，要等它转过来；链接位置不可预期 |
+| `backdrop-filter` + 持续动画 | 拖 TBT，且无法暂停（违反 WCAG 2.2.2） |
+
+### 选定：分组卡片网格 + 轻量动效
+
+- 3 组：**技术社区 8 / 内容平台 2 / 代码与分发 3**；桌面 4 列、移动 2 列
+- 卡片 = 单色图标 + 平台名；hover 时图标转品牌色、卡片上浮 3px、品牌色投影
+- 「炫酷」的落脚点放在三处：标题渐变、跟随光标的光晕（仅精确指针设备）、错峰入场
+- 不做持续动画（性能与可访问性优先，可读性优先于炫技）
+
+### 两条硬约束
+
+1. **图标默认单色**：GitHub `#181717`、dev.to `#0A0A0A`、JetBrains `#000` 三个纯黑在深色主题下会消失 → 品牌色只用于 hover
+2. **必须带文字标签**：51CTO / 博客园 / 腾讯云这类中文平台纯图标辨识度低
+
+### 品牌色（实测，非印象）
+
+| 平台 | 色值 | 备注 |
+|---|---|---|
+| 知乎 | `#0084FF` | |
+| 掘金 | `#007FFF` | |
+| CSDN | `#FC5531` | |
+| dev.to | `#0A0A0A` | 纯黑，深色下必须走 currentColor |
+| 51CTO | `#E31136` | **反直觉**：站点 UI 蓝 `#3E71F6` 是主题色，品牌色取 favicon 实测红 |
+| 博客园 | `#2E7ACC` | **反直觉**：不是绿色，官方 logo 是蓝色 |
+| 腾讯云 | `#006EFF` | favicon 向 `#00A3FF` 渐变 |
+| 阿里云 | `#FF6A00` | |
+| 今日头条 | `#FF373C` | |
+| 小红书 | `#FF2442` | |
+| GitHub | `#181717` | 纯黑 |
+| Gitee | `#C71D23` | |
+| JetBrains | `#000000` | 纯黑 |
+
+### 图标资产
+
+- **9 个走 simple-icons SVG**（`fill: currentColor`，可着色）：知乎 / 掘金 / CSDN / dev.to / 阿里云 / GitHub / Gitee / JetBrains + 今日头条（用 `icon-park:jinritoutiao`）
+- **4 个走官方 favicon 彩色位图**（不能改色，只参与缩放）：51CTO 48×48 / 腾讯云 32×32 / 博客园 32×32 / 小红书 32×32
+
+**取图过程踩的坑**：
+
+- 51CTO 与腾讯云的 `favicon.ico` 直接反爬——`curl` 裸请求返回 986B 混淆 JS，**必须带浏览器 UA 加 `Accept: image/*`** 才拿得到真图（拿到后分别是 PNG 48×48 / ICO 32×32）
+- 各家 `apple-touch-icon.png` 全是 404 页面（约 986B），不是图标
+- 博客园官网有 `logo.svg`，但它是 150×55 横向含文字的完整 logo，塞不进方形图标位，最终取了 favicon（蓝色圆环，图形版清晰）
+- 第三方 favicon 服务（`favicon.im` / `faviconkit`）返回的是灰底 "f" 占位图，不可用
+- 小红书 favicon 与 simple-icons 版本都是**文字型 logo**（红底「小红书」三字），22px 下偏糊；暂用官方位图，若观感不够可换纯图形印章
+
+### 首版已落地（2026-11-24）
+
+- `links/index.md` + `en/links/index.md`（`layout: page`）
+- `.vitepress/theme/components/links/SocialMatrix.vue`
+- `.vitepress/theme/data/social-links.ts`（13 条，含 SVG path 数据）
+- about 页中英各一个入口卡片（顺带修了 Marketplace 旧 slug `33633-sql-visualizer` → `33633-mybatis-sql-visualizer`）
+
+### 已修的视觉缺陷（2026-11-24）
+
+**踩坑：`filter: blur()` + `overflow: hidden` 会画出一圈「格子框」**
+
+首版在 `.sm::before` 上放了一个 680×340 的模糊光斑（`filter: blur(46px)`），父容器带 `overflow: hidden`。结果浅色主题下整个矩阵区沿容器边界出现一圈极淡的矩形边——肉眼明显，但**像素采样抓不到**（沿中线取点全是纯白 255,255,255），因为那是合成层的 1px 抗锯齿边。
+
+处置：删掉该光斑，`.sm` 的 `overflow: hidden` 一并去掉。「炫酷」改由**限定在元素内部**的效果承担：卡片 hover 时用 `background-image: radial-gradient(...)` 注入品牌色顶光，被 `border-radius` 自然裁切，不会溢出成整页色块。
+
+教训：给容器加 `filter` 类效果（blur/drop-shadow）时，只要容器还有 `overflow: hidden`，就要当心边界伪影；这类伪影用采样式验证会漏判，必须看截图。
+
+### 待调整
+
+- 视觉强度现为「克制版」；若要更炫，可加分组标题的流光、卡片 hover 渐变描边、页面级微粒子背景——每一项都要单独评估 TBT 增量
+- 3 个字母徽标待换官方 SVG
+- 主导航尚未加入口（目前靠 about 页卡片）
 
 ## 六、技术方案
 
