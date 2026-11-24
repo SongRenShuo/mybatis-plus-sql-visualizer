@@ -137,6 +137,44 @@ MyBatisCodeHelperPro 的 `view.I` 同构：`namespace` 属性 → mapper class�
 
 ---
 
-## 八、实施记录
+## 八、实施记录（2026-11-24，分支 `feature/mapper-nav-namespace-jump`，工作树 `../mybatis-plus-sql-visualizer-mappernav`；**未合并主分支**）
 
-（在新分支 + 独立工作树实施，见后续回填；**不合并主分支**。）
+### 8.1 拍板结果
+
+- D-1 采纳：语句 `id` 找不到同名方法时，Ctrl+B 退化为跳接口类（不产生图标，无死图标风险）。
+- D-2 采纳：根标签图标复用 `MpvsIcons.MapperStatement`，不新增资源。
+- D-3 否决：不使用 `com.baomidou.plugin.idea.` 宽前缀，两家 id 分别列出。
+
+### 8.2 变更清单
+
+- `ui/nav/MapperNavigationTargets.kt`：新增 `mapperClassOfRootTag(tag)`、`mapperClassOf(file)`、`mapperClassOf(project, namespace)`、`rootMapperTagOf(token)`（根标签名 / namespace 属性名 / 属性值三落点；dumb 返回 null）。
+- `ui/gutter/MapperNavigationLineMarkerProviders.kt`：`createMarker` 前置根标签分支 + `createRootMapperMarker`（五段式：dumb 乐观产出 / 正缓存 `resolvedClassKeys` / `IndexNotReadyException` 命中缓存 / Absent 收回 / namespace 空不出）；新增 `classCacheKey`；`resetResolvedCacheForTest` 一并清缓存。根标签图标走 `collectSlowLineMarkers` 同一道 XML 侧让位门。
+- `ui/nav/MapperNavigationGotoDeclarationHandler.kt`：`xmlToJava` 增加根标签分支与「无方法退化跳类」。
+- `ui/nav/MapperNavigationGotoRelatedProvider.kt`：`itemsFor` 增加根标签 → 接口类关联项（`rootMapperTag` 只认最近 XmlTag 是 mapper 根，语句标签内不误吞）。
+- `ui/gutter/MyBatisCompetitorGate.kt`：`PEER_PLUGIN_ID_PREFIXES` 追加 `com.baomidou.plugin.idea.mybatisx`、`com.baomidou.plugin.idea.mybatisPlus`；KDoc 记录三家反编译依据。
+- 中英 bundle：新增 `gutter.mapperClass.tooltip` / `.accessible.name`；`settings.mapperNavYield.tip` 列举三家。
+- 测试：`MapperNavigationLineMarkerProvidersTest`（+3；`markers()` 默认过滤根标签，新用例 `includeRoot=true`）、`MapperNavigationGutterGateTest`（+2；`xmlSideMarkerCount()` 过滤根标签保持语句基线）、`MapperNavCoexistGateTest`（+1 前缀覆盖）、`MapperNavigationGotoDeclarationHandlerTest`（+3）、`MapperNavigationGotoRelatedProviderTest`（+2）。
+
+### 8.3 定向读数
+
+| 测试类 | tests | failures |
+|---|---|---|
+| `ui.gutter.MapperNavigationLineMarkerProvidersTest` | 24 | 0 |
+| `ui.gutter.MapperNavigationGutterGateTest` | 13 | 0 |
+| `ui.gutter.MapperNavCoexistGateTest` | 7 | 0 |
+| `ui.nav.MapperNavigationGotoDeclarationHandlerTest` | 19 | 0 |
+| `ui.nav.MapperNavigationGotoRelatedProviderTest` | 7 | 0 |
+| `i18n.BundleParityGuardTest` | 5 | 0 |
+
+合计 **75 / 0**。
+
+### 8.4 反向验证（两轮，逐面各恰红）
+
+- 轮 1（摘 gutter 根标签分支）：红 **3** 条 —— `test根标签出图标_接口无方法也可跳`、`test根标签与语句图标共存`、`test竞品不在位_根标签跳类图标保留`。
+- 轮 2（同时摘 Ctrl+B 根标签与退化分支 / GotoRelated 根标签 / 前缀表新两条）：红 **4** 条 —— `testXml根标签名_跳接口类`、`testXml语句无同名方法_退化为跳接口类`、`testXml根标签_关联接口类`、`testP1_前缀候选覆盖MyBatisX与MyBatisPlus`。
+- 还原后复跑：6 类 **75 / 0**。
+
+### 8.5 未做/待办
+
+- 沙盒 GUI 验收（根标签图标点击、Ctrl+B 无方法退化、装 MyBatisX 后 XML 侧让位）未做：本分支不合并主分支，待合流批或用户点名时执行。
+- 风险表里「tooltip 写未找到同名方法」一条实际不需要：D-1 的退化只发生在 Ctrl+B，不产生图标，无 tooltip 面。
