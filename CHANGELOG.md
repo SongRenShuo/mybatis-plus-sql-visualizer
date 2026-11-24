@@ -5,7 +5,7 @@
 ## [Unreleased]
 
 ### Fixed
-- **让位开关只作用于 XML 语句行，Mapper 接口方法行恢复本插件跳转图标（T-MapperNavYieldJavaSideKeep）**：同类 MyBatis 导航插件（MyBatisCodeHelperPro）在接口方法行画的是与本插件同款的图标，原让位逻辑把两侧一起让掉后，该行只剩对方那一枚，看不出本插件是否在工作（表现为「mapper 中的图标没显示」）。现在让位只让 XML 语句行的跳转图标，Mapper 接口方法行恒显示本插件图标；Ctrl+B / Ctrl+Click 跳转一直可用，不受影响
+- **让位开关只作用于 XML 语句行，Mapper 接口方法行恢复本插件跳转图标（T-MapperNavYieldJavaSideKeep，`beef3fa18`）**：同类 MyBatis 导航插件（MyBatisCodeHelperPro）在接口方法行画的是与本插件同款的图标，原让位逻辑把两侧一起让掉后，该行只剩对方那一枚，看不出本插件是否在工作（表现为「mapper 中的图标没显示」）。现在让位只让 XML 语句行的跳转图标，Mapper 接口方法行恒显示本插件图标；Ctrl+B / Ctrl+Click 跳转一直可用，不受影响
 
 ## [2026.11.23] - 2026-11-23
 

@@ -213,4 +213,6 @@ public final class UastMetaLanguage extends MetaLanguage {
 
 ### 11.4 反向验证
 
-（待填：把 Java 侧让位门加回 → 两条用例应变红；还原后复绿）
+- 探针：把 Java 侧让位门临时加回（`git` 提交后 `git checkout` 还原）。
+- 读数：`MapperNavigationGutterGateTest` **11 tests / 1 failure**、`MapperNavCoexistUastReproTest` **6 tests / 1 failure**；失败恰为 `test竞品在位且让位开_Java侧仍保留图标`（期望 1、实际 0）与 `test竞品在位且让位开方法行仍2枚图标`（期望 2、实际 1），其余用例全绿。
+- 还原后复跑：两测试类全绿（读数见提交记录）。
