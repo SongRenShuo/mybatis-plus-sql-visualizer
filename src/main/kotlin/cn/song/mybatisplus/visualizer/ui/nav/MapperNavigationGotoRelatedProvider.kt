@@ -6,6 +6,7 @@ import com.intellij.navigation.GotoRelatedItem
 import com.intellij.navigation.GotoRelatedProvider
 import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.psi.PsiElement
+import com.intellij.psi.PsiFile
 import com.intellij.psi.xml.XmlTag
 import javax.swing.Icon
 
@@ -26,6 +27,20 @@ class MapperNavigationGotoRelatedProvider : GotoRelatedProvider() {
     override fun getItems(context: DataContext): List<GotoRelatedItem> = emptyList()
 
     private fun itemsFor(element: PsiElement): List<GotoRelatedItem> {
+        // T-MapperNavNamespaceJump：光标在 `<mapper namespace>` 根标签上 → 接口类（无方法也能列）。
+        rootMapperTag(element)?.let { tag ->
+            val cls = MapperNavigationTargets.mapperClassOfRootTag(tag)
+            if (cls != null) {
+                return listOf(
+                    RelatedItem(
+                        element = cls,
+                        label = cls.qualifiedName ?: cls.name ?: "",
+                        groupName = GROUP_METHOD,
+                        icon = MpvsIcons.MapperMethod,
+                    ),
+                )
+            }
+        }
         MapperNavigationTargets.nearestMapperMethod(element)?.let { method ->
             val statements = MapperNavigationTargets.statementTagsFor(method).map { tag ->
                 RelatedItem(
@@ -49,6 +64,20 @@ class MapperNavigationGotoRelatedProvider : GotoRelatedProvider() {
                 icon = MpvsIcons.MapperMethod,
             ),
         )
+    }
+
+    /** 光标元素的最近 XmlTag 是否就是 `<mapper>` 根标签（标签体内的语句标签直接返回 null，不误吞）。 */
+    private fun rootMapperTag(element: PsiElement): XmlTag? {
+        var current: PsiElement? = element
+        var depth = 0
+        while (current != null && depth++ < 6) {
+            if (current is XmlTag) {
+                return current.takeIf { it.name == "mapper" && it.parentTag == null }
+            }
+            if (current is PsiFile) return null
+            current = current.parent
+        }
+        return null
     }
 
     /** 语句项展示名：`selectById`（`databaseId` 变体补后缀，避免两项同名看不出区别）。 */

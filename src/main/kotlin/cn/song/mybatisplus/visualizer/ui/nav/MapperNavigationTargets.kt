@@ -2,9 +2,13 @@ package cn.song.mybatisplus.visualizer.ui.nav
 
 import cn.song.mybatisplus.visualizer.ui.ref.MybatisXmlTargets
 import com.intellij.openapi.project.DumbService
+import com.intellij.openapi.project.Project
+import com.intellij.psi.JavaPsiFacade
+import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiMethod
+import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.XmlAttribute
 import com.intellij.psi.xml.XmlAttributeValue
@@ -72,6 +76,52 @@ internal object MapperNavigationTargets {
         tag.name in MybatisXmlTargets.STATEMENT_TAGS &&
             tag.parentTag?.name == "mapper" &&
             tag.parentTag?.parentTag == null
+
+    /**
+     * T-MapperNavNamespaceJump：`<mapper namespace="…">` 根标签 → Mapper 接口类。
+     *
+     * 竞品（MyBatisCodeHelperPro `view.I`、MyBatisX/MyBatisPlus `StatementLineMarkerProvider`）
+     * 都在根标签 / `namespace` 属性上给这一跳——接口里**没有方法也能落到类**。本插件此前缺这一格，
+     * 用户感知为「mapper 没有方法就没法跳转」。
+     */
+    fun mapperClassOfRootTag(tag: XmlTag): PsiClass? {
+        if (tag.name != "mapper" || tag.parentTag != null) return null
+        if (!MybatisXmlTargets.isMapperFile(tag.containingFile)) return null
+        return mapperClassOf(tag.containingFile)
+    }
+
+    /** mapper 文件 → namespace 接口类（namespace 空 / 类不存在 / dumb 返回 null）。 */
+    fun mapperClassOf(file: PsiFile): PsiClass? {
+        val namespace = MybatisXmlTargets.rootNamespace(file) ?: return null
+        return mapperClassOf(file.project, namespace)
+    }
+
+    /** namespace 全限定名 → 接口类（dumb 期不查索引，返回 null 由调用方回退）。 */
+    fun mapperClassOf(project: Project, namespace: String): PsiClass? {
+        if (namespace.isBlank() || DumbService.isDumb(project)) return null
+        return JavaPsiFacade.getInstance(project).findClass(namespace, GlobalSearchScope.allScope(project))
+    }
+
+    /**
+     * XML token → 光标所在的 `mapper` 根标签，**只认三个落点**：根标签名、`namespace` 属性名、
+     * `namespace` 属性值（与 [ownerStatementTag] 的三落点口径同形；标签体内文本/闭标签名不接管）。
+     */
+    fun rootMapperTagOf(token: XmlToken): XmlTag? {
+        val parent = token.parent
+        val attribute: XmlAttribute? = when (parent) {
+            is XmlAttribute -> parent
+            is XmlAttributeValue -> parent.parent as? XmlAttribute
+            else -> null
+        }
+        if (attribute != null) {
+            if (attribute.name != "namespace") return null
+            val tag = attribute.parent as? XmlTag ?: return null
+            return tag.takeIf { it.name == "mapper" && it.parentTag == null }
+        }
+        val tag = parent as? XmlTag ?: return null
+        if (XmlTagUtil.getStartTagNameElement(tag) !== token) return null
+        return tag.takeIf { it.name == "mapper" && it.parentTag == null }
+    }
 
     /** 光标元素向上找到的 mapper 接口方法（普通类方法、方法体内引用均返回 null）。 */
     fun nearestMapperMethod(element: PsiElement): PsiMethod? {

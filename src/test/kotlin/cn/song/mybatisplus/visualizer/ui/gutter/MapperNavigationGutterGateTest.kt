@@ -176,7 +176,14 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
         val leaves = PsiTreeUtil.collectElements(xml) { it.firstChild == null }.toMutableList()
         val result = mutableListOf<LineMarkerInfo<*>>()
         MapperXmlToJavaLineMarkerProvider().collectSlowLineMarkers(leaves, result)
-        return result.size
+        // T-MapperNavNamespaceJump：XML 侧新增「根标签 → 接口类」图标；语句基线用例只数语句图标。
+        return result.count { !isRootMapperMarker(it) }
+    }
+
+    private fun isRootMapperMarker(info: LineMarkerInfo<*>): Boolean {
+        val token = info.element as? com.intellij.psi.xml.XmlToken ?: return false
+        val tag = token.parent as? com.intellij.psi.xml.XmlTag ?: return false
+        return tag.name == "mapper" && tag.parentTag == null
     }
 
     /** Java 侧基线：接口方法声明行恰 1 个跳转图标（与 test接口方法_恰一标记且定位命中 同夹具）。 */
@@ -220,6 +227,31 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
     fun test竞品不在位_Java侧基线不变() {
         MyBatisCompetitorGate.probe = { false }
         assertEquals("不在位：Java 侧基线 1", 1, javaSideMarkerCount())
+    }
+
+    // ---------- T-MapperNavNamespaceJump：根标签跳类图标同受 XML 侧让位门 ----------
+
+    /** 只放 `<mapper namespace>`（无语句），断言根标签那枚跳类图标的枚数。 */
+    private fun rootTagMarkerCount(): Int {
+        myFixture.addFileToProject("com/demo/mapper/UserMapper.java", javaFixture)
+        val xml = myFixture.addFileToProject(
+            "mapping/UserMapper.xml",
+            "<mapper namespace=\"com.demo.mapper.UserMapper\"/>",
+        )
+        val leaves = PsiTreeUtil.collectElements(xml) { it.firstChild == null }.toMutableList()
+        val result = mutableListOf<LineMarkerInfo<*>>()
+        MapperXmlToJavaLineMarkerProvider().collectSlowLineMarkers(leaves, result)
+        return result.size
+    }
+
+    fun test竞品在位且让位开_根标签跳类图标也让位() {
+        MyBatisCompetitorGate.probe = { true }
+        assertEquals("竞品在位 + 让位开：根标签跳类图标也应让位（0 枚）", 0, rootTagMarkerCount())
+    }
+
+    fun test竞品不在位_根标签跳类图标保留() {
+        MyBatisCompetitorGate.probe = { false }
+        assertEquals("竞品不在位：根标签跳类图标基线 1", 1, rootTagMarkerCount())
     }
 
     /** 临时关闭让位开关执行 [block]（结束后恢复原 State）。 */
