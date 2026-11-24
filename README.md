@@ -1,5 +1,7 @@
 # SQL Visualizer
 
+[![SongRenShuo/mybatis-plus-sql-visualizer MCP server](https://glama.ai/mcp/servers/SongRenShuo/mybatis-plus-sql-visualizer/badges/score.svg)](https://glama.ai/mcp/servers/SongRenShuo/mybatis-plus-sql-visualizer)
+
 > 服务未启，SQL 先知。
 
 SQL Visualizer 是 IntelliJ IDEA 的 SQL 调试插件。写代码时，不启动应用就能预览 Wrapper、MyBatis / iBatis XML、注解、JPA / Hibernate 可静态推导的 SQL；运行应用后，捕获真实参数、耗时与调用位置，从慢查询直接跳回源码。预览结果可以继续执行、查看执行计划，也可以反向生成 MyBatis-Plus Java 代码。
