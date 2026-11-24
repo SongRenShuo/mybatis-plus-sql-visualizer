@@ -146,9 +146,13 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var gutterGroupInlineFallback: Boolean = true,
 
         /**
-         * T-MapperNavCoexistYield（默认开＝让位）：MyBatisCodeHelperPro 处于启用状态时，本插件的
-         * Mapper 双向跳转 gutter 图标（XML 语句行 ↔ Mapper 接口方法行）不显示，避免与对方的跳转
-         * 箭头叠在同一行。关闭后即使对方在位也强制显示本插件图标。
+         * T-MapperNavCoexistYield（默认开＝让位）：同类 MyBatis 导航插件启用时，本插件在
+         * **XML 语句行**的跳转图标不显示，避免与对方的跳转箭头叠在同一行。关闭后强制显示。
+         *
+         * T-MapperNavYieldJavaSideKeep 起语义收窄为「只让 XML 语句行」：**Mapper 接口方法行的
+         * 图标恒显示**，不再受此开关与竞品在位影响。原因见
+         * [cn.song.mybatisplus.visualizer.ui.gutter.MapperJavaToXmlLineMarkerProvider] 的 KDoc
+         * （对方 Java 侧箭头与我方同款，让位后该行只剩对方一枚、无法分辨）。
          *
          * 只影响 Mapper 双向跳转这一件事；SQL 预览等其余 gutter 与对方不撞车，不受此开关影响。
          * 竞品探测见 [cn.song.mybatisplus.visualizer.ui.gutter.MyBatisCompetitorGate]。

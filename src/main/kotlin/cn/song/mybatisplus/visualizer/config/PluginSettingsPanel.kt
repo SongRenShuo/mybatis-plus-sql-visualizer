@@ -433,7 +433,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
     internal val gutterGroupJdbcCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.jdbc"))
     internal val gutterGroupInlineFallbackCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.inlineFallback"))
     internal val gutterGroupOtherCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.other"))
-    /** T-MapperNavCoexistYield：MyBatisCodeHelperPro 启用时让出 Mapper 双向跳转图标（默认勾选＝让位）。 */
+    /** T-MapperNavCoexistYield / T-MapperNavYieldJavaSideKeep：同类插件启用时让出 **XML 语句行**的跳转图标（默认勾选）；Mapper 接口方法行恒显示本插件图标。 */
     internal val mapperNavYieldCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.mapperNavYield"))
 
     /**

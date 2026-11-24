@@ -191,9 +191,11 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
         assertEquals("竞品在位 + 让位开：XML 侧应让位（0 图标）", 0, xmlSideMarkerCount())
     }
 
-    fun test竞品在位且让位开_Java侧零图标() {
+    fun test竞品在位且让位开_Java侧仍保留图标() {
         MyBatisCompetitorGate.probe = { true }
-        assertEquals("竞品在位 + 让位开：Java 侧应让位（0 图标）", 0, javaSideMarkerCount())
+        // T-MapperNavYieldJavaSideKeep：Java 侧不再让位——同类插件在该行画的箭头与我方同款
+        // （mapperMethod.svg ≡ 对方 icon/mybatis_java.svg），让位后该行只剩对方一枚、无法分辨。
+        assertEquals("竞品在位 + 让位开：Java 侧应保留本插件图标（1 枚）", 1, javaSideMarkerCount())
     }
 
     fun test竞品在位但让位关_XML侧与基线一致() {

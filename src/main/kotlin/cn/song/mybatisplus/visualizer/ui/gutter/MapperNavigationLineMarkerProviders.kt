@@ -72,9 +72,11 @@ class MapperXmlToJavaLineMarkerProvider : LineMarkerProvider {
         val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
         if (gutterState != null && !gutterState.showGutterIcon) return
         if (!GutterGroups.enabledFor(javaClass, gutterState)) return
-        // 第三道门（T-MapperNavCoexistYield）：gutter 面的共存让位——MyBatisCodeHelperPro 启用时
-        // 它自己也会给同一行出跳转箭头，本插件让位。与 XmlSynHiGate 的注入区间互补是两件事：
-        // 那边判「对方是否真给这段文本上色」，这边判「对方是否在位」（同行两个图标都合规，故让位）。
+        // 第三道门（T-MapperNavCoexistYield / T-MapperNavYieldJavaSideKeep）：**仅 XML 语句行**的共存
+        // 让位——同类插件启用时它自己也会给同一行出跳转箭头，本插件让位。Java 侧（Mapper 接口方法行）
+        // 不再让位：对方 Java 箭头与我方同款，让位会让该行只剩对方一枚、用户无法分辨（见
+        // MapperJavaToXmlLineMarkerProvider 的 KDoc）。与 XmlSynHiGate 的注入区间互补是两件事：
+        // 那边判「对方是否真给这段文本上色」，这边判「对方是否在位」。
         // 探测结论已缓存，此处为 O(1) 布尔，不引入按元素开销。
         if (gutterState != null &&
             MyBatisCompetitorGate.shouldYield(
@@ -146,15 +148,16 @@ class MapperJavaToXmlLineMarkerProvider : LineMarkerProvider {
         val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
         if (gutterState != null && !gutterState.showGutterIcon) return
         if (!GutterGroups.enabledFor(javaClass, gutterState)) return
-        // 第三道门（T-MapperNavCoexistYield）：与 XML 侧同门形——竞品在位且用户未关闭让位即不产出图标
-        if (gutterState != null &&
-            MyBatisCompetitorGate.shouldYield(
-                gutterState.mapperNavYieldToCodeHelper,
-                MyBatisCompetitorGate.isPeerPluginActive(),
-            )
-        ) {
-            return
-        }
+        // T-MapperNavYieldJavaSideKeep（2026-11-24 用户真机报障）：**Java 侧不再让位**。
+        // 实测（fernflower 反编译 MPJ 3.7.0 + 平台 Layer）：同类插件的「接口方法 → XML」箭头注册在
+        // language="UAST" 上，而 UAST 是 MetaLanguage（UastMetaLanguage extends MetaLanguage，super("UAST")），
+        // LanguageExtension.buildExtensions 会把 meta language 的 key 并入 Java 文件的 provider 收集集合 ⇒
+        // 对方在该行**正常出图标**（真机勾选让位后 Java 行 1 枚、取消后 2 枚，均可复现）。
+        // 而两家图形同款（我方 mapperMethod.svg 与对方 icon/mybatis_java.svg 同 11 条 path、同三色），
+        // 若本侧也让位，该行只剩对方那枚同款图标——用户无法确认本插件是否在工作，读到的就是
+        // 「mapper 中的图标没显示」。故 Java 侧恒保留本插件图标；让位只作用于 XML 语句行
+        // （对方 XML 箭头与我方跳转同款，且同行已有我方预览图标，避免双箭头）。
+        // 让位判据仍是插件级（MyBatisCompetitorGate），只在 XML 侧生效。
         elements.mapNotNullTo(result, ::createMarker)
     }
 
