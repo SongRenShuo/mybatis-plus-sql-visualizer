@@ -225,3 +225,23 @@ public final class UastMetaLanguage extends MetaLanguage {
 - 修法：用例更名为 `…_MyBatis对照XML让位Java不让`；XML 侧保留 `assertEmpty`，Java 侧改断言 1 枚，
   KDoc 同步写清 T-MapperNavYieldJavaSideKeep 语义。横向审计（`mybatisJavaToXml` 其它断言）无第二处依赖。
 - 读数：`IbatisNavigationLineMarkerProvidersTest` **34/0**；连同前 5 类合计 **77/0**。
+
+---
+
+## 十二、沙盒 GUI 验收（2026-11-24，IU-243 沙盒 + 真实 MPJ 3.7.0 竞品在位）
+
+环境：`.local/start-navyield-ui243.ps1`（sandbox `MPSV-NavYield`，demo＝`cust-big-demo`，robot-server 8580）。
+两处环境坑：
+
+- `prepareSandbox` 会清空/重建沙盒 `plugins/`，启动前用 PowerShell 复制 MPJ 不生效——改在 init 脚本给 `runIde` 加 `doFirst` 复制（`navyield-ui243.init.gradle`）。
+- Trust 对话框合成输入无效且挡住项目打开——启动前写 `config/options/trusted-paths.xml`（`Trusted.Paths / TRUSTED_PROJECT_PATHS`）绕开。
+
+读数（截图 `build/MPSV-NavYield-shots/`，共 9 帧）：
+
+| 位置 | 观察 | 判读 |
+|---|---|---|
+| Java `cn.song.custcenter.mapper.CustInfoMapper` 第 14 行 `selectTopCustomers` | **2 枚同款红色 MyBatis 图标**；hover 左枚 tooltip＝「跳转到 Mapper XML 语句」 | 我方 1 枚 + MPJ 1 枚；让位开 + 竞品在位时 **Java 侧不再让位** ✅ |
+| 同名 XML 第 5 行 `<select id="selectTopCustomers">` | 1 枚青色 MyBatis 图标（MPJ 的 `view.I`）＋我方预览（紫色 Q），**无我方跳转图标** | XML 侧让位生效 ✅ |
+| Java 第 11 行 interface 声明 | 1 枚（MPJ 的 `UClass` 分支） | 我方无该锚，符合预期 |
+
+结论：修复在「真实 IDE + 真实 MPJ 插件」形态下行为与设计一致。口径说明：沙盒是 243（`IU-243.28141.41`），用户日常 263 的行为结论仍以 §3.2 反编译 + 用户截图为据；本表是 GUI 实测（证据分级：真机 GUI 实测，非单测推断）。
