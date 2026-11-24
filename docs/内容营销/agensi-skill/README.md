@@ -1,6 +1,6 @@
 # Agensi 上架材料：sql-preflight-review
 
-> 状态：**已提交审核（2026-11-24）**，平台提示 24–48 小时出结果。
+> 状态：**已提交审核（2026-11-24）**，Creator Studio 显示 `Pending Review / In review`，平台提示通常一天内出结果（Dashboard 原文：24–48 小时）。
 > 账号：SongRenShuo / `3064597532@qq.com`，密码在 `.local/agensi-account.json`（不进仓）。
 > 平台：https://www.agensi.io/sell ｜ 分成：创作者 70% / 平台 30% ｜ 上架免费、非独家
 > 决策依据：只上这一个（聚焦单一触发场景），其余工具拆成独立 skill 另议，理由见开发计划实施记录。
@@ -42,8 +42,16 @@ Reviews UPDATE/DELETE/INSERT before execution: blast radius, performance smells,
 ## 审核后待办
 
 1. 审核通过 → 拿公开链接 → 回填 [`../已发布内容清单.md`](../已发布内容清单.md)
-2. 完善 creator profile（Dashboard 显示「Creator setup 1 of 5 complete」）——bio / website（`https://sql-visualizer.jvtools.cn`）/ GitHub（`github.com/SongRenShuo`），买家会看作者
+2. ~~完善 creator profile~~ —— **已完成（2026-11-24）**，Creator setup 从 1 of 5 → **2 of 5**：
+   - bio 266 字符（独立开发者 + 插件三句话：免启动预览 / 运行期捕获 / 11 个只读 MCP 工具）
+   - website `https://sql-visualizer.jvtools.cn`、GitHub `github.com/SongRenShuo`
+   - 头像用 GitHub 头像（`github.com/SongRenShuo.png`，200×200，上传后存 supabase storage）
+   - 剩余未做：第 2 步「Connect payouts」（Stripe/Zoneless）——**仅付费 skill 需要，免费 skill 可跳过**
 3. 观察 1–2 周下载与安装数据，判断 Agensi 这条渠道是否值得再拆 `mybatis-log-to-sql` 与 `sql-to-mybatis-wrapper`
+
+## 当前读数（2026-11-24 提交当日）
+
+Creator Studio 面板：`Total Skills 1 / Live 0 / Pending 1 / Views 0 / Uses 0`；审核期间仍可编辑或重传 ZIP（"the newest file is the one we review"）。
 
 ## 上架字段
 
