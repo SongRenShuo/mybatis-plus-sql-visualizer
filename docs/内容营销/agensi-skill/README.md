@@ -1,6 +1,8 @@
 # Agensi 上架材料：sql-preflight-review
 
-> 状态：**已提交审核（2026-11-24）**，Creator Studio 显示 `Pending Review / In review`，平台提示通常一天内出结果（Dashboard 原文：24–48 小时）。
+> 状态：**已上线（2026-11-24 01:00 UTC）** —— https://www.agensi.io/skills/sql-pre-flight-review
+> 审核耗时：**约 12 分钟**（00:48 提交 → 01:00 收到「is now live」邮件），远快于平台宣称的 24–48 小时。
+> 线上核对：HTTP 200、标题 `SQL Pre-flight Review | Agensi`、分类 **Data & Databases**、**Free**、带 Security scanned 标识、兼容 Claude Code / Cursor / Codex CLI / DeepSeek 等 agent。
 > 账号：SongRenShuo / `3064597532@qq.com`，密码在 `.local/agensi-account.json`（不进仓）。
 > 平台：https://www.agensi.io/sell ｜ 分成：创作者 70% / 平台 30% ｜ 上架免费、非独家
 > 决策依据：只上这一个（聚焦单一触发场景），其余工具拆成独立 skill 另议，理由见开发计划实施记录。
