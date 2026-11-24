@@ -2,10 +2,12 @@
 
 # SQL Visualizer Changelog
 
-## [Unreleased]
+## [2026.11.24-beta.1] - 2026-11-24
+
+> 范围＝`2026.11.23` 正式版之后到本版发行提交的增量，唯一用户可感的 `src/main` 改动为让位分侧修复，其余为内容营销 / 计划 / 调研 / 索引类文档。逐条根因、真机读数与反向验证见 `docs/发行说明/20261124-2117-Mapper接口方法行跳转图标让位分侧修复-内测说明.md`
 
 ### Fixed
-- **让位开关只作用于 XML 语句行，Mapper 接口方法行恢复本插件跳转图标（T-MapperNavYieldJavaSideKeep，`beef3fa18`）**：同类 MyBatis 导航插件（MyBatisCodeHelperPro）在接口方法行画的是与本插件同款的图标，原让位逻辑把两侧一起让掉后，该行只剩对方那一枚，看不出本插件是否在工作（表现为「mapper 中的图标没显示」）。现在让位只让 XML 语句行的跳转图标，Mapper 接口方法行恒显示本插件图标；Ctrl+B / Ctrl+Click 跳转一直可用，不受影响
+- **让位开关只作用于 XML 语句行，Mapper 接口方法行恢复本插件跳转图标（T-MapperNavYieldBySide，`beef3fa18`）**：同类 MyBatis 导航插件（MyBatisCodeHelperPro）在接口方法行画的是与本插件同款的图标，原让位逻辑把两侧一起让掉后，该行只剩对方那一枚，看不出本插件是否在工作（表现为「mapper 中的图标没显示」）。现在让位只让 XML 语句行的跳转图标，Mapper 接口方法行恒显示本插件图标；Ctrl+B / Ctrl+Click 跳转一直可用，不受影响
 
 ## [2026.11.23] - 2026-11-23
 
