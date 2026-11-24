@@ -174,7 +174,28 @@ MyBatisCodeHelperPro 的 `view.I` 同构：`namespace` 属性 → mapper class�
 - 轮 2（同时摘 Ctrl+B 根标签与退化分支 / GotoRelated 根标签 / 前缀表新两条）：红 **4** 条 —— `testXml根标签名_跳接口类`、`testXml语句无同名方法_退化为跳接口类`、`testXml根标签_关联接口类`、`testP1_前缀候选覆盖MyBatisX与MyBatisPlus`。
 - 还原后复跑：6 类 **75 / 0**。
 
-### 8.5 未做/待办
+### 8.5 沙盒 GUI 验收（2026-11-24，IU-243 沙盒 + demo `cust-big-demo`）
 
-- 沙盒 GUI 验收（根标签图标点击、Ctrl+B 无方法退化、装 MyBatisX 后 XML 侧让位）未做：本分支不合并主分支，待合流批或用户点名时执行。
-- 风险表里「tooltip 写未找到同名方法」一条实际不需要：D-1 的退化只发生在 Ctrl+B，不产生图标，无 tooltip 面。
+**轮 A（无竞品）** —— 根标签图标与无方法跳转：
+
+| 用例 | 操作 | 读数 | 结论 |
+|---|---|---|---|
+| 根标签图标 | 打开 `cust-center/.../CustInfoMapper.xml` | 第 3 行 `<mapper namespace=…>` 左侧出现青色图标（`build/MPSV-NSJ-shots/nsj-01-root-tag.png`） | ✅ |
+| tooltip | hover 根标签图标 | 「跳转到 Mapper 接口」 | ✅ |
+| 点击跳类 | 点击根标签图标 | 跳到 `CustInfoMapper.java`（`nsj-03-root-click-jump.png`） | ✅ |
+| 无方法退化 | 打开 `CtAccount0002Mapper.xml`（语句 `selectByTenant` 无同名方法），光标在 id 上按 Ctrl+B | 跳到 `CtAccount0002Mapper.java` 接口类（`nsj-05-nomethod-ctrlb.png`） | ✅ |
+
+**轮 B（装真实 MyBatisX 1.7.6）** —— 让位扩展：
+
+| 用例 | 操作 | 读数 | 结论 |
+|---|---|---|---|
+| XML 侧让位 | 打开 `CustInfoMapper.xml`，hover 根标签图标 | 图标只剩 MyBatisX 的；tooltip＝`Data access object found - cn.song.custcenter.mapper.CustInfoMapper`（MyBatisX 专属文案） | ✅ 我方 XML 侧（含新增根标签图标）让位生效 |
+| 让位探测 | 启动日志 | `Loaded custom plugins: … MyBatisX (1.7.6)`；无 `[T-MapperNavCoexistYield] competitor probe unavailable` WARN | ✅ 新前缀命中 |
+
+**环境坑（沙盒侧，非产品面）**：
+
+- 新工作树首次 `runIde` 被 `build.gradle.kts:203` 拦住（缺 robot-server）：先把主仓 `record/robot-plugins/` 复制过去（`bootstrap-robot-server.py` 走 jetbrains 源，本机直连会卡）。
+- 首次探针（hover+点击根标签）之后 IDE 自行退出（`runIde` exit 1，日志无异常、无 hprof）；重启后稳定，未复现。
+- 一次外部 `TxBugReport.exe` 崩溃弹窗挡住 IDE，属台面环境噪声，非插件问题。
+
+风险表里「tooltip 写未找到同名方法」一条实际不需要：D-1 的退化只发生在 Ctrl+B，不产生图标，无 tooltip 面。
