@@ -345,6 +345,15 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /** 发现 SQL 时自动展开日志工具窗口（M37.3 默认开——竞品「每次手动开面板」是普遍抱怨；60s 防抖，show 不抢焦点）。 */
         var logAutoOpenOnCapture: Boolean = true,
 
+        /**
+         * 自动展开时让位给同侧栏正在使用的工具窗口（T-AutoShowYield，默认开）。
+         *
+         * 新 UI 同一侧栏同一时刻只显示一块面板，`show()` 会把当前显示的那块顶掉——用户正在用
+         * API 调试 / HTTP Client / Database 时被抢走是纯损失。开启时同侧已有面板就不展开；
+         * 关闭则恢复旧行为（无论侧栏当前显示什么都展开）。
+         */
+        var logAutoOpenYield: Boolean = true,
+
         /** 列表条目显示捕获时间戳（默认开）。 */
         var logTimestampEnabled: Boolean = true,
 

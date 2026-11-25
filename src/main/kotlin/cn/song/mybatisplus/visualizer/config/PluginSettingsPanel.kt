@@ -619,6 +619,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
     internal val logMixedPrefixCheck = JBCheckBox()
     internal val logAutoCaptureCheck = JBCheckBox()
     internal val logAutoOpenCheck = JBCheckBox()
+    /** T-AutoShowYield：自动展开的子开关——同侧栏已有面板时让位（父项关闭时禁用）。 */
+    internal val logAutoOpenYieldCheck = JBCheckBox()
     internal val logStopOnToolWindowCloseCheck = JBCheckBox()
     internal val logTimestampCheck = JBCheckBox()
     internal val logTimestampFormatField = JBTextField(12)
@@ -1291,6 +1293,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || logMixedPrefixCheck.isSelected != s.logMixedPrefix
             || logAutoCaptureCheck.isSelected != s.logAutoCaptureOnStart
             || logAutoOpenCheck.isSelected != s.logAutoOpenOnCapture
+            || logAutoOpenYieldCheck.isSelected != s.logAutoOpenYield
             || logStopOnToolWindowCloseCheck.isSelected != s.logStopOnToolWindowClose
             || logTimestampCheck.isSelected != s.logTimestampEnabled
             || logTimestampFormatField.text.trim() != s.logTimestampFormat
@@ -1450,6 +1453,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.logMixedPrefix = logMixedPrefixCheck.isSelected
             s.logAutoCaptureOnStart = logAutoCaptureCheck.isSelected
             s.logAutoOpenOnCapture = logAutoOpenCheck.isSelected
+            s.logAutoOpenYield = logAutoOpenYieldCheck.isSelected
             s.logStopOnToolWindowClose = logStopOnToolWindowCloseCheck.isSelected
             s.logTimestampEnabled = logTimestampCheck.isSelected
             s.logTimestampFormat = logTimestampFormatField.text.trim()
@@ -1676,6 +1680,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             logMixedPrefixCheck.isSelected = s.logMixedPrefix
             logAutoCaptureCheck.isSelected = s.logAutoCaptureOnStart
             logAutoOpenCheck.isSelected = s.logAutoOpenOnCapture
+            logAutoOpenYieldCheck.isSelected = s.logAutoOpenYield
+            logAutoOpenYieldCheck.isEnabled = s.logAutoOpenOnCapture
             logStopOnToolWindowCloseCheck.isSelected = s.logStopOnToolWindowClose
             logTimestampCheck.isSelected = s.logTimestampEnabled
             logTimestampFormatField.text = s.logTimestampFormat

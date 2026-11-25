@@ -8,6 +8,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.wm.ToolWindowAnchor
 import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.openapi.wm.ex.ToolWindowManagerListener
 import com.intellij.util.Alarm
@@ -170,6 +171,32 @@ class SqlLogManager(private val project: Project) : Disposable {
         }
     }
 
+    /**
+     * T-AutoShowYield：同侧条纹占用查询（internal 测试缝——默认读 ToolWindowManager）。
+     *
+     * 为什么需要：新 UI 里同一锚点的侧栏同一时刻只显示一块面板，`show()` 会把当前显示的那块
+     * **顶掉**——用户正在看的 API 调试 / HTTP Client / Database 都注册在右侧，被抢走是纯损失
+     * （真机反馈：用 API 调试插件调接口，响应还没读完日志窗就顶了上来）。
+     *
+     * 只查「与本窗同锚点且 isVisible」的其他工具窗；读取失败按「未占用」处理——宁可保留既有
+     * 自动展开能力，也不让平台差异把功能静默关死。相邻读取先例见 [FirstCaptureGuide]。
+     */
+    @Volatile
+    internal var isOwnStripeOccupiedByOtherPanel: () -> Boolean = {
+        runCatching {
+            val manager = ToolWindowManager.getInstance(project)
+            val ownAnchor = manager.getToolWindow(TOOL_WINDOW_ID)?.anchor ?: return@runCatching false
+            val visibleOtherAnchors = manager.toolWindowIdSet
+                .asSequence()
+                .filter { it != TOOL_WINDOW_ID }
+                .mapNotNull { manager.getToolWindow(it) }
+                .filter { it.isVisible }
+                .map { it.anchor }
+                .toList()
+            shouldYieldToOtherPanel(ownAnchor, visibleOtherAnchors)
+        }.getOrDefault(false)
+    }
+
     private val autoShowBufferListener = { maybeAutoShow() }
 
     /**
@@ -271,6 +298,14 @@ class SqlLogManager(private val project: Project) : Disposable {
                 autoShowSuppressedByUserClose,
             )
         ) {
+            return false
+        }
+        if (PluginSettings.getInstance().state.logAutoOpenYield && isOwnStripeOccupiedByOtherPanel()) {
+            // T-AutoShowYield：同侧已有面板在显示——show() 会把它顶掉，用户正在用的那块
+            // （API 调试 / HTTP Client / Database）不该被抢。让位期间条目照常入缓冲，切回面板即可看到；
+            // 防抖窗口照常消费，避免用户稍后关掉那块面板时被一条延迟展开偷袭。
+            lastAutoShowAt = now
+            LOG.info("[T-AutoShowYield] logAutoOpenYield=true 且同侧条纹被其他工具窗占用——本轮不抢面板")
             return false
         }
         lastAutoShowAt = now
@@ -747,6 +782,16 @@ class SqlLogManager(private val project: Project) : Disposable {
          *  自动展开自身只产生 不可见→可见 沿，不会误判；初值 false 时启动/布局中间态不触发。 */
         internal fun isUserCloseTransition(wasVisible: Boolean, isVisible: Boolean): Boolean =
             wasVisible && !isVisible
+
+        /**
+         * T-AutoShowYield：让位判定（纯函数，测试缝）——同一锚点条纹里已有别的工具窗在显示时
+         * 就判定让位（不调用 `show()`）：新 UI 同一侧栏只显示一块面板，展开等于把用户正在用的那块顶掉。
+         * 锚点未知（null）不判定让位，保持既有展开能力。
+         */
+        internal fun shouldYieldToOtherPanel(
+            ownAnchor: ToolWindowAnchor?,
+            visibleOtherAnchors: List<ToolWindowAnchor>,
+        ): Boolean = ownAnchor != null && visibleOtherAnchors.contains(ownAnchor)
     }
 }
 

@@ -373,7 +373,17 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                 toolTipText = MpSqlVisualizerBundle.message("settings.log.mixedPrefix.tip")
             })
             addRow(p, g, "", logAutoCaptureCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.autoCapture") })
-            addRow(p, g, "", logAutoOpenCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.autoOpen") })
+            addRow(p, g, "", logAutoOpenCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.log.autoOpen")
+                toolTipText = MpSqlVisualizerBundle.message("settings.log.autoOpen.tip")
+            })
+            // T-AutoShowYield：自动展开的子开关（父项关闭时禁用）——同侧栏已有面板时让位，不顶掉用户正在用的那块
+            addRow(p, g, "", logAutoOpenYieldCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.log.autoOpenYield")
+                toolTipText = MpSqlVisualizerBundle.message("settings.log.autoOpenYield.tip")
+                isEnabled = logAutoOpenCheck.isSelected
+            })
+            logAutoOpenCheck.addActionListener { logAutoOpenYieldCheck.isEnabled = logAutoOpenCheck.isSelected }
             addRow(p, g, "", logStopOnToolWindowCloseCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.stopOnToolWindowClose") })
             addRow(p, g, "", logTimestampCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.timestamp") })
             addRow(p, g, MpSqlVisualizerBundle.message("settings.log.timestampFormat"), logTimestampFormatField.apply {

@@ -600,7 +600,9 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.log.paramPrefix"), b.message("settings.log.paramPrefix.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.mixedPrefix"), b.message("settings.log.mixedPrefix.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.autoCapture"), "", "settings.section.sqlLog", l))
-            fields.add(SearchableField(b.message("settings.log.autoOpen"), "", "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.autoOpen"), b.message("settings.log.autoOpen.tip"), "settings.section.sqlLog", l))
+            // T-AutoShowYield：自动展开的子开关（同侧栏有面板时让位）
+            fields.add(SearchableField(b.message("settings.log.autoOpenYield"), b.message("settings.log.autoOpenYield.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.stopOnToolWindowClose"), "", "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.timestamp"), "", "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.timestampFormat"), b.message("settings.log.timestampFormat.tip"), "settings.section.sqlLog", l))
