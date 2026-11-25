@@ -394,6 +394,8 @@ tasks.jar {
             "Implementation-Version" to engineVersion.get(),
             "Built-From" to "mybatis-plus-sql-visualizer@${rootProject.version}",
             "Engine-Api" to "mpsv.engine.EngineApi",
+            // P5 的 stdio 分发入口：产物已自包含（stdlib + jsqlparser），`java -jar` 即可逐行收发 JSON。
+            "Main-Class" to "mpsv.engine.StdioMain",
         )
     }
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
