@@ -9,6 +9,8 @@ import cn.song.mybatisplus.visualizer.log.LogThreadRouter
 import cn.song.mybatisplus.visualizer.log.MyBatisLogParser
 import cn.song.mybatisplus.visualizer.log.ShardingSphereLogParser
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
+import cn.song.mybatisplus.visualizer.sql.ExplainGate
+import cn.song.mybatisplus.visualizer.sql.ExplainSupport
 import cn.song.mybatisplus.visualizer.sql.SqlPerfAnalyzer
 import cn.song.mybatisplus.visualizer.util.SqlStatementSplitter
 
@@ -118,6 +120,70 @@ object EngineApi {
             sb.append("],\"line\":").append(warning.line).append('}')
         }
         return sb.append("]}").toString()
+    }
+
+    /**
+     * 统一渲染入口（薄转发，T5-3）。引擎只做「纯逻辑可达」的渲染：
+     *  - `logs` / `check` / `perf` 直接转到既有门面；
+     *  - `wrapper` / `xml` / `annotation` / `jpa` / `jdbcTemplate` 的「文本 → 模型」解析依赖 PSI，
+     *    引擎 jar 不含 PSI，因此返回结构化 `unresolved`（由 wasm 侧 L1/L8 自带解析完成），
+     *    **绝不伪造 SQL**（产品纪律：unresolved 不出 SQL）。
+     *
+     * @return 与既有门面同形 JSON；不支持的 kind 为 `{"ok":false,"kind":"unresolved","error":…}`。
+     */
+    @JvmStatic
+    fun render(kind: String, text: String, dialect: String?): String {
+        if (text.isBlank()) return errorJson("text is empty.")
+        return when (kind.lowercase()) {
+            "logs" -> renderLogs(text, dialect)
+            "check" -> checkSql(text)
+            "perf" -> perfAdvice(text, dialect ?: "MySQL")
+            else -> "{\"ok\":false,\"kind\":\"unresolved\",\"error\":" +
+                jsonStr("render kind '$kind' needs PSI, which the engine-only jar does not provide") + "}"
+        }
+    }
+
+    /**
+     * EXPLAIN 包装（纯逻辑，不连库、不执行，T5-3）。复用 [ExplainGate.planExplainSubmit]：
+     * 只读首关键字白名单 + 幂等（已是 EXPLAIN 则原样）+ 方言模板，返回可提交的 EXPLAIN
+     * 语句与输出格式；不可解释 / 方言不接入时返回结构化错误（kind = `syntax` / `unsupported`）。
+     * 实际执行由持有连接的一侧完成——引擎 jar 不带 JDBC 驱动。
+     *
+     * @return `{"ok":true,"dialect":…,"explainSql":…,"format":"TABLE|TEXT|JSON|XML"}` 或结构化错误。
+     */
+    @JvmStatic
+    fun explain(sql: String, dialect: String): String {
+        if (sql.isBlank()) return errorJson("sql is empty.")
+        val resolved = DialectRegistry.byName(dialect)
+        return when (val plan = ExplainGate.planExplainSubmit(resolved, sql)) {
+            is ExplainGate.SubmitPlan.Submit -> {
+                val format = ExplainSupport.formatFor(resolved.name)?.name
+                "{\"ok\":true,\"dialect\":" + jsonStr(resolved.name) +
+                    ",\"explainSql\":" + jsonStr(plan.statement) +
+                    ",\"format\":" + (format?.let { jsonStr(it) } ?: "null") + "}"
+            }
+            is ExplainGate.SubmitPlan.NotExplainable -> "{\"ok\":false,\"kind\":\"syntax\",\"error\":" +
+                jsonStr(
+                    "only read-only queries can be explained; first keyword: " +
+                        (plan.firstKeyword ?: "<none>"),
+                ) + "}"
+            is ExplainGate.SubmitPlan.DialectUnsupported -> "{\"ok\":false,\"kind\":\"unsupported\",\"error\":" +
+                jsonStr("EXPLAIN is not supported for dialect " + plan.dialectName) + "}"
+        }
+    }
+
+    /**
+     * Schema 元数据入口（T5-3）。引擎 jar 是纯逻辑制品、**不带 JDBC 驱动**，无法自省数据库，
+     * 因此恒返回结构化 `connection` 错误（由持有连接的宿主补齐）；绝不返回空表假装成功。
+     */
+    @JvmStatic
+    fun schema(table: String, dialect: String): String {
+        if (table.isBlank()) return errorJson("table is empty.")
+        return "{\"ok\":false,\"kind\":\"connection\",\"error\":" +
+            jsonStr(
+                "schema introspection for '" + table + "' (" + dialect +
+                    ") needs a JDBC connection, which the engine-only jar does not provide",
+            ) + "}"
     }
 
     /** 四解析器装配（逐字对齐主仓 `SqlVisualizerRenderLogsTool.renderLogEntries` 的默认装配）。 */
