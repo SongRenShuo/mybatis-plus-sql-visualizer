@@ -9,6 +9,7 @@
 
 ### Fixed
 - **从日志面板点「设置」不再停在 SQL 日志页中间（T-SqlLogSettingsJumpAnchor，`52322da26`）**：设置页按页面缓存内容与滚动位置，齿轮入口只切页不做定位，于是 SQL 日志这种多分组长页会沿用上次停的位置。现在只切页时落点复位到页顶；搜索与引导链接的带目标定位（滚动 + 高亮）不受影响。
+- **自研 Wrapper 子类（MPJ 套壳封装）现在能预览了（T-ServiceJoinWrapperPreview，D256）**：`CustomJoinWrapper extends AbstractLambdaJoinBaseWrapper<…>` 这类把 MPJ 整套复制改名、或在自己框架里再包一层的 Wrapper，此前插件只认官方类名——声明行没有 gutter 图标，Service 封装里的 `repository.selectJoinList(Dto.class, wrapper)` 点了没反应。现在沿类型父链识别（FQN 前缀 / 接口同名组合 / 依赖未索引时按链方法兜底），声明行与 `selectJoinList` / `selectJoinOne` / `selectJoinMap` / `selectJoinCount` 调用行都能直接预览；join 消费族同时加了守卫，不会再在 wrapper 未识别时输出 `WHERE id IN (?, ...)` 这类凭空条件的错误 SQL。
 
 ## [2026.11.25] - 2026-11-25
 

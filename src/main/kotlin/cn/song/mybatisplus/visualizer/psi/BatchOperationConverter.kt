@@ -243,6 +243,9 @@ object BatchOperationConverter {
         injectTenantLine: Boolean = true,
     ): BatchPreview? {
         val methodName = call.methodExpression.referenceName ?: return null
+        // D256-M3：join 消费族错误 SQL 守卫——**必须早于注册表查询**（见 [isJoinFamilyRejected] KDoc：
+        // selectJoinList 族今天不在 [BATCH_OPERATIONS]，守卫放在注册表之后对它永远不会执行）
+        if (isJoinFamilyRejected(methodName)) return null
         val operation = BATCH_OPERATIONS[methodName] ?: return null
         val target = resolveEntityTable(call) ?: return null
         val table = target.table
@@ -271,6 +274,52 @@ object BatchOperationConverter {
             warning = build.warning,
         )
     }
+
+    // ------------------------------------------------------------------
+    // D256-M3：MPJ join 消费族的错误 SQL 守卫
+    // ------------------------------------------------------------------
+
+    /**
+     * D256-M3：MPJ join 消费族方法名（**只用于拒绝判定**，不并入 [BATCH_OPERATIONS]）。
+     *
+     * 集合本地自定、不引用 M1/M2 分支的改动（避免合并顺序耦合）：既有已注册的
+     * `selectJoinMaps` / `selectJoinMapsPage` + 尚未注册的 `selectJoinList` / `selectJoinOne` /
+     * `selectJoinMap` / `selectJoinCount` / `selectJoinPage`。
+     *
+     * 为什么不并入批量模板注册表（计划 §四 M3「不做」）：这些方法的 SQL 形状由 wrapper 决定
+     * （join 条件 + 自定义 select 列），[buildSelectBatch] 的 `WHERE id IN (?, ?, ...)` 与之语义不匹配。
+     */
+    private val JOIN_CONSUMER_METHOD_NAMES = setOf(
+        "selectJoinList", "selectJoinOne", "selectJoinMap", "selectJoinCount",
+        "selectJoinMaps", "selectJoinMapsPage", "selectJoinPage",
+    )
+
+    /**
+     * D256-M3：join 族调用的错误 SQL 守卫（`true` = 拒绝产出模板 SQL，[convert] 返回 null）。
+     *
+     * **位置理由（放在 [convert] 而非 [isBatchOperationCall]）**：
+     *  - [isBatchOperationCall] 是选择区/锚点候选面（[WrapperLocator.isSqlCandidate] 等）的判定，
+     *    改它会连带改变「多 SQL 选择列表」的候选集合——那是 M2 的契约面，本券不动；
+     *  - 本条守卫的输入是**实参类型解析**（首参 Class 字面量、末参 wrapper 变量 resolve），
+     *    每次候选扫描都付这份 resolve 成本不合理；[convert] 是唯一产出 SQL 的入口，只付一次；
+     *  - 守卫的目标就是「不产出 SQL」，守在唯一产出点即覆盖全部预览入口。
+     *
+     * **位置理由（早于 `BATCH_OPERATIONS[methodName]`）**：`selectJoinList` 族今天不在注册表，
+     * 若放在注册表命中之后，守卫对它们永远不会执行；而本条守卫的价值恰恰是「将来有人把 join 族
+     * 登记进模板时，错误形态不会静默产出 `WHERE id IN (?, ?, ...)`」（F7 风险）。
+     *
+     * **判定＝一律拒绝**（2026-11-23 主控收口，采纳 M3 实施者建议）：join 族的 SQL 形状完全由
+     * wrapper 决定（join 条件 + 自定义 select 列 + 分页），批量模板的单表全列 + 主键 IN 永远不对；
+     * 任何「首参像实体 / wrapper 已识别」的放宽都会留下一条能产出凭空条件的路径
+     * （`mapper.selectJoinMaps(knownWrapperVar)` 走批量模板即 `SELECT 全列 ... WHERE id IN (...)`）。
+     * 因此 join 族在批量路径**一律返回 null**，SQL 只由 wrapper 链路径渲染；链路径失败时如实无预览，
+     * 符合「宁可无预览，不可输出错误 SQL」。
+     *
+     * 原 M3 首版实现的两条规则（首参 DTO/VO 拒绝、wrapper 位不可识别拒绝）已被本判定覆盖，
+     * 保留此记录便于回溯：规则 1 见 F7（DTO 被当实体表），规则 2 见 F5/F7（wrapper 不可识别即无信息）。
+     */
+    private fun isJoinFamilyRejected(methodName: String): Boolean =
+        methodName in JOIN_CONSUMER_METHOD_NAMES
 
     // ------------------------------------------------------------------
     // T-WriteFamily（R4）：空 Wrapper 写族的精确形态 + 接收者守卫
