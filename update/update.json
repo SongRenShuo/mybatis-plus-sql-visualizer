@@ -1,7 +1,7 @@
 {
-  "version": "2026.11.23-beta.2",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.23-beta.2/mybatis-plus-sql-visualizer-2026.11.23-beta.2.zip",
-  "changeNotes": "插件显示名改为 MyBatis SQL Visualizer, 补上名称里的 mybatis 搜索词, 插件 ID 与界面品牌文案不变\nMarketplace 描述关键词批: 首行 40 字符关键词句, 补 iBatis/GoldenDB/openGauss 词面与搜索短语\n描述补国产库增强捕获覆盖句: 达梦/人大金仓/GaussDB/磐维/OceanBase/GoldenDB 等, 中英双语同步\n裸 SQL 也加直接替换风险横幅: 工作台或弹窗粘贴的纯 SQL 含未转义 ${} 时, 结果区顶部提示直替处数\n修复实体字段识别: 静态常量不再当表列, 父子类同名字段只留子类声明, 参数提示与 XML 补全同步去噪\n修复 setEntity 预览每个条件独立填值: 逐列独立参数键, 改哪个框只影响对应条件, 清除即时清空\n修复无数据源执行失败结果区整块绿空白: 结果区容器自带不透明底色, 失败收口用最近结果重建预览编辑器",
-  "publishDate": "2026-11-23",
+  "version": "2026.11.25-beta.1",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.25-beta.1/mybatis-plus-sql-visualizer-2026.11.25-beta.1.zip",
+  "changeNotes": "Mapper XML 根标签也加跳转图标, 点击或 Ctrl+B 或 Ctrl+Alt+Home 跳到接口类, 接口无方法也能跳\nMapper 接口类名也加跳转图标, 点击或 Ctrl+B 或 GotoRelated 跳到 XML 根标签, 对齐同类插件类级箭头\n让位覆盖 XML 与 Mapper 两侧, 同类插件在位时只留对方图标, 切开关后立即重算, 让位登记扩到 MyBatisX 与 MyBatisPlus",
+  "publishDate": "2026-11-25",
   "sinceBuild": "243"
 }
