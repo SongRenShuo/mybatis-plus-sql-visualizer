@@ -1064,8 +1064,12 @@ expected 10 was 12）与分片 2（`SqlLogPanelFocusTabTest` expected 4 was 6）
 已按本规则把该用例改成轮询、`iBatis 片段不报 Unknown element` 改成装配期内持续观察（`0611f6ab2`）。
 **正例**：失败先做同 src 跨 run 对照（前一轮全绿 ⇒ 瞬态），再 rerun-failed-jobs，不改代码不前移 tag。
 **反例**：看到红就怀疑新改动引入回归，去动生产代码或重排队列——本轮 src 与上一轮完全相同。
+**2026-11-25 第三形态（已改成轮询后仍偶发）**：CI run `45562438538` 的 `test(4)` 第三次尝试
+`SqlStandalonePreviewPanelDialogTest` `warning.isNotBlank()`（`kt:133`，`awaitWarning` 之后）仍红，
+同片第四次（干净工作树）通过 ⇒ 轮询窗口在该 runner 负载下不够，或该警告依赖的链路偶尔不产出。
+下次改这条用例时先量化 `awaitWarning` 的实际等待上限，改为「等非空 / 超时把面板状态写进断言消息」。
 
-**Seen 2× (2026-11-20)**
+**Seen 3× (2026-11-20 ×2, 2026-11-25 ×1)**
 
 ### L91 多个反向探针同批打会互相掩盖——每个探针单独打、单独记读数
 
