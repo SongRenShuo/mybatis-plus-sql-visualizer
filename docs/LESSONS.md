@@ -1208,6 +1208,23 @@ ISE）与 fork 启动失败不重试，直接红。
 
 **Seen 1× (2026-11-25)**
 
+### L100 设置页增删复选框必须同步总数普查断言——`PluginSettingsPersistenceTest` 是最远一道闸
+
+**规则**：在 `PluginSettingsPanel` / `buildSections` 里新增或删除 `JBCheckBox` 时，同批把
+`PluginSettingsPersistenceTest` 的「复选框总数」断言 ±1，并在注释里登记开关名与来源（沿用
+「+1 后为 N」写法）；定向至少覆盖该类。该断言是**全页组件普查**，只在该类的语言写穿用例里跑，
+本地漏跑就等于把红留到远端分片。
+
+**证据**：T-AutoShowYield（`12b84ae03`）新增 `logAutoOpenYieldCheck` 未同步计数，push 后 CI
+run `45560193140` 的 `test (1)` 红：`testLanguageWriteThroughRefreshesCheckboxTexts`
+→ `复选框总数应为 51 expected:<51> but was:<52>`（927 例 / 1 红）；本地定向只跑了自动展开与
+设置搜索/面板类，未含该普查类。同步为 52 后本地 20/0。
+
+**正例**：加/删复选框同批改计数并在注释里写明开关与节位；**反例**：只跑「改到的那几个类」就宣布绿，
+不去看全仓还有哪些普查型断言（同族：设置搜索索引守卫、面板控件计数）。
+
+**Seen 1× (2026-11-25)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
