@@ -66,11 +66,31 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
     /** 点击处理：后台解析 + 渲染（EDT 禁止 PSI 慢操作），结果走统一展示入口。 */
     private object XmlGutterNavigationHandler : GutterIconNavigationHandler<PsiElement> {
         override fun navigate(e: MouseEvent?, elt: PsiElement) {
-            val project: Project = elt.project
             val tag = elt.parent as? XmlTag ?: return
             val file = tag.containingFile as? XmlFile ?: return
+            previewStatementTag(elt.project, sourceLocation = null) { file to tag }
+        }
+    }
+
+    companion object {
+        private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(XmlSqlGutterLineMarkerProvider::class.java)
+
+        /**
+         * 语句标签的预览入口（T-MapperMethodSqlPreview）：XML 语句行与 Mapper 接口方法行共用，
+         * 保证两处点击的装配与渲染逐字节一致（动态 SQL、参数表、`<include>`、`${}` 注入都在同一条链上）。
+         *
+         * [resolve] 在 [SqlPreviewService.previewAsync] 的 ReadAction 内执行——两处调用方锚点形态
+         * 不同（XML 侧叶子直接给 tag；Java 侧方法名要先解析出同名语句），把解析放在后台，
+         * EDT 上不做 PSI 慢操作。解析不到返回 null，按「未找到」轻提示（不制造点了必空的入口）。
+         */
+        internal fun previewStatementTag(
+            project: Project,
+            sourceLocation: String?,
+            resolve: () -> Pair<XmlFile, XmlTag>?,
+        ) {
             val contextRef = java.util.concurrent.atomic.AtomicReference<cn.song.mybatisplus.visualizer.context.PreviewSourceContext?>()
             SqlPreviewService.previewAsync(project, {
+                val (file, tag) = resolve() ?: return@previewAsync null
                 val t0 = System.currentTimeMillis()
                 val context = XmlPreviewService.resolveSourceContext(file, tag)
                 contextRef.set(context)
@@ -94,13 +114,9 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
                 }
                 XmlPreviewService.preview(file.text, tag.getAttributeValue("id"), project, entity, sourceContext = context)
             }) { result ->
-                SqlPreviewService.showResult(project, result, sourceContext = contextRef.get())
+                SqlPreviewService.showResult(project, result, sourceLocation = sourceLocation, sourceContext = contextRef.get())
             }
         }
-    }
-
-    companion object {
-        private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(XmlSqlGutterLineMarkerProvider::class.java)
 
         /**
          * M11 预取入口：只对 MBG Example 形态（`parameterType` 以 `Example` 结尾）的语句触发，
