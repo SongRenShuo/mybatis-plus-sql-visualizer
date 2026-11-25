@@ -73,7 +73,12 @@ public final class EventBus {
         }
         port = serverPort;
         started = true;
-        final Thread sender = new Thread(new SenderLoop(serverPort), "sqlvis-agent-sender");
+        // T4-1：传输旁路（默认 TCP，零语义变化）。ws 时 agent 在 loopback 监听 WebSocket
+        // 供 OpenIDEA 插件（只支持 WebSocket::connect）连入；事件帧/入站 CONFIG 语义不变。
+        final Runnable loop = CaptureTransportMode.isWebSocket()
+                ? new WsSenderLoop(serverPort)
+                : new SenderLoop(serverPort);
+        final Thread sender = new Thread(loop, "sqlvis-agent-sender");
         sender.setDaemon(true);
         sender.start();
     }
