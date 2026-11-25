@@ -2,14 +2,18 @@
 
 # SQL Visualizer Changelog
 
-## [Unreleased]
+## [2026.11.26-beta.1] - 2026-11-25
+
+> 范围＝`2026.11.25` 正式版（`452692060`）之后到本版发行提交的增量，3 个用户可感 `src/main` 任务面：T-ServiceJoinWrapperPreview（D256，`736b6a272` 合流）、T-AutoShowYield（`12b84ae03`）、T-SqlLogSettingsJumpAnchor（`52322da26`）；其余 `fbe0ce7aa` / `dd402368c` 等为 CI / 计划 / 索引 / 记忆精简类提交。基号 `2026.11.25` 今日已被正式版占用，按版本号规范换次日基号起 beta.1。逐条根因、真机读数与反向验证见 `docs/发行说明/20261125-1630-自动开窗让位与设置落点及自研Wrapper预览-内测说明.md` 与 `docs/开发计划/` 对应计划文档
+
+### Added
+- **自研 Wrapper 子类（MPJ 套壳封装）现在能预览了（T-ServiceJoinWrapperPreview，D256，`736b6a272`）**：`CustomJoinWrapper extends AbstractLambdaJoinBaseWrapper<…>` 这类把 MPJ 整套复制改名、或在自己框架里再包一层的 Wrapper，此前插件只认官方类名——声明行没有 gutter 图标，Service 封装里的 `repository.selectJoinList(Dto.class, wrapper)` 点了没反应。现在沿类型父链识别（FQN 前缀 / 接口同名组合 / 依赖未索引时按链方法兜底），声明行与 `selectJoinList` / `selectJoinOne` / `selectJoinMap` / `selectJoinCount` 调用行都能直接预览；join 消费族同时加了守卫，不会再在 wrapper 未识别时输出 `WHERE id IN (?, ...)` 这类凭空条件的错误 SQL。
 
 ### Changed
 - **发现 SQL 自动打开日志窗口不再顶掉你正在用的面板（T-AutoShowYield，`12b84ae03`）**：新 UI 同一侧栏同一时刻只显示一块面板，此前自动展开会把正在使用的 API 调试 / HTTP Client / Database 顶掉（表现为「我在看接口响应，日志窗抢上来了」）。现在同一侧栏已有其他工具窗口在显示时不展开，SQL 照常捕获、切回面板即可看到；设置页 SQL 日志组新增子开关「自动展开时让位给正在使用的面板」（默认开，父开关关闭时禁用），关掉即恢复每次必开。
 
 ### Fixed
 - **从日志面板点「设置」不再停在 SQL 日志页中间（T-SqlLogSettingsJumpAnchor，`52322da26`）**：设置页按页面缓存内容与滚动位置，齿轮入口只切页不做定位，于是 SQL 日志这种多分组长页会沿用上次停的位置。现在只切页时落点复位到页顶；搜索与引导链接的带目标定位（滚动 + 高亮）不受影响。
-- **自研 Wrapper 子类（MPJ 套壳封装）现在能预览了（T-ServiceJoinWrapperPreview，D256）**：`CustomJoinWrapper extends AbstractLambdaJoinBaseWrapper<…>` 这类把 MPJ 整套复制改名、或在自己框架里再包一层的 Wrapper，此前插件只认官方类名——声明行没有 gutter 图标，Service 封装里的 `repository.selectJoinList(Dto.class, wrapper)` 点了没反应。现在沿类型父链识别（FQN 前缀 / 接口同名组合 / 依赖未索引时按链方法兜底），声明行与 `selectJoinList` / `selectJoinOne` / `selectJoinMap` / `selectJoinCount` 调用行都能直接预览；join 消费族同时加了守卫，不会再在 wrapper 未识别时输出 `WHERE id IN (?, ...)` 这类凭空条件的错误 SQL。
 
 ## [2026.11.25] - 2026-11-25
 
