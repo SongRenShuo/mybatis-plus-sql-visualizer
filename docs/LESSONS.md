@@ -1229,6 +1229,22 @@ run `45560193140` 的 `test (1)` 红：`testLanguageWriteThroughRefreshesCheckbo
 
 **Seen 1× (2026-11-25)**
 
+### L101 重试包装的失败判据必须只看「本次尝试」的输出——跨尝试累积日志会把真红判成竞态
+
+**规则**：多级重试脚本里，每级判定只能读本次尝试的日志（独立文件或先截断）。禁止对 append 累积的
+同一文件做签名匹配：一旦第一级命中环境竞态，后续任何失败（含真实测试红）都会命中旧签名，被判成
+「竞态未恢复」升级到全量重跑——既白烧时间，还可能把真红掩盖成绿。分流口径：竞态→环境恢复重试；
+测试红→只重跑失败类（同 job，编译已 UP-TO-DATE）；其它失败→立即红。
+
+**证据**：`dev-support/ci/run-gradle-retry.ps1` 旧版用 `Tee-Object -Append` 共用 `gradle-run.log`。
+CI run 45562438538 的 test(4)：第 1/2 次真竞态（1m02 / 49s），第 3 次全量跑完 1117 例 / 1 红
+（`SqlStandalonePreviewPanelDialogTest` flaky），却被判「第三级未恢复」→ `git clean -xdf` 全量重跑
+5m44 才绿，job 16m21s（正常片 9m05s）。新版每次尝试独立 `gradle-run-N.log`，`-SelfTest` 7 项断言
+钉住分类（含「测试红不得判为竞态」），本机 fake-wrapper 四场景（编译错 1 次即退 / 竞态两次升干净树 /
+竞态后成功 / 测试红只重跑失败类）全部符合预期。
+
+**Seen 1× (2026-11-25)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |

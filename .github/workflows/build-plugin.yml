@@ -590,9 +590,13 @@ jobs:
         # （快桶腿不跑子项目，无需传）；-PtestShardExcludeClasses **要传**——testFast 与分片同源尊重
         # 该清单（O147RealAgentAcceptanceTest 属纯逻辑类，不传就会在没有本机 JDK8/agent 池的 runner 上红）。
         timeout-minutes: 30
-        # T-CiZipFsFlake（2026-11-05）：Gradle 配置期解析 243 的 database-plugin.jar 时偶发
-        # ClosedFileSystemException（约 4/25 片）。原地重跑无效——Gradle daemon 跨调用复用，
-        # 关闭状态留在 daemon 里，所以包装脚本会先 `--stop` 再重跑一次（详见脚本头注释）。
+        # T-CiZipFsFlake（2026-11-05）+ T-CiRetryClassify（2026-11-25）：Gradle 配置期解析 243 的
+        # database-plugin.jar 时偶发 ClosedFileSystemException（约 4/25 片）。原地重跑无效——daemon
+        # 跨调用复用，关闭状态留在 daemon 里。包装脚本按**本次尝试**的输出分流：竞态才停 daemon +
+        # 清项目侧 IPGP 缓存重跑（仍命中才退干净工作树）；测试红只重跑失败类一次（约 1 分钟）；
+        # 编译等其它失败立即红。旧版把多次尝试 append 进同一日志，首次竞态之后的任何失败都会被判成
+        # 竞态并升级到全量重跑（run 45562438538 的 test(4) 因此多烧 5m44，还掩盖了一次 flaky 红）。
+        # 详见脚本头注释与 `-SelfTest`。
         env:
           LEG: ${{ matrix.shard }}
         run: |
