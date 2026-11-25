@@ -2,13 +2,16 @@
 
 # SQL Visualizer Changelog
 
-## [Unreleased]
+## [2026.11.25-beta.1] - 2026-11-25
+
+> 范围＝`2026.11.24-beta.1` 之后到本版发行提交的增量，3 个用户可感 `src/main` 任务面为 Mapper 根标签跳转、接口类名跳转、两侧让位定稿，其余为内容营销 / 计划 / 调研 / 探针 / 索引类提交。逐条根因、真机读数与反向验证见 `docs/发行说明/20261125-1018-Mapper根标签与类级跳转及两侧让位-内测说明.md`
 
 ### Added
-- **Mapper 接口类名也有跳转图标（T-MapperClassJump）**：接口声明行新增「类 → 对应 XML」图标，点击 / Ctrl+B / Ctrl+Alt+Home 落到 mapper XML 根标签；对齐同类插件（MPJ/MyBatisX）的类级箭头，接口里有没有方法都能跳
+- **Mapper XML 根标签也能跳接口类（T-MapperNavNamespaceJump，`6f6907655`）**：`<mapper namespace="...">` 根标签行新增「跳 Mapper 接口类」图标，点击 / Ctrl+B / Ctrl+Alt+Home 都能跳到对应接口类，接口里没有方法也能跳；让位登记同步扩到 MyBatisX / MyBatisPlus
+- **Mapper 接口类名也有跳转图标（T-MapperClassJump，`ddd37a5be`）**：接口声明行新增「类 → 对应 XML 根标签」图标，点击 / Ctrl+B / GotoRelated（Related）都落到 mapper XML 根标签；对齐同类插件（MPJ/MyBatisX）的类级箭头
 
 ### Changed
-- **让位覆盖 XML 与 Mapper 两侧，切换开关后立即刷新（T-MapperNavYieldBothSides）**：同类插件在位时 XML 语句行与 Mapper 接口方法行都不再显示本插件跳转图标，同一位置只留对方那一套；切换让位开关后已打开的 mapper/xml 立即重算，无需重开文件。能力前提（反编译核实）：XML 侧 MyBatisCodeHelperPro / MyBatisX / MyBatisPlus 都会画；Java 侧 MyBatisX / MyBatisPlus 会画（`MapperLineMarkerProvider`，锚方法名），MyBatisCodeHelperPro 的 UAST 箭头在当前平台不产出——只装它时 Java 方法行让位后会为空
+- **让位覆盖 XML 与 Mapper 两侧，切换开关后立即刷新（T-MapperNavYieldBothSides，`a009cf207` + `ddd37a5be`）**：同类插件在位时 XML 语句行与 Mapper 接口方法行都不再显示本插件跳转图标，同一位置只留对方那一套；切换让位开关后已打开的 mapper/xml 立即重算，无需重开文件。能力前提（反编译核实）：XML 侧 MyBatisCodeHelperPro / MyBatisX / MyBatisPlus 都会画；Java 侧 MyBatisX / MyBatisPlus 会画（`MapperLineMarkerProvider`，锚方法名），MyBatisCodeHelperPro 的 UAST 箭头在当前平台不产出——只装它时 Java 方法行让位后会为空
 
 ## [2026.11.24-beta.1] - 2026-11-24
 
