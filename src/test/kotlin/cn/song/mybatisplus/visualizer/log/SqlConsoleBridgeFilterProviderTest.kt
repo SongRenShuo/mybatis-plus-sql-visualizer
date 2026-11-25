@@ -28,6 +28,9 @@ class SqlConsoleBridgeFilterProviderTest : BasePlatformTestCase() {
         // EP provider 内部取注册服务——测试必须用同一实例（构造器实例不进容器）
         manager = AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "setUp.manager")
         serviceState = SqlLogManagerProjectState.capture(manager)
+        // 同片 light 项目跨类复用：前一个测试类可能在本服务实例里留下条目。不在 setUp 清空时，
+        // 「非捕捉态应为 0」会偶发读到 1（CI run 45584370342 分片 4 即此形态；tearDown 的清空只保护后续类）。
+        manager.entries.clear()
         manager.entries.dedupeEnabled = false
         SqlCaptureGate.epActive = false
     }

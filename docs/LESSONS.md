@@ -1263,6 +1263,16 @@ CI run 45562438538 的 test(4)：第 1/2 次真竞态（1m02 / 49s），第 3 �
 
 **Seen 1× (2026-11-25)**
 
+### L104 跨类复用的项目服务，测试必须在 setUp 清业务状态（tearDown 的清理只保护后续类）
+
+**规则**：light 项目在分片内跨测试类复用，`projectService` 拿到的是同一实例。`tearDown` 里 `clear()` 只让**下一个类**干净，保护不了本类的**第一个**用例；凡是断言「初始为 0/空」的用例，`setUp` 里必须显式清业务状态（在 capture 之后、改配置之前），否则前一个类留下的条目会漏进来，表现为罕见的 `expected:<0> but was:<1>`。
+
+**证据**：CI run `45584370342` 分片 4 在纯 docs 提交 `1620748ea` 上红在 `SqlConsoleBridgeFilterProviderTest > test非捕捉态_零处理_不置位`（`assertEquals(0, manager.entries.snapshot().size)` 读到 1）。该类 `setUp` 只 `SqlLogManagerProjectState.capture` + 改 `dedupeEnabled`，未清 `entries`；`tearDown` 的 `manager.entries.clear()` 只覆盖后续类。修复＝`setUp` 在 capture 后补 `manager.entries.clear()`；本地定向 3 用例全绿（XML `tests="3"`）。
+
+**反例**：把「测试隔离」理解成「tearDown 清理」，忽略同片共用实例的**首例**暴露面。
+
+**Seen 1× (2026-11-25)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
