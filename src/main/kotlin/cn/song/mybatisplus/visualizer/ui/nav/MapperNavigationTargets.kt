@@ -12,6 +12,7 @@ import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.XmlAttribute
 import com.intellij.psi.xml.XmlAttributeValue
+import com.intellij.psi.xml.XmlFile
 import com.intellij.psi.xml.XmlTag
 import com.intellij.psi.xml.XmlToken
 import com.intellij.psi.xml.XmlTokenType
@@ -47,6 +48,16 @@ internal object MapperNavigationTargets {
         val project = method.project
         if (DumbService.isDumb(project)) return emptyList()
         return MybatisXmlTargets.resolveStatementTags(project, namespace, method.name)
+    }
+
+    /**
+     * T-MapperClassJump：Mapper 接口**类** → namespace 对应 XML 文件（无则 null）。
+     * 供 Ctrl+B / GotoRelated / gutter 类名锚点共用；竞品（MPJ view.A、MyBatisX）都有这一跳。
+     */
+    fun xmlFileForMapperInterface(cls: PsiClass?): XmlFile? {
+        if (cls == null || !cls.isInterface) return null
+        val namespace = cls.qualifiedName ?: return null
+        return MybatisXmlTargets.findMapperFileByNamespace(cls.project, namespace)
     }
 
     /** XML 语句标签 → namespace 接口的同名方法（非 mapper 文件/非语句标签/无命中返回 null）。 */

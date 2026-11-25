@@ -155,6 +155,17 @@ class MapperNavigationGotoDeclarationHandlerTest : BasePlatformTestCase() {
     // XML → Java
     // ------------------------------------------------------------------
 
+    fun testJava类名_跳XML根标签() {
+        val java = addMapper()
+        val xml = addXml("<select id=\"selectById\">select 1</select>")
+
+        val cls = PsiTreeUtil.findChildOfType(java, com.intellij.psi.PsiClass::class.java)!!
+        val result = targets(cls.nameIdentifier!!)
+
+        assertEquals("接口类名应给出唯一 XML 落点（T-MapperClassJump）", 1, result.size)
+        assertSame("落点应在 mapper XML 内", xml, result[0].containingFile)
+    }
+
     fun testXml起始标签名_跳接口方法() {
         addMapper()
         val xml = addXml("<select id=\"selectById\">select 1</select>")

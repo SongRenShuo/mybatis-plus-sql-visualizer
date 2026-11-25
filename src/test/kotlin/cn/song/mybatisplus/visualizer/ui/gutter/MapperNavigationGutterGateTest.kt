@@ -200,7 +200,7 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
 
     fun test竞品在位且让位开_Java侧零图标() {
         MyBatisCompetitorGate.probe = { true }
-        // 2026-11-25 用户口径：让位覆盖 XML 与 Mapper 两侧（设置项文案「让出 XML 与 Mapper 跳转图标」）。
+        // 2026-11-25 用户拍板：让位覆盖 XML 与 Mapper 两侧。
         assertEquals("竞品在位 + 让位开：Java 侧应让位（0 图标）", 0, javaSideMarkerCount())
     }
 
@@ -251,6 +251,28 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
     fun test竞品不在位_根标签跳类图标保留() {
         MyBatisCompetitorGate.probe = { false }
         assertEquals("竞品不在位：根标签跳类图标基线 1", 1, rootTagMarkerCount())
+    }
+
+    // ---------- T-MapperClassJump：接口类名图标同受 Java 侧让位门 ----------
+
+    private fun classNameMarkerCount(): Int {
+        addMapperXmlForInterface()
+        myFixture.configureByText("UserMapper.java", javaFixture)
+        val cls = PsiTreeUtil.findChildOfType(myFixture.file, com.intellij.psi.PsiClass::class.java)!!
+        val nameIdentifier = cls.nameIdentifier!!
+        val result = mutableListOf<LineMarkerInfo<*>>()
+        MapperJavaToXmlLineMarkerProvider().collectSlowLineMarkers(mutableListOf(nameIdentifier), result)
+        return result.size
+    }
+
+    fun test竞品在位且让位开_类名图标也让位() {
+        MyBatisCompetitorGate.probe = { true }
+        assertEquals("竞品在位 + 让位开：接口类名图标也应让位（0 枚）", 0, classNameMarkerCount())
+    }
+
+    fun test竞品不在位_类名图标保留() {
+        MyBatisCompetitorGate.probe = { false }
+        assertEquals("竞品不在位：接口类名图标基线 1", 1, classNameMarkerCount())
     }
 
     /** 临时关闭让位开关执行 [block]（结束后恢复原 State）。 */

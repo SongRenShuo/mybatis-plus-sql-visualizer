@@ -22,11 +22,14 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
     override fun setUp() {
         super.setUp()
         MapperXmlToJavaLineMarkerProvider.resetResolvedCacheForTest()
+        // T-MapperClassJump：类名→XML 的会话级缓存同样要清，防跨用例命中（同工程同 namespace 串号）
+        MapperJavaToXmlLineMarkerProvider.resetClassCacheForTest()
     }
 
     override fun tearDown() {
         try {
             MapperXmlToJavaLineMarkerProvider.resetResolvedCacheForTest()
+            MapperJavaToXmlLineMarkerProvider.resetClassCacheForTest()
         } finally {
             super.tearDown()
         }
@@ -61,7 +64,16 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         val elements = PsiTreeUtil.collectElements(file) { it.firstChild == null }.toMutableList()
         val result = mutableListOf<LineMarkerInfo<*>>()
         provider.collectSlowLineMarkers(elements, result)
-        return if (includeRoot) result else result.filterNot(::isRootMapperMarker)
+        // T-MapperClassJump：接口类名新增一枚跳 XML 图标——语句/方法基线用例默认排除它，
+        // 类名用例用 collectFor(指定 leaf) 单独断言。
+        val withoutClass = result.filterNot(::isMapperClassMarker)
+        return if (includeRoot) withoutClass else withoutClass.filterNot(::isRootMapperMarker)
+    }
+
+    private fun isMapperClassMarker(info: LineMarkerInfo<*>): Boolean {
+        val id = info.element as? com.intellij.psi.PsiIdentifier ?: return false
+        val owner = id.parent as? com.intellij.psi.PsiClass ?: return false
+        return owner.nameIdentifier === id
     }
 
     private fun isRootMapperMarker(info: LineMarkerInfo<*>): Boolean {
@@ -361,5 +373,33 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         val xml = addXml("<select id=\"count\">select 1</select>")
         val ms = markers(xmlProvider, xml, includeRoot = true)
         assertEquals("根标签 1 枚 + 语句 1 枚应共存", 2, ms.size)
+    }
+
+    // ---------- T-MapperClassJump：Mapper 接口类名 → XML ----------
+
+    private fun collectFor(provider: LineMarkerProvider, leaves: List<PsiElement>): List<LineMarkerInfo<*>> {
+        val result = mutableListOf<LineMarkerInfo<*>>()
+        provider.collectSlowLineMarkers(leaves.toMutableList(), result)
+        return result
+    }
+
+    private fun classNameIdentifier(file: PsiFile): com.intellij.psi.PsiIdentifier =
+        PsiTreeUtil.collectElementsOfType(file, com.intellij.psi.PsiIdentifier::class.java)
+            .first {
+                it.parent is com.intellij.psi.PsiClass &&
+                    (it.parent as com.intellij.psi.PsiClass).nameIdentifier === it
+            }
+
+    fun test接口类名_出跳XML图标() {
+        val java = addMapper()
+        addXml("<select id=\"count\">select 1</select>")
+        val ms = collectFor(javaProvider, listOf(classNameIdentifier(java)))
+        assertEquals("接口类名应恰 1 枚跳 XML 图标", 1, ms.size)
+        assertEquals("类名图标复用 MapperMethod", MpvsIcons.MapperMethod, ms.single().icon)
+    }
+
+    fun test接口类名_无XML不出图标() {
+        val java = addMapper()
+        assertEmpty("接口没有对应 XML 时类名不出死图标", collectFor(javaProvider, listOf(classNameIdentifier(java))))
     }
 }

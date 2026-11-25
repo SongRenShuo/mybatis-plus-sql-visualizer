@@ -107,7 +107,14 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         val elements = PsiTreeUtil.collectElements(file) { it.firstChild == null }.toMutableList()
         val result = mutableListOf<LineMarkerInfo<*>>()
         provider.collectSlowLineMarkers(elements, result)
-        return result
+        // T-MapperClassJump：接口类名新增一枚跳 XML 图标——本类语句/方法基线统一排除它。
+        return result.filterNot(::isMapperClassMarker)
+    }
+
+    private fun isMapperClassMarker(info: LineMarkerInfo<*>): Boolean {
+        val id = info.element as? com.intellij.psi.PsiIdentifier ?: return false
+        val owner = id.parent as? com.intellij.psi.PsiClass ?: return false
+        return owner.nameIdentifier === id
     }
 
     /** T-MapperNavNamespaceJump 起 XML 侧多一枚「根标签 → 接口类」图标；语句基线断言需排除它。 */
@@ -532,8 +539,8 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
      * T-Ibatis2Gap 收尾反证锚：竞品 MyBatisCodeHelperPro **没有 iBatis 能力**（发行包解包扫描
      * iBatis 命中 0），sqlMap / SqlMapExecutor 调用行不存在图标冲突——竞品在位时 iBatis 两个箭头
      * **必须照常产出**（不读 `mapperNavYieldToCodeHelper`）；MyBatis 的对照半边：XML 与 Java 两侧
-     * 都让位（2026-11-25 用户口径：让出 XML 与 Mapper 跳转图标）。把 iBatis「不让位」改回「让位」
-     * 必恰本条变红（补丁见 `dev-support/reverse-probes/ibatis-navicon-restore-ibatis-yield-gate.patch`）。
+     * 都让位（2026-11-25 两侧让位口径）。把 iBatis「不让位」改回「让位」必恰本条变红（补丁见
+     * `dev-support/reverse-probes/ibatis-navicon-restore-ibatis-yield-gate.patch`）。
      */
     fun test竞品在位_iBatis箭头仍产出_MyBatis对照仍让位() {
         // 竞品在位造法照 MapperNavCoexistGateTest：注入 probe（纯测试缝，零反射、零插件依赖）
@@ -561,7 +568,7 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
             markers(javaToXml, dao).map { it.element!!.textRange.startOffset }
                 .contains(firstArgCallName(dao, "queryForObject", "user.selectById")!!.textRange.startOffset),
         )
-        // 对照半边：MyBatis 的 XML 与 Java 两侧在竞品在位时都让位（2026-11-25 用户口径）
+        // 对照半边：MyBatis 的 XML 与 Java 两侧在竞品在位时都让位（2026-11-25 两侧让位口径）
         assertEmpty(markers(mybatisXmlToJava, mapper))
         assertEmpty(markers(mybatisJavaToXml, iface))
 

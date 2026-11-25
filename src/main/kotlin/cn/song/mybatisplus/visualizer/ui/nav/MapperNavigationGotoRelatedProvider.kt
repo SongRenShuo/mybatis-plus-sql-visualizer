@@ -41,6 +41,23 @@ class MapperNavigationGotoRelatedProvider : GotoRelatedProvider() {
                 )
             }
         }
+        // T-MapperClassJump：光标在 Mapper 接口类名上 → 对应 XML 根标签。
+        (element as? com.intellij.psi.PsiIdentifier)?.parent?.let { owner ->
+            if (owner is com.intellij.psi.PsiClass && owner.nameIdentifier === element) {
+                val xml = MapperNavigationTargets.xmlFileForMapperInterface(owner)
+                val root = xml?.rootTag
+                if (root != null) {
+                    return listOf(
+                        RelatedItem(
+                            element = root,
+                            label = xml.name ?: "",
+                            groupName = GROUP_STATEMENT,
+                            icon = MpvsIcons.MapperStatement,
+                        ),
+                    )
+                }
+            }
+        }
         MapperNavigationTargets.nearestMapperMethod(element)?.let { method ->
             val statements = MapperNavigationTargets.statementTagsFor(method).map { tag ->
                 RelatedItem(

@@ -150,8 +150,9 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * **XML 语句行与 Mapper 接口方法行**的跳转图标都不显示，避免与对方的跳转箭头叠在同一处。
          * 关闭后两侧都强制显示。
          *
-         * 2026-11-25 用户口径：让位覆盖两侧（设置项文案「让出 XML 与 Mapper 跳转图标」）。
-         * 取舍已知：两家图标同款，让位后该处只剩对方那枚——用户接受这一观感，换取「同一位置只有一套图标」。
+         * 2026-11-25 用户拍板：让位覆盖两侧。能力前提（反编译）：XML 侧三家同类插件都画；
+         * Java 侧 MyBatisX/MyBatisPlus 会画，MPJ（UAST 注册）在当前平台不产出——只装 MPJ 时
+         * Java 方法行让位后会变空，该观感用户已确认接受。
          *
          * 只影响 Mapper 双向跳转这一件事；SQL 预览等其余 gutter 与对方不撞车，不受此开关影响。
          * 竞品探测见 [cn.song.mybatisplus.visualizer.ui.gutter.MyBatisCompetitorGate]。

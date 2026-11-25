@@ -136,4 +136,16 @@ class MapperNavigationGotoRelatedProviderTest : BasePlatformTestCase() {
 
         assertTrue(provider.getItems(startTagNameToken(xml, "mapper")).isEmpty())
     }
+
+    // T-MapperClassJump：光标在 Mapper 接口类名上 → 关联 XML 根标签
+    fun testJava类名_关联XML根标签() {
+        val java = addMapper()
+        val xml = addXml("<select id=\"selectById\">select 1</select>")
+
+        val cls = PsiTreeUtil.findChildOfType(java, PsiClass::class.java)!!
+        val items = provider.getItems(cls.nameIdentifier!!)
+
+        assertEquals(1, items.size)
+        assertEquals("关联项应落在对应 XML 文件内", xml, items[0].element?.containingFile)
+    }
 }

@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.ui.nav
 
 import com.intellij.codeInsight.navigation.actions.GotoDeclarationHandler
 import com.intellij.openapi.editor.Editor
+import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiIdentifier
 import com.intellij.psi.PsiMethod
@@ -50,6 +51,12 @@ class MapperNavigationGotoDeclarationHandler : GotoDeclarationHandler {
     }
 
     private fun javaToXml(identifier: PsiIdentifier): Array<PsiElement>? {
+        // T-MapperClassJump：接口类名 → XML 根标签（竞品类级锚点同款）。
+        (identifier.parent as? PsiClass)?.let { owner ->
+            if (owner.nameIdentifier === identifier) {
+                MapperNavigationTargets.xmlFileForMapperInterface(owner)?.rootTag?.let { return arrayOf(it) }
+            }
+        }
         val method = identifier.parent as? PsiMethod ?: return null
         if (method.nameIdentifier !== identifier) return null
         val tags = MapperNavigationTargets.statementTagsFor(method)

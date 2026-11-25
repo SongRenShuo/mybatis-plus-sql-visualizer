@@ -4,8 +4,11 @@
 
 ## [Unreleased]
 
+### Added
+- **Mapper 接口类名也有跳转图标（T-MapperClassJump）**：接口声明行新增「类 → 对应 XML」图标，点击 / Ctrl+B / Ctrl+Alt+Home 落到 mapper XML 根标签；对齐同类插件（MPJ/MyBatisX）的类级箭头，接口里有没有方法都能跳
+
 ### Changed
-- **让位开关恢复两侧生效（T-MapperNavYieldBothSides）**：勾选后 XML 语句行与 Mapper 接口方法行都不再显示本插件跳转图标，同一位置只留同类插件那一套；设置项文案同步改为「与同类 MyBatis 导航插件共存时让出 XML 与 Mapper 跳转图标」
+- **让位覆盖 XML 与 Mapper 两侧，切换开关后立即刷新（T-MapperNavYieldBothSides）**：同类插件在位时 XML 语句行与 Mapper 接口方法行都不再显示本插件跳转图标，同一位置只留对方那一套；切换让位开关后已打开的 mapper/xml 立即重算，无需重开文件。能力前提（反编译核实）：XML 侧 MyBatisCodeHelperPro / MyBatisX / MyBatisPlus 都会画；Java 侧 MyBatisX / MyBatisPlus 会画（`MapperLineMarkerProvider`，锚方法名），MyBatisCodeHelperPro 的 UAST 箭头在当前平台不产出——只装它时 Java 方法行让位后会为空
 
 ## [2026.11.24-beta.1] - 2026-11-24
 
