@@ -13,6 +13,9 @@ import cn.song.mybatisplus.visualizer.sql.ExplainGate
 import cn.song.mybatisplus.visualizer.sql.ExplainSupport
 import cn.song.mybatisplus.visualizer.sql.SqlPerfAnalyzer
 import cn.song.mybatisplus.visualizer.util.SqlStatementSplitter
+import java.sql.DriverManager
+import java.sql.SQLException
+import java.util.Properties
 
 /**
  * T-OpenIDEAPort T0-0：引擎门面（**极薄**）。
@@ -35,6 +38,13 @@ object EngineApi {
     private const val HIBERNATE_SQL_PREFIX = "Hibernate:"
     private const val HIBERNATE_PARAM_PREFIX = "binding parameter"
     private const val MAX_PARSE_LENGTH = 20_000
+
+    /** `EXPLAIN` 与真正查询之间可能出现的选项词（PG `EXPLAIN ANALYZE …` 形态）；词表只用于剥前缀。 */
+    private val EXPLAIN_OPTION_WORDS = setOf(
+        "analyze", "analyse", "verbose", "costs", "buffers", "format", "timing", "summary",
+        "settings", "wal", "generic_plan", "memory", "serialize", "text", "json", "xml", "yaml",
+        "true", "false", "on", "off",
+    )
 
     /**
      * 日志 → 还原 SQL。
@@ -173,8 +183,218 @@ object EngineApi {
     }
 
     /**
-     * Schema 元数据入口（T5-3）。引擎 jar 是纯逻辑制品、**不带 JDBC 驱动**，无法自省数据库，
-     * 因此恒返回结构化 `connection` 错误（由持有连接的宿主补齐）；绝不返回空表假装成功。
+     * 真连库 EXPLAIN 执行（T5-5）。
+     *
+     * 与纯逻辑的 [explain] 不同：本入口**持有连接并真的提交** EXPLAIN，由引擎 jar 自带的
+     * PostgreSQL / SQL Server 驱动完成。安全边界有三层：
+     *  1. **静态门**：只放行单条只读查询（首关键字 `SELECT`/`WITH`/`VALUES`/`TABLE`，词边界由
+     *     [ExplainGate] 判定）；写/DDL/多语句直接结构化拒绝，**不建连接**。
+     *  2. **连接只读**：PostgreSQL 显式 `SET default_transaction_read_only = on`；SQL Server 走
+     *     `SET SHOWPLAN_XML ON`（只编译不执行），两者都不给写入留口子。
+     *  3. **超时**：连接（connectTimeout/loginTimeout）与语句（queryTimeout）都按 `timeoutMs` 设。
+     *
+     * 已经带 `EXPLAIN` 前缀的输入会先剥掉前缀再按本方言重新包装——`EXPLAIN ANALYZE` 会**真的执行**
+     * 查询，不能原样放行。
+     *
+     * @return 成功 `{"ok":true,"format":"json"|"xml","plan":"…"}`；
+     *         失败 `{"ok":false,"kind":"timeout"|"permission"|"syntax"|"connection"|"other"|"rejected",
+     *         "messageKey":"…","detail":"…"}`（detail 只有单条异常消息，不带栈）。
+     */
+    @JvmStatic
+    fun explainExecute(url: String, user: String, password: String, sql: String, timeoutMs: Long): String {
+        if (url.isBlank()) return explainFailure("other", "explain.error.connection", "jdbc url is empty")
+        if (sql.isBlank()) return explainFailure("syntax", "explain.error.syntax", "sql is empty")
+        val statements = SqlStatementSplitter.splitStripped(sql)
+        if (statements.size != 1) {
+            return explainFailure(
+                "syntax",
+                "explain.reject.multiStatement",
+                "exactly one statement can be explained, got " + statements.size,
+            )
+        }
+        val target = when {
+            url.startsWith("jdbc:postgresql:", ignoreCase = true) -> ExplainTarget.POSTGRESQL
+            url.startsWith("jdbc:sqlserver:", ignoreCase = true) -> ExplainTarget.SQL_SERVER
+            else -> return explainFailure(
+                "other",
+                "explain.reject.dialect",
+                "live EXPLAIN supports jdbc:postgresql: and jdbc:sqlserver: only",
+            )
+        }
+        val query = unwrapExplain(statements[0])
+        if (query.isBlank() || !ExplainGate.isExplainableSource(query)) {
+            return explainFailure(
+                "syntax",
+                "explain.reject.writeStatement",
+                "only read-only SELECT/WITH/VALUES/TABLE queries can be explained",
+            )
+        }
+        val timeoutSeconds = ((timeoutMs.coerceAtLeast(1L) + 999L) / 1000L).toInt().coerceAtLeast(1)
+        return try {
+            when (target) {
+                ExplainTarget.POSTGRESQL -> runPostgresExplain(url, user, password, query, timeoutSeconds)
+                ExplainTarget.SQL_SERVER -> runSqlServerExplain(url, user, password, query, timeoutSeconds)
+            }
+        } catch (e: SQLException) {
+            val kind = classifySqlError(e)
+            explainFailure(
+                kind,
+                "explain.error." + kind,
+                (e.sqlState ?: "-") + ": " + (e.message ?: e.javaClass.simpleName),
+            )
+        } catch (e: Throwable) {
+            // 驱动类缺失/连接工厂失败等非 SQLException 路径：仍给结构化错误，不把栈交给插件。
+            explainFailure("other", "explain.error.other", e.message ?: e.javaClass.simpleName)
+        }
+    }
+
+    private enum class ExplainTarget { POSTGRESQL, SQL_SERVER }
+
+    private fun runPostgresExplain(
+        url: String,
+        user: String,
+        password: String,
+        query: String,
+        timeoutSeconds: Int,
+    ): String {
+        Class.forName("org.postgresql.Driver")
+        val props = Properties().apply {
+            setProperty("user", user)
+            setProperty("password", password)
+            // 秒；pgjdbc 的 connectTimeout/socketTimeout/loginTimeout 都是秒口径。
+            setProperty("connectTimeout", timeoutSeconds.toString())
+            setProperty("socketTimeout", timeoutSeconds.toString())
+            setProperty("loginTimeout", timeoutSeconds.toString())
+        }
+        DriverManager.getConnection(url, props).use { conn ->
+            runCatching { conn.isReadOnly = true }
+            conn.createStatement().use { statement ->
+                // setReadOnly 在 autoCommit 下不足以覆盖每条语句；会话级默认只读是硬闸。
+                runCatching { statement.execute("SET default_transaction_read_only = on") }
+                statement.queryTimeout = timeoutSeconds
+                if (!statement.execute("EXPLAIN (FORMAT JSON) " + query)) {
+                    return explainFailure("other", "explain.error.other", "EXPLAIN returned no result set")
+                }
+                statement.resultSet.use { rs ->
+                    if (!rs.next()) {
+                        return explainFailure("other", "explain.error.other", "EXPLAIN returned no rows")
+                    }
+                    return explainSuccess("json", rs.getString(1) ?: "")
+                }
+            }
+        }
+    }
+
+    private fun runSqlServerExplain(
+        url: String,
+        user: String,
+        password: String,
+        query: String,
+        timeoutSeconds: Int,
+    ): String {
+        Class.forName("com.microsoft.sqlserver.jdbc.SQLServerDriver")
+        val props = Properties().apply {
+            setProperty("user", user)
+            setProperty("password", password)
+            setProperty("loginTimeout", timeoutSeconds.toString())
+        }
+        DriverManager.getConnection(url, props).use { conn ->
+            // SQL Server 驱动不支持真正的只读会话（setReadOnly 可能抛 Unsupported），
+            // 由 SHOWPLAN 保证不执行；调用本身仍保留，驱动支持时就是第二道闸。
+            runCatching { conn.isReadOnly = true }
+            conn.createStatement().use { statement ->
+                statement.queryTimeout = timeoutSeconds
+                statement.execute("SET SHOWPLAN_XML ON")
+                val plan = try {
+                    if (!statement.execute(query)) {
+                        return explainFailure("other", "explain.error.other", "SHOWPLAN returned no result set")
+                    }
+                    statement.resultSet.use { rs ->
+                        if (!rs.next()) {
+                            return explainFailure("other", "explain.error.other", "SHOWPLAN returned no rows")
+                        }
+                        rs.getString(1) ?: ""
+                    }
+                } finally {
+                    // 即使查询报错也要复位会话开关；失败无补救（连接即将关闭）。
+                    runCatching { statement.execute("SET SHOWPLAN_XML OFF") }
+                }
+                return explainSuccess("xml", plan)
+            }
+        }
+    }
+
+    /** `EXPLAIN` 前缀剥离：跳过 PG 的选项串（括号组与 ANALYZE/VERBOSE 等词），返回可包装的查询。 */
+    private fun unwrapExplain(sql: String): String {
+        if (!ExplainGate.startsWithExplainKeyword(sql)) return sql
+        var i = 7
+        while (i < sql.length) {
+            val c = sql[i]
+            val next = if (i + 1 < sql.length) sql[i + 1] else '\u0000'
+            when {
+                c.isWhitespace() -> i++
+                c == '-' && next == '-' -> { while (i < sql.length && sql[i] != '\n') i++ }
+                c == '/' && next == '*' -> {
+                    val end = sql.indexOf("*/", i + 2)
+                    i = if (end < 0) sql.length else end + 2
+                }
+                c == '(' -> i = skipBalancedParentheses(sql, i)
+                c.isLetterOrDigit() || c == '_' -> {
+                    var j = i
+                    while (j < sql.length && (sql[j].isLetterOrDigit() || sql[j] == '_')) j++
+                    if (sql.substring(i, j).lowercase() !in EXPLAIN_OPTION_WORDS) return sql.substring(i)
+                    i = j
+                }
+                else -> return sql.substring(i)
+            }
+        }
+        return ""
+    }
+
+    private fun skipBalancedParentheses(sql: String, from: Int): Int {
+        var depth = 0
+        var i = from
+        while (i < sql.length) {
+            when (sql[i]) {
+                '(' -> depth++
+                ')' -> {
+                    depth--
+                    if (depth == 0) return i + 1
+                }
+            }
+            i++
+        }
+        return sql.length
+    }
+
+    private fun classifySqlError(e: SQLException): String {
+        val state = e.sqlState ?: ""
+        val message = (e.message ?: "").lowercase()
+        return when {
+            state == "57014" || message.contains("timeout") || message.contains("timed out") ||
+                message.contains("canceled") || message.contains("cancelled") -> "timeout"
+            state == "42501" || message.contains("permission") || message.contains("denied") ||
+                message.contains("not authorized") || message.contains("privilege") -> "permission"
+            state.startsWith("08") || state.startsWith("28") || message.contains("connection") ||
+                message.contains("refused") || message.contains("no route") ||
+                message.contains("unknown host") || message.contains("authentication failed") -> "connection"
+            state.startsWith("42") || message.contains("syntax") || message.contains("incorrect syntax") -> "syntax"
+            else -> "other"
+        }
+    }
+
+    private fun explainSuccess(format: String, plan: String): String =
+        "{\"ok\":true,\"format\":" + jsonStr(format) + ",\"plan\":" + jsonStr(plan) + "}"
+
+    private fun explainFailure(kind: String, messageKey: String, detail: String): String =
+        "{\"ok\":false,\"kind\":" + jsonStr(kind) +
+            ",\"messageKey\":" + jsonStr(messageKey) +
+            ",\"detail\":" + jsonStr(detail) + "}"
+
+    /**
+     * Schema 元数据入口（T5-3）。引擎 jar 不提供 schema 自省（自带的两个驱动只用于
+     * [explainExecute]），因此恒返回结构化 `connection` 错误（由持有连接的宿主补齐）；
+     * 绝不返回空表假装成功。
      */
     @JvmStatic
     fun schema(table: String, dialect: String): String {

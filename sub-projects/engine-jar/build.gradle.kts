@@ -55,6 +55,15 @@ dependencies {
     // org.jetbrains:annotations 必须留在 classpath——从编译面摘掉会让编译器读 stdlib inline 函数时
     // 抛 NoClassDefFoundError: org/jetbrains/annotations/NotNull（实测 ICE），故随 stdlib 一并进产物。
     implementation(kotlin("stdlib"))
+
+    // T5-5 真连库 EXPLAIN：两个方言的官方驱动，随 jar 自包含（许可见主仓 THIRD-PARTY-NOTICES.md）。
+    // 版本与主仓 `gradle/libs.versions.toml` 的 testImplementation 同值，本机 Gradle 缓存已有。
+    implementation("org.postgresql:postgresql:42.7.1") {
+        // checker-qual 只服务 pgjdbc 的编译期注解（class 文件里无运行期引用），不打进自包含产物。
+        exclude(group = "org.checkerframework", module = "checker-qual")
+    }
+    // `-jre11` 变体的字节码是 Java 11，与引擎的 -Xjdk-release=11 目标一致。
+    implementation("com.microsoft.sqlserver:mssql-jdbc:12.4.2.jre11")
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -384,6 +393,21 @@ tasks.processResources {
 // 产物：mpsv-engine-<version>.jar（自包含：engine classes + Kotlin stdlib + jsqlparser）
 // ---------------------------------------------------------------------------------------------
 
+// JDBC 驱动服务声明：两个驱动各自带一份 META-INF/services/java.sql.Driver，
+// duplicatesStrategy=EXCLUDE 只会保留先到的一份（实测 SQL Server 驱动从 DriverManager 消失、
+// 报 "No suitable driver"）。这里把依赖里的服务文件排除，写一份合并声明，让
+// DriverManager.getConnection（ServiceLoader）与 Class.forName 两条路都能找到驱动。
+val jdbcDriverServices = layout.buildDirectory.dir("generated/jdbc-services")
+val writeJdbcDriverServices = tasks.register("writeJdbcDriverServices") {
+    val outDir = jdbcDriverServices
+    outputs.dir(outDir)
+    doLast {
+        val file = outDir.get().file("META-INF/services/java.sql.Driver").asFile
+        file.parentFile.mkdirs()
+        file.writeText("org.postgresql.Driver\ncom.microsoft.sqlserver.jdbc.SQLServerDriver\n")
+    }
+}
+
 tasks.jar {
     archiveBaseName.set("mpsv-engine")
     archiveVersion.set(engineVersion.get())
@@ -410,12 +434,16 @@ tasks.jar {
             "META-INF/*.RSA",
             "module-info.class",
             "META-INF/versions/**",
+            // 两个驱动各带一份，改为下面合并声明。
+            "META-INF/services/java.sql.Driver",
             // stdlib 传递的注解包只服务编译期（org.jetbrains:annotations 里同时带 org.intellij.lang.annotations）。
             // 运行时注解类缺失对 JVM 无影响；产物里不出现任何 intellij 命名的类型。
             "org/intellij/**",
             "org/jetbrains/annotations/**",
         )
     }
+    from(jdbcDriverServices)
+    dependsOn(writeJdbcDriverServices)
 }
 
 /** jar 的 sha256 落盘（build/libs/mpsv-engine-<version>.jar.sha256，`<hex>  <文件名>` 口径）。 */

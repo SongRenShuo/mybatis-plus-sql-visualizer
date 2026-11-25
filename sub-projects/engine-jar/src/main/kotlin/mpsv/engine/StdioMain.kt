@@ -1,5 +1,11 @@
 package mpsv.engine
 
+import java.io.BufferedReader
+import java.io.FileDescriptor
+import java.io.FileOutputStream
+import java.io.InputStreamReader
+import java.io.PrintStream
+
 /**
  * P5 最小 stdio 分发入口（`java -jar mpsv-engine-<ver>.jar --stdio`）。
  *
@@ -19,14 +25,20 @@ object StdioMain {
     /** 与 jar 的 `Implementation-Version` / 插件钉定版本同源（手改时三处同步）。 */
     const val VERSION = "0.1.0"
 
+    /** `explain.execute` 缺省超时（与 Rust 侧 `ConnSpec::default` 同值）。 */
+    const val DEFAULT_EXPLAIN_TIMEOUT_MS = 5_000L
+
     @JvmStatic
     fun main(args: Array<String>) {
         if (!args.contains("--stdio")) {
             System.err.println("mpsv-engine: run with --stdio to serve JSON lines on stdin/stdout")
             return
         }
-        val reader = System.`in`.bufferedReader()
-        val out = System.out
+        // 协议流**必须**显式 UTF-8：中文 Windows 上 JVM 的 stdout.encoding 仍是 GBK
+        // （JEP 400 只改 file.encoding），带中文的数据库错误消息会输出 GBK 字节，
+        // Rust 侧按 UTF-8 解析 JSON 直接失败。stdin 同理（请求里的中文 SQL/名称）。
+        val reader = BufferedReader(InputStreamReader(System.`in`, Charsets.UTF_8))
+        val out = PrintStream(FileOutputStream(FileDescriptor.out), true, Charsets.UTF_8)
         while (true) {
             val line = reader.readLine() ?: break
             if (line.isBlank()) continue
@@ -64,6 +76,14 @@ object StdioMain {
                 fieldString(obj, "table") ?: "",
                 fieldString(obj, "dialect") ?: "MySQL",
             )
+            // T5-5：真连库执行 EXPLAIN。凭据只出现在请求行里，不进日志（stderr 只有进程级日志）。
+            "explain.execute" -> EngineApi.explainExecute(
+                fieldString(obj, "url") ?: "",
+                fieldString(obj, "user") ?: "",
+                fieldString(obj, "password") ?: "",
+                fieldString(obj, "sql") ?: "",
+                fieldNumber(obj, "timeoutMs") ?: DEFAULT_EXPLAIN_TIMEOUT_MS,
+            )
             null -> errorJson("invalid", "missing kind")
             else -> errorJson("unsupported", "unknown kind '" + kind + "'")
         }
@@ -76,6 +96,10 @@ object StdioMain {
 
     private fun fieldString(obj: MiniJson.J.Obj, key: String): String? =
         (obj.entries[key] as? MiniJson.J.Str)?.value
+
+    /** 数字字段（`timeoutMs`）按原始 token 转 Long；缺省/超范围返回 null 由调用方给默认值。 */
+    private fun fieldNumber(obj: MiniJson.J.Obj, key: String): Long? =
+        (obj.entries[key] as? MiniJson.J.Num)?.raw?.toLongOrNull()
 
     private fun sourceText(obj: MiniJson.J.Obj): String =
         ((obj.entries["source"] as? MiniJson.J.Obj)?.entries?.get("text") as? MiniJson.J.Str)?.value
