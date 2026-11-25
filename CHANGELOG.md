@@ -2,9 +2,9 @@
 
 # SQL Visualizer Changelog
 
-## [2026.11.25-beta.1] - 2026-11-25
+## [2026.11.25] - 2026-11-25
 
-> 范围＝`2026.11.24-beta.1` 之后到本版发行提交的增量，3 个用户可感 `src/main` 任务面为 Mapper 根标签跳转、接口类名跳转、两侧让位定稿，其余为内容营销 / 计划 / 调研 / 探针 / 索引类提交。逐条根因、真机读数与反向验证见 `docs/发行说明/20261125-1018-Mapper根标签与类级跳转及两侧让位-内测说明.md`
+> 范围＝`2026.11.23` 正式版之后到本版发行提交的全部用户可见增量（含内测 `2026.11.24-beta.1` 与 `2026.11.25-beta.1` 全部内容；两段内测段由本节取代，内测发行版保留共存）。按最终能力面合并为 3 项：Mapper 根标签跳接口类、接口类名跳 XML、两侧让位定稿；11.24 让位分侧口径已被 11.25 两侧让位取代。其余为内容营销 / 计划 / 调研 / 探针 / 索引类提交。逐条根因、真机读数与反向验证见 `docs/发行说明/20261125-1130-Mapper根标签与类级跳转及两侧让位转正-发行说明.md` 与 `docs/发行说明/` 两篇内测说明留档
 
 ### Added
 - **Mapper XML 根标签也能跳接口类（T-MapperNavNamespaceJump，`6f6907655`）**：`<mapper namespace="...">` 根标签行新增「跳 Mapper 接口类」图标，点击 / Ctrl+B / Ctrl+Alt+Home 都能跳到对应接口类，接口里没有方法也能跳；让位登记同步扩到 MyBatisX / MyBatisPlus
@@ -12,13 +12,6 @@
 
 ### Changed
 - **让位覆盖 XML 与 Mapper 两侧，切换开关后立即刷新（T-MapperNavYieldBothSides，`a009cf207` + `ddd37a5be`）**：同类插件在位时 XML 语句行与 Mapper 接口方法行都不再显示本插件跳转图标，同一位置只留对方那一套；切换让位开关后已打开的 mapper/xml 立即重算，无需重开文件。能力前提（反编译核实）：XML 侧 MyBatisCodeHelperPro / MyBatisX / MyBatisPlus 都会画；Java 侧 MyBatisX / MyBatisPlus 会画（`MapperLineMarkerProvider`，锚方法名），MyBatisCodeHelperPro 的 UAST 箭头在当前平台不产出——只装它时 Java 方法行让位后会为空
-
-## [2026.11.24-beta.1] - 2026-11-24
-
-> 范围＝`2026.11.23` 正式版之后到本版发行提交的增量，唯一用户可感的 `src/main` 改动为让位分侧修复，其余为内容营销 / 计划 / 调研 / 索引类文档。逐条根因、真机读数与反向验证见 `docs/发行说明/20261124-2117-Mapper接口方法行跳转图标让位分侧修复-内测说明.md`
-
-### Fixed
-- **让位开关只作用于 XML 语句行，Mapper 接口方法行恢复本插件跳转图标（T-MapperNavYieldBySide，`beef3fa18`）**：同类 MyBatis 导航插件（MyBatisCodeHelperPro）在接口方法行画的是与本插件同款的图标，原让位逻辑把两侧一起让掉后，该行只剩对方那一枚，看不出本插件是否在工作（表现为「mapper 中的图标没显示」）。现在让位只让 XML 语句行的跳转图标，Mapper 接口方法行恒显示本插件图标；Ctrl+B / Ctrl+Click 跳转一直可用，不受影响
 
 ## [2026.11.23] - 2026-11-23
 

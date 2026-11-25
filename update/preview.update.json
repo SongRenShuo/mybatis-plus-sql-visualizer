@@ -1,6 +1,6 @@
 {
-  "version": "2026.11.25-beta.1",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.25-beta.1/mybatis-plus-sql-visualizer-2026.11.25-beta.1.zip",
+  "version": "2026.11.25",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.25/mybatis-plus-sql-visualizer-2026.11.25.zip",
   "changeNotes": "Mapper XML 根标签也加跳转图标, 点击或 Ctrl+B 或 Ctrl+Alt+Home 跳到接口类, 接口无方法也能跳\nMapper 接口类名也加跳转图标, 点击或 Ctrl+B 或 GotoRelated 跳到 XML 根标签, 对齐同类插件类级箭头\n让位覆盖 XML 与 Mapper 两侧, 同类插件在位时只留对方图标, 切开关后立即重算, 让位登记扩到 MyBatisX 与 MyBatisPlus",
   "publishDate": "2026-11-25",
   "sinceBuild": "243"
