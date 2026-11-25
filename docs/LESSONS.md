@@ -223,7 +223,8 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 **反例**：看到 NoSuchMethodError 就去查「谁改了调用点」——调用点没错，是磁盘上的旧 class；或把这种红当真回归去回滚修复提交。
 **2026-11-09 补充（最高频触发源）**：`config/PluginSettings.State` 是最常被加字段的 data class，**任何给它加字段的提交都会让全仓引用旧构造器 / `copy$default` 的测试类失效**。当日两例：①第一波三路合并（`3080cad3`）后集成分支 **202 红**，全是合成构造器 `NoSuchMethodError`，其中 `HibernateLogParserTest` 56/56 全红（该合并无人碰过 Hibernate）——清产物后 186 类 2041 例全绿；②L4 给 `State` 加 `ibatisXmlEnabled` 后 `GutterGroupsTest` / `MapperNavigationGutterGateTest` 6 红（`State.<init>` / `copy$default`）。
 **判据**：某类**整类全红**且报错是 `<init>` 或 `copy$default` 的 `NoSuchMethodError` → 一律先 `rm -rf build/classes`，不要去查调用点。
-**Seen 4× (2026-11-07 ×2, 2026-11-09 ×2)**
+**2026-11-25 补充**：给 `PluginSettings.State` 加 `logAutoOpenYield`（`12b84ae03`）后 `PluginSettingsPanelUiTest` 4 例全红（`State.copy$default` 的 `NoSuchMethodError`）；本拍 `compileTestKotlin` 是执行态（非 UP-TO-DATE）仍未重编这些类，删 `build/classes/kotlin/test` 后 41 例全绿。加 State 字段后整桶定向按「先清测试产物」跑。
+**Seen 5× (2026-11-07 ×2, 2026-11-09 ×2, 2026-11-25 ×1)**
 
 ### L22 后台长命令禁用 `2>&1 | tail -N` 收尾——失败正文会被管道截断吞掉，退出码还会被换掉
 
@@ -1196,6 +1197,16 @@ ISE）与 fork 启动失败不重试，直接红。
 **正例**：展开时就定唯一键，SQL 文本（`?`）逐字节不变；**反例**：先共用 `"?"`、指望面板按框去重。
 
 **Seen 1× (2026-11-23)**
+
+### L99 平台 Kotlin 类的只读属性优先用属性语法取值——getter 方法语法在 243 基线可能 Unresolved
+
+**规则**：调 JetBrains 平台里已由 Kotlin 声明为 `abstract val` 的只读属性（如 `ToolWindowManager.toolWindowIdSet: Set<String>`），Kotlin 侧直接写属性语法；`getToolWindowIds()` / `getToolWindowIdSet()` 这类 getter 方法语法在本仓 2024.3.7.1 编译基线上会报 `Unresolved reference`——但 javap 与 sources jar 都证明 getter 是 `public abstract`，**不要据此判断「平台没有这个 API」**。判定顺序：先试属性语法 → javap 确认 getter 在 → 仍失败再考虑反射桥。
+
+**证据**：T-AutoShowYield（`12b84ae03`）写「同侧栏是否被其它工具窗占用」时，`manager.getToolWindowIds()`、`manager.getToolWindowIdSet()` 两轮各耗一整次 `:compileKotlin` 均 Unresolved；改 `manager.toolWindowIdSet` 一次通过。javap（2024.3.7.1 `app-client.jar`）两个 getter 均在，sources jar `ToolWindowManager.kt:121` 为 `abstract val toolWindowIdSet: Set<String>`。
+
+**正例**：声明处是 `abstract val x` 就写 `obj.x`；**反例**：拿 javap 的 `getX()` 反推 Kotlin 一定可调，然后去翻依赖版本/裁剪问题。
+
+**Seen 1× (2026-11-25)**
 
 ## 升级记录
 

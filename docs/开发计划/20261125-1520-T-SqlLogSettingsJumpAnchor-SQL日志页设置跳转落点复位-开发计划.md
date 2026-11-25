@@ -67,4 +67,4 @@
 - 定向读数：`PluginSettingsFolderConfigurableTest` **12/0/0/0**（原 11 例 + 1 新例）。
 - 反向验证：`scrollToTop` 去掉 `scrollRectToVisible` → **恰 1 红**（12 例 / 1 失败），还原后 12/0 复绿。
 - not run：runIde 沙盒走查（需 GUI）——建议人工按 §六 第三条目验一次。
-- 提交：待回填。
+- 提交：`52322da26`（master）。
