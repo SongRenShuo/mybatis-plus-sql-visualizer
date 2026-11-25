@@ -147,12 +147,11 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
         /**
          * T-MapperNavCoexistYield（默认开＝让位）：同类 MyBatis 导航插件启用时，本插件在
-         * **XML 语句行**的跳转图标不显示，避免与对方的跳转箭头叠在同一行。关闭后强制显示。
+         * **XML 语句行与 Mapper 接口方法行**的跳转图标都不显示，避免与对方的跳转箭头叠在同一处。
+         * 关闭后两侧都强制显示。
          *
-         * T-MapperNavYieldJavaSideKeep 起语义收窄为「只让 XML 语句行」：**Mapper 接口方法行的
-         * 图标恒显示**，不再受此开关与竞品在位影响。原因见
-         * [cn.song.mybatisplus.visualizer.ui.gutter.MapperJavaToXmlLineMarkerProvider] 的 KDoc
-         * （对方 Java 侧箭头与我方同款，让位后该行只剩对方一枚、无法分辨）。
+         * 2026-11-25 用户口径：让位覆盖两侧（设置项文案「让出 XML 与 Mapper 跳转图标」）。
+         * 取舍已知：两家图标同款，让位后该处只剩对方那枚——用户接受这一观感，换取「同一位置只有一套图标」。
          *
          * 只影响 Mapper 双向跳转这一件事；SQL 预览等其余 gutter 与对方不撞车，不受此开关影响。
          * 竞品探测见 [cn.song.mybatisplus.visualizer.ui.gutter.MyBatisCompetitorGate]。

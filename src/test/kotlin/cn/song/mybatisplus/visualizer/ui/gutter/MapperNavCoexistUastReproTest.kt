@@ -276,9 +276,9 @@ class MapperNavCoexistUastReproTest : BasePlatformTestCase() {
             val markers = collectMethodLineMarkers(myFixture.file, JavaLanguage.INSTANCE)
             // T-MapperNavYieldJavaSideKeep：Java 侧不再让位（对方同款图标 + 让位后无法分辨，
             // 见 MapperJavaToXmlLineMarkerProvider KDoc）。历史行为（让位开=1 枚）已被本用例取代。
-            assertEquals("让位开：Java 侧仍应保留我方图标", 1, ownIconCount(markers))
+            assertEquals("让位开：Java 侧应让位（0 枚）", 0, ownIconCount(markers))
             assertEquals("让位开：同类插件仍出图标", 1, peerIconCount(markers))
-            assertEquals("让位开：Java 侧不再让位，方法行共 2 枚", 2, markers.size)
+            assertEquals("让位开：方法行只剩 1 枚（对方）", 1, markers.size)
         }
     }
 

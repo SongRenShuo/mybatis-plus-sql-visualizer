@@ -110,6 +110,13 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         return result
     }
 
+    /** T-MapperNavNamespaceJump 起 XML 侧多一枚「根标签 → 接口类」图标；语句基线断言需排除它。 */
+    private fun isRootMapperMarker(info: LineMarkerInfo<*>): Boolean {
+        val token = info.element as? com.intellij.psi.xml.XmlToken ?: return false
+        val tag = token.parent as? com.intellij.psi.xml.XmlTag ?: return false
+        return tag.name == "mapper" && tag.parentTag == null
+    }
+
     /** xml 文件里标签名为 [name] 且父级是 XmlTag 的首个名字 token（语句标签的起始名在前）。 */
     private fun statementNameToken(file: PsiFile, name: String): XmlToken? =
         PsiTreeUtil.collectElementsOfType(file, XmlToken::class.java).firstOrNull {
@@ -524,12 +531,11 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
     /**
      * T-Ibatis2Gap 收尾反证锚：竞品 MyBatisCodeHelperPro **没有 iBatis 能力**（发行包解包扫描
      * iBatis 命中 0），sqlMap / SqlMapExecutor 调用行不存在图标冲突——竞品在位时 iBatis 两个箭头
-     * **必须照常产出**（不读 `mapperNavYieldToCodeHelper`）；MyBatis 的对照半边：XML 侧仍让位，
-     * Java 侧自 T-MapperNavYieldJavaSideKeep 起**恒产出**（同类插件在接口方法行画同款图标，
-     * 让位后只剩对方一枚、无法分辨）。把 iBatis「不让位」改回「让位」必恰本条变红（补丁见
-     * `dev-support/reverse-probes/ibatis-navicon-restore-ibatis-yield-gate.patch`）。
+     * **必须照常产出**（不读 `mapperNavYieldToCodeHelper`）；MyBatis 的对照半边：XML 与 Java 两侧
+     * 都让位（2026-11-25 用户口径：让出 XML 与 Mapper 跳转图标）。把 iBatis「不让位」改回「让位」
+     * 必恰本条变红（补丁见 `dev-support/reverse-probes/ibatis-navicon-restore-ibatis-yield-gate.patch`）。
      */
-    fun test竞品在位_iBatis箭头仍产出_MyBatis对照XML让位Java不让() {
+    fun test竞品在位_iBatis箭头仍产出_MyBatis对照仍让位() {
         // 竞品在位造法照 MapperNavCoexistGateTest：注入 probe（纯测试缝，零反射、零插件依赖）
         MyBatisCompetitorGate.resetForTest()
         MyBatisCompetitorGate.probe = { true }
@@ -555,22 +561,17 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
             markers(javaToXml, dao).map { it.element!!.textRange.startOffset }
                 .contains(firstArgCallName(dao, "queryForObject", "user.selectById")!!.textRange.startOffset),
         )
-        // 对照半边：MyBatis XML 侧在竞品在位时仍让位；Java 侧恒产出（T-MapperNavYieldJavaSideKeep：
-        // 对方在接口方法行画同款图标，让位后无法分辨谁在工作）
+        // 对照半边：MyBatis 的 XML 与 Java 两侧在竞品在位时都让位（2026-11-25 用户口径）
         assertEmpty(markers(mybatisXmlToJava, mapper))
-        assertEquals(
-            "竞品在位时 MyBatis Java 侧仍须产出（Java 侧不让位）",
-            1,
-            markers(mybatisJavaToXml, iface).size,
-        )
+        assertEmpty(markers(mybatisJavaToXml, iface))
 
         // 对照：竞品不在位时 MyBatis 那对恢复产出——证明让位门本身在起作用
         MyBatisCompetitorGate.resetForTest()
         MyBatisCompetitorGate.probe = { false }
         assertEquals(
-            "竞品不在位时 MyBatis XML→Java 应恢复产出（让位门对照基线）",
+            "竞品不在位时 MyBatis XML→Java 应恢复产出（让位门对照基线；排除根标签图标）",
             1,
-            markers(mybatisXmlToJava, mapper).size,
+            markers(mybatisXmlToJava, mapper).count { !isRootMapperMarker(it) },
         )
         assertEquals(
             "竞品不在位时 MyBatis Java→XML 应恢复产出（让位门对照基线）",

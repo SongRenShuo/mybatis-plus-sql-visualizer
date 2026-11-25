@@ -208,16 +208,18 @@ class MapperJavaToXmlLineMarkerProvider : LineMarkerProvider {
         val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
         if (gutterState != null && !gutterState.showGutterIcon) return
         if (!GutterGroups.enabledFor(javaClass, gutterState)) return
-        // T-MapperNavYieldJavaSideKeep（2026-11-24 用户真机报障）：**Java 侧不再让位**。
-        // 实测（fernflower 反编译 MPJ 3.7.0 + 平台 Layer）：同类插件的「接口方法 → XML」箭头注册在
-        // language="UAST" 上，而 UAST 是 MetaLanguage（UastMetaLanguage extends MetaLanguage，super("UAST")），
-        // LanguageExtension.buildExtensions 会把 meta language 的 key 并入 Java 文件的 provider 收集集合 ⇒
-        // 对方在该行**正常出图标**（真机勾选让位后 Java 行 1 枚、取消后 2 枚，均可复现）。
-        // 而两家图形同款（我方 mapperMethod.svg 与对方 icon/mybatis_java.svg 同 11 条 path、同三色），
-        // 若本侧也让位，该行只剩对方那枚同款图标——用户无法确认本插件是否在工作，读到的就是
-        // 「mapper 中的图标没显示」。故 Java 侧恒保留本插件图标；让位只作用于 XML 语句行
-        // （对方 XML 箭头与我方跳转同款，且同行已有我方预览图标，避免双箭头）。
-        // 让位判据仍是插件级（MyBatisCompetitorGate），只在 XML 侧生效。
+        // 第三道门（T-MapperNavCoexistYield，2026-11-25 用户要求恢复两侧让位）：同类插件在位时
+        // Mapper 接口方法行也不出本插件图标。取舍：两家图标同款，让位后该行只剩对方那枚；
+        // 用户 2026-11-25 明确按此口径（设置项文案同步改为「让出 XML 与 Mapper 跳转图标」），
+        // 并接受「让位=该处只留对方一套图标」的观感。
+        if (gutterState != null &&
+            MyBatisCompetitorGate.shouldYield(
+                gutterState.mapperNavYieldToCodeHelper,
+                MyBatisCompetitorGate.isPeerPluginActive(),
+            )
+        ) {
+            return
+        }
         elements.mapNotNullTo(result, ::createMarker)
     }
 

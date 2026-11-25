@@ -642,7 +642,7 @@ class PluginSettingsFolderConfigurable : Configurable {
                     "settings.section.ui", u,
                 ),
             )
-            // T-MapperNavCoexistYield / T-MapperNavYieldJavaSideKeep：共存让位开关（界面节，默认开；只让 XML 语句行）
+            // T-MapperNavCoexistYield：共存让位开关（界面节，默认开；XML 与 Mapper 两侧都让）
             fields.add(SearchableField(b.message("settings.mapperNavYield"), b.message("settings.mapperNavYield.tip"), "settings.section.ui", u))
             // O-72 T-XmlInlineSql：通用 XML 内嵌 SQL 检测开关（界面节）
             fields.add(SearchableField(b.message("settings.xmlInlineSql"), b.message("settings.xmlInlineSql.tip"), "settings.section.ui", u))

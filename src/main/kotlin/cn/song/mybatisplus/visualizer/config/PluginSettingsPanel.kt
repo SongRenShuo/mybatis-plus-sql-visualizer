@@ -21,6 +21,8 @@ import cn.song.mybatisplus.visualizer.util.PluginBuildInfo
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
+import com.intellij.codeInsight.daemon.DaemonCodeAnalyzer
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.actionSystem.KeyboardShortcut
 import com.intellij.openapi.keymap.KeymapManager
@@ -433,7 +435,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
     internal val gutterGroupJdbcCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.jdbc"))
     internal val gutterGroupInlineFallbackCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.inlineFallback"))
     internal val gutterGroupOtherCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.other"))
-    /** T-MapperNavCoexistYield / T-MapperNavYieldJavaSideKeep：同类插件启用时让出 **XML 语句行**的跳转图标（默认勾选）；Mapper 接口方法行恒显示本插件图标。 */
+    /** T-MapperNavCoexistYield：同类插件启用时让出 **XML 语句行与 Mapper 接口方法行**的跳转图标（默认勾选）。 */
     internal val mapperNavYieldCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.mapperNavYield"))
 
     /**
@@ -1368,8 +1370,27 @@ class PluginSettingsPanel @JvmOverloads constructor(
      *
      * @return 界面语言是否发生变化（true 时调用方应 [rebuild] 刷新设置页文案）
      */
+    /**
+     * T-MapperNavYieldBothSides：让位开关变化后立即重算已打开文件的 gutter。
+     * 此前 daemon 不会因设置变更自动重跑，用户要重开文件才看到图标变化（2026-11-25 真机反馈）。
+     */
+    private fun refreshGutterLineMarkers() {
+        ApplicationManager.getApplication().invokeLater({
+            ProjectManager.getInstance().openProjects.forEach { proj ->
+                if (!proj.isDisposed) {
+                    runCatching {
+                        @Suppress("DEPRECATION")
+                        DaemonCodeAnalyzer.getInstance(proj).restart()
+                    }
+                }
+            }
+        }, ModalityState.any())
+    }
+
     fun apply(): Boolean {
         val s = settings.state
+        // T-MapperNavYieldBothSides：记录让位开关旧值，写回后若变化则触发 gutter 重算
+        val yieldBefore = s.mapperNavYieldToCodeHelper
         // M19.1：语言变更判定包含「待应用」标记——写穿后（combo 与 state 已一致）仍报告一次变更，
         // 触发调用方 rebuild；消费后清除标记（后续 apply 幂等）
         val languageChanged = languagePending || (languageCombo.selectedItem as? LanguageOption)?.value != s.language
@@ -1490,6 +1511,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.gutterGroupInlineFallback = gutterGroupInlineFallbackCheck.isSelected
             s.gutterGroupOther = gutterGroupOtherCheck.isSelected
             s.mapperNavYieldToCodeHelper = mapperNavYieldCheck.isSelected
+            // T-MapperNavYieldBothSides：让位开关变化 → 立即重算已打开文件的 gutter（免重开文件）
+            if (yieldBefore != s.mapperNavYieldToCodeHelper) refreshGutterLineMarkers()
             s.xmlInlineSqlEnabled = xmlInlineSqlCheck.isSelected
             // T-Ibatis2Support 券 A：iBatis sqlMap 预览开关写回（随 UI 分区，读写判定同归属）
             s.ibatisXmlEnabled = ibatisXmlCheck.isSelected
