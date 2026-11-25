@@ -98,3 +98,10 @@ docs/LIMITS.md              # 19 条不可行清单摘要（对用户明示）
 | GitHub 凭据 | `gh auth setup-git` 已装 hosts 级助手，推送走 `gh auth git-credential`，无 GCM 弹窗 |
 | Gitee 令牌 | **仓库级令牌（选择仓库 6→7）**：需在令牌编辑页把新仓加入范围，提交时账号密码二次验证（用户本人完成），令牌串不变 |
 | T0-0 | 完成（`b3a8aeb9a`）：`sub-projects/engine-jar`，151 文件投影、jar 4,543,729 B + sha256，`verifyNoPlatformImports` 扫 2059 class 零 `com/intellij`，15 方言齐全，冒烟三例通过 |
+| 主控复核 | 15 个具体方言类在 jar 内（Dm/GaussDb/GoldenDb/H2/HighGo/KingBase/MariaDb/MySql/OceanBase/OpenGauss/Oracle/PostgreSQL/SqlServer/Sqlite/Vastbase）；`DialectRegistry` 保留 `getDialects()`/`byName()`、`decision` 已按设计剔除；冒烟复跑输出与子代理一致 |
+
+### T0-0 遗留（交 P5 处理）
+
+1. **投影规则是构建期文本变换**：`sql/Dialect.kt` 截断、`LogSqlModels`/`SqlSourceMarker` 删段、`MpSqlVisualizerBundle` 替换、`SecureXml` logger→no-op。已带结构守卫（找不到截断标记即构建失败），但生产文件重构时必须同步改规则；P5 接入后要补一条「投影后行为对拍」（同一输入，jar 输出与主仓测试期望一致）。
+2. **`messageKey` 未本地化**：jar 不带 `messages/*.properties`，`perfAdvice` 返回的是键名（如 `perf.leading_wildcard`）。新仓必须自带 `messageKey → 文案` 映射（可复用主仓 1557 键里的相关子集），否则用户看到的是键名。
+3. **CI 未归档产物**：目前只有本地 `jar` 任务，`engineVersion` 独立于插件版本。P5 需要把产物挂到主仓 Release 或独立分发，新仓 `ENGINE_VERSION` 才可钉版本 + 校验 sha256。
