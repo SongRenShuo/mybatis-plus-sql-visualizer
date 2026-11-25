@@ -196,7 +196,39 @@ class PluginSettingsFolderConfigurable : Configurable {
         if (focusHint != null) {
             // 切换完成后异步聚焦目标控件，确保页面已显示、控件已创建
             callback.doWhenDone { focusTarget(target, focusHint) }
+        } else {
+            // T-SqlLogSettingsJumpAnchor：只切页时把落点复位到页顶——平台按 configurable 缓存
+            // 页面组件与滚动位置，不复位会沿用上次停的位置（从日志面板点齿轮常落在页中间）。
+            callback.doWhenDone { scrollTargetToTop(target) }
         }
+    }
+
+    /**
+     * 切页后把目标页复位到页顶（T-SqlLogSettingsJumpAnchor）。
+     *
+     * 为什么需要：平台 `ConfigurableCardPanel` 按 configurable 缓存页面组件，并在未实现
+     * `Configurable.NoScroll` 时外包一层 `JScrollPane`；缓存命中沿用上次的滚动位置。
+     * 齿轮入口 `openSqlLogSettingsFocused(project, null)` 只切页不做任何定位，于是 SQL 日志页
+     * 这种多分组长页会停在中间。
+     *
+     * 双 `invokeLater` 与 [focusTarget] 同拍：等设置对话框完成装配与显示。复位失败静默
+     * （不影响导航本身），滚动容器由 `scrollRectToVisible` 沿祖先链自行查找。
+     */
+    private fun scrollTargetToTop(target: Configurable) {
+        javax.swing.SwingUtilities.invokeLater {
+            javax.swing.SwingUtilities.invokeLater {
+                runCatching {
+                    val root = target.createComponent() ?: return@invokeLater
+                    scrollToTop(root)
+                }.onFailure { /* 忽略复位失败，不影响导航 */ }
+            }
+        }
+    }
+
+    /** 把组件所在滚动容器复位到页顶（internal 测试缝；`scrollRectToVisible` 沿祖先链找到外包的 viewport）。 */
+    internal fun scrollToTop(component: javax.swing.JComponent) {
+        component.scrollRectToVisible(java.awt.Rectangle(0, 0, 1, 1))
+        component.revalidate()
     }
 
     /**
