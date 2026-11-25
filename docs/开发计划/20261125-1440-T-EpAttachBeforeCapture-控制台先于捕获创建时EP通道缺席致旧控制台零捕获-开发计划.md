@@ -88,9 +88,9 @@
 |---|---|---|---|
 | 立项 | 已完成 2026-11-25 | — | 本文件 |
 | 非 GUI 复现（修前） | 已完成 2026-11-25 | — | `EpAttachBeforeCaptureTest` **4 例全红**：1 条 `AssertionFailedError`（expected 1 but 0，manager 未创建时 provider 返回空数组）+ 3 条 `NoSuchElementException`（`.single()` 拿到空集合） |
-| 实施 | 已完成 2026-11-25 | 待提交 | `getDefaultFilters` 恒返回 Filter；`EpLineFilter` 惰性 manager（500ms 限频重查、取到后常驻、project 销毁清缓存）；测试注入 lookup + interval=0 |
-| 定向 | 已完成 2026-11-25 | — | XML 实证：`EpAttachBeforeCaptureTest tests=4 failures=0`、`EpBridgeSinglePathTest tests=7 failures=0` |
-| 反向（git 补丁） | 待做 | — | 恢复「manager 未创建返回空」→ 新用例必红 |
+| 实施 | 已完成 2026-11-25 | `ad4f5994b` | `getDefaultFilters` 恒返回 Filter；`EpLineFilter` 惰性 manager（500ms 限频重查、取到后常驻、project 销毁清缓存）；测试注入 lookup + interval=0 |
+| 定向 | 已完成 2026-11-25 | — | XML 实证：`EpAttachBeforeCaptureTest tests=4 failures=0`、`EpBridgeSinglePathTest tests=7 failures=0`、`CrossChannelDedupeTest tests=19 failures=0`、`CrossChannelStaleReconcileTest tests=8 failures=0`（合计 38/0） |
+| 反向（git 补丁） | 已完成 2026-11-25 | — | 恢复「manager 未创建返回空」→ `EpAttachBeforeCaptureTest` **4/4 红**（3 条 `NoSuchElementException` + 1 条 `AssertionFailedError`，红形态与修前逐条一致）；`git checkout --` 还原后回读：`emptyArray` 分支 0 处、反向探针注释 0 处，再跑 38/0 绿 |
 | 真机 | 待用户 | — | 按 demo README「先启动 A → 开捕获 → 启动 B」复验 |
 
 实施坑一条：测试用 `.single()` 取 filter，修前直接抛 `NoSuchElementException`——这本身就是「旧控制台永远没有 EP」的最短证据；修复后同一写法变成正常断言，不用改测试结构。
