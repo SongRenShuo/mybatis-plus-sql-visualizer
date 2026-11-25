@@ -10,6 +10,8 @@ import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiMethod
 import com.intellij.psi.util.PsiTreeUtil
+import com.intellij.psi.xml.XmlTag
+import com.intellij.psi.xml.XmlToken
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 
 class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
@@ -47,11 +49,25 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
     private fun addXml(body: String, namespace: String = "com.demo.UserMapper"): PsiFile =
         myFixture.addFileToProject("mapper/UserMapper.xml", "<mapper namespace=\"$namespace\">\n$body\n</mapper>")
 
-    private fun markers(provider: LineMarkerProvider, file: PsiFile): List<LineMarkerInfo<*>> {
+    /**
+     * 收集 marker。T-MapperNavNamespaceJump 起 XML 侧多了一枚「根标签 → 接口类」图标，
+     * 既有用例均以语句图标为基线——默认把它过滤掉（[includeRoot] 显式打开供新用例断言）。
+     */
+    private fun markers(
+        provider: LineMarkerProvider,
+        file: PsiFile,
+        includeRoot: Boolean = false,
+    ): List<LineMarkerInfo<*>> {
         val elements = PsiTreeUtil.collectElements(file) { it.firstChild == null }.toMutableList()
         val result = mutableListOf<LineMarkerInfo<*>>()
         provider.collectSlowLineMarkers(elements, result)
-        return result
+        return if (includeRoot) result else result.filterNot(::isRootMapperMarker)
+    }
+
+    private fun isRootMapperMarker(info: LineMarkerInfo<*>): Boolean {
+        val token = info.element as? XmlToken ?: return false
+        val tag = token.parent as? XmlTag ?: return false
+        return tag.name == "mapper" && tag.parentTag == null
     }
 
     private fun <T : PsiElement> navigate(marker: LineMarkerInfo<T>) {
@@ -322,5 +338,28 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         } finally {
             MapperXmlToJavaLineMarkerProvider.isDumbProvider = original
         }
+    }
+
+    // ---------- T-MapperNavNamespaceJump：<mapper> 根标签 → 接口类 ----------
+
+    /** 竞品（MPJ/MyBatisX/MyBatisPlus）都能在「接口没有方法」时跳到类；本用例钉住我方同能力。 */
+    fun test根标签出图标_接口无方法也可跳() {
+        myFixture.addFileToProject("com/demo/EmptyMapper.java", "package com.demo;\npublic interface EmptyMapper {}")
+        val xml = myFixture.addFileToProject("mapper/EmptyMapper.xml", "<mapper namespace=\"com.demo.EmptyMapper\"/>")
+        val ms = markers(xmlProvider, xml, includeRoot = true)
+        assertEquals("根标签应恰 1 枚跳类图标（接口无方法也要有）", 1, ms.size)
+        assertEquals("根标签图标复用 MapperStatement", MpvsIcons.MapperStatement, ms.single().icon)
+    }
+
+    fun test根标签namespace不存在不出图标() {
+        val xml = myFixture.addFileToProject("mapper/GhostMapper.xml", "<mapper namespace=\"com.demo.GhostMapper\"/>")
+        assertEmpty("namespace 指向不存在的类不应出死图标", markers(xmlProvider, xml, includeRoot = true))
+    }
+
+    fun test根标签与语句图标共存() {
+        addMapper()
+        val xml = addXml("<select id=\"count\">select 1</select>")
+        val ms = markers(xmlProvider, xml, includeRoot = true)
+        assertEquals("根标签 1 枚 + 语句 1 枚应共存", 2, ms.size)
     }
 }

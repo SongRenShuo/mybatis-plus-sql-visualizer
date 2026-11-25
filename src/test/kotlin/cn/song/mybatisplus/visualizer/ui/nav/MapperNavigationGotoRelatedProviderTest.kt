@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui.nav
 
+import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiIdentifier
 import com.intellij.psi.PsiMethod
@@ -116,5 +117,23 @@ class MapperNavigationGotoRelatedProviderTest : BasePlatformTestCase() {
         addXml("<select id=\"other\">select 1</select>")
 
         assertTrue(provider.getItems(identifierOf(java, "selectById")).isEmpty())
+    }
+
+    // T-MapperNavNamespaceJump：光标在 `<mapper namespace>` 根标签上 → 关联接口类
+    fun testXml根标签_关联接口类() {
+        addMapper()
+        val xml = addXml("<select id=\"selectById\">select 1</select>")
+
+        val items = provider.getItems(startTagNameToken(xml, "mapper"))
+
+        assertEquals(1, items.size)
+        assertTrue("根标签关联项应是 PsiClass", items[0].element is PsiClass)
+        assertEquals("com.demo.UserMapper", (items[0].element as PsiClass).qualifiedName)
+    }
+
+    fun testXml根标签_namespace不存在时零关联项() {
+        val xml = addXml("<select id=\"selectById\">select 1</select>", namespace = "com.demo.GhostMapper")
+
+        assertTrue(provider.getItems(startTagNameToken(xml, "mapper")).isEmpty())
     }
 }

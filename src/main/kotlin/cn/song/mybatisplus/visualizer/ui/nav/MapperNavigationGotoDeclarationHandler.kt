@@ -58,8 +58,15 @@ class MapperNavigationGotoDeclarationHandler : GotoDeclarationHandler {
     }
 
     private fun xmlToJava(token: XmlToken): Array<PsiElement>? {
+        // T-MapperNavNamespaceJump：`<mapper namespace="…">` 根标签名 / namespace 属性名或值 → 接口类
+        // （竞品都能在「接口没有方法」时落类，本格补齐）。
+        MapperNavigationTargets.rootMapperTagOf(token)
+            ?.let { tag -> MapperNavigationTargets.mapperClassOfRootTag(tag) }
+            ?.let { return arrayOf(it) }
         val tag = MapperNavigationTargets.ownerStatementTag(token) ?: return null
-        val method = MapperNavigationTargets.methodFor(tag) ?: return null
-        return arrayOf(method)
+        val method = MapperNavigationTargets.methodFor(tag)
+        if (method != null) return arrayOf(method)
+        // D-1：语句 id 找不到同名方法时退化为跳接口类（不造死链接：类也不存在则回落原生跳转）。
+        return MapperNavigationTargets.mapperClassOf(tag.containingFile)?.let { arrayOf(it) }
     }
 }
