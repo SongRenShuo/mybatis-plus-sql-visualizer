@@ -1245,6 +1245,24 @@ CI run 45562438538 的 test(4)：第 1/2 次真竞态（1m02 / 49s），第 3 �
 
 **Seen 1× (2026-11-25)**
 
+### L102 发行 CI 红先按「单条 flake」验证，再归因到最近提交
+
+**规则**：拿到红先做三件事——① 看失败 job/step 与最近提交的**影响面**是否相交（有没有碰该模块/该测试）；② 读断言原文判断是否时序类（`expected N but was N±1`、超时、并发计数）；③ 用 rerun 复跑验证。三步都不支持「是这次改动」时才去改代码；flaky 断言复跑即绿就记台账、另开去抖任务，**不要在发行 publish 正在跑时改测试**。
+
+**证据**：`插件 CI（release）· master @ fbb91e565`（run 45578089046）attempt 1 红在 `agenttest` 的 `SenderLoopDrainRateTest > 风暴排水期CONFIG到达_即被处理且看门狗不误触发`：`expected:<512> but was:<513>`（off-by-one，典型并发时序）；同 run 的 build / test 5 片 / verify 3 平台 / verifyplugin / marketplace **全绿**。attempt 2 同一提交全绿、publish 成功。该提交只加了 `sub-projects/engine-jar` 与 `settings.gradle.kts` 一行，与 agent 传输层无交集。
+
+**反例**：见到红就去改最近提交的模块，或把 gate 连带红当成本模块问题（gate 只是依赖 agenttest）。
+
+**Seen 1× (2026-11-25)**
+
+### L103 新增 Gradle 子模块必须登记进 CI 任务图，否则模块永不构建
+
+**规则**：`settings.gradle.kts` 新增 `include` 后，必须同步检查 CI 工作流的任务清单（build / test 分片 / verify / gate）是否覆盖该模块；只写 `build.gradle.kts` 而不接 CI，模块会「本地能构建、CI 从不构建」，腐化无人发现。
+
+**证据**：`engine-jar`（提交 `b3a8aeb9a`）在 run 45578089046 的 13 份 job 日志里**一次都没出现**（`grep -l engine-jar ex/*.txt` 零命中），而 `build` job 报 `BUILD SUCCESSFUL`——说明它不在任何任务图内。后续需在 T5-1/T7 接线：至少 `:engine-jar:jar :engine-jar:check` 进 build 腿，并把产物与 sha256 归档。
+
+**Seen 1× (2026-11-25)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
