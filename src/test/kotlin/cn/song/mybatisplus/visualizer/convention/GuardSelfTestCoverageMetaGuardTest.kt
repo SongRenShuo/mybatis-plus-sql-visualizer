@@ -654,6 +654,16 @@ class GuardSelfTestCoverageMetaGuardTest {
          */
         val GUARD_CLASSES = listOf(
             GuardEntry(
+                "ui/gutter/MapperPreviewProviderOrderGuardTest.kt",
+                emptyList(),
+                "T-MapperPreviewOrder 守卫（2026-11-26）：同一方法行的两枚图标左右序由 provider 收集顺序决定" +
+                    "（LineMarkersPass.queryProviders 慢趟外层遍历 providers），预览 provider 必须在 " +
+                    "plugin.xml 与平台 getMarkerProviders(Java) 里都排在跳转之前。判定面是「平台解析出的" +
+                    "provider 列表顺序」与「plugin.xml 注册段顺序」两处有序性断言，没有「返回违规点/站点集合」" +
+                    "的判定内核，故 decisionFns 留空；自证=两个注册元素对调后两条用例各红一次" +
+                    "（反向读数见计划 §九）。",
+            ),
+            GuardEntry(
                 "convention/EdtBoundedWaitGuardTest.kt",
                 listOf(DecisionFn("unboundedWaitOffenders", FnKind.VIOLATIONS)),
                 "T-UserFreezeTriage 守卫（2026-11-19 用户线程转储）：后台线程等 EDT 一律有界——src/main 除 " +

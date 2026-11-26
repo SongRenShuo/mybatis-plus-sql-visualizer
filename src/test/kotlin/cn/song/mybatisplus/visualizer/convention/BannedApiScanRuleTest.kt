@@ -616,9 +616,12 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         // filter 接口逐个试、方法/组件查找）——失败即回落轮询兜底 / 返回 null / 视为存活。
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogConsoleBridge.kt" to
             CatchExemption(12, "控制台桥的平台可选能力探测与反射候选遍历：失败即降级（轮询兜底/null/视为存活）"),
-        // 7 处：后台收集候选（链头/注解/XML tag）失败返回空列表 → EDT 提示「未找到候选」。
+        // 9 处：后台收集候选（链头/注解/XML tag）失败返回空列表 → EDT 提示「未找到候选」。
+        // 2026-11-26（c5685aee8，T-PreviewFallbackEdtSlowOps）新增 2 处：① mapperXmlTagsFor 备料
+        // 辅助函数 catch Throwable 后判 FatalErrors.isFatal 透传、其余返回空列表；② previewAsync 的
+        // compute 抛错路径补备料后 `throw t` 原样 rethrow（不吞）。两处均合规，站点数 7→9。
         "src/main/kotlin/cn/song/mybatisplus/visualizer/actions/ConvertToSqlAction.kt" to
-            CatchExemption(7, "后台候选收集失败返回空列表，用户侧看到「未找到候选」提示（非长驻链路）"),
+            CatchExemption(9, "后台候选收集失败返回空列表，用户侧看到「未找到候选」提示（非长驻链路）"),
         // 4 处：JOIN 图渲染/后台富化失败回落「无图 / 未富化模型」。
         // T-M53-II（2026-10-10）：原 5 处中的 `bindAutoPopup` 补全站点搬进 SqlPreviewPanelEditorLifecycle.kt
         // （下面单列 1 处）；余 4 处（updateDiagramTab / showJoinDiagram / clearNativeDiagram 链）
