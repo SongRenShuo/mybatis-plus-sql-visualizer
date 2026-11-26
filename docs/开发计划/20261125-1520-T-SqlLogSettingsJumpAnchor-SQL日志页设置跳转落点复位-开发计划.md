@@ -66,5 +66,5 @@
   - `PluginSettingsFolderConfigurableTest` 增 `testScrollToTopResetsCachedPageScroll`（先滚到中部 120，再复位断言 0）。
 - 定向读数：`PluginSettingsFolderConfigurableTest` **12/0/0/0**（原 11 例 + 1 新例）。
 - 反向验证：`scrollToTop` 去掉 `scrollRectToVisible` → **恰 1 红**（12 例 / 1 失败），还原后 12/0 复绿。
-- not run：runIde 沙盒走查（需 GUI）——建议人工按 §六 第三条目验一次。
+- ~~not run：runIde 沙盒走查（需 GUI）~~ → **已由用户于 2026-11-25 实测通过**（见 §六 第三条目；同批「自动展开让位不抢面板」一并通过）。
 - 提交：`52322da26`（master）。
