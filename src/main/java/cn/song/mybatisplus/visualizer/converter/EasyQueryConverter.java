@@ -23,6 +23,7 @@ import cn.song.mybatisplus.visualizer.model.UpdateStatement;
 import cn.song.mybatisplus.visualizer.model.WrapperArg;
 import cn.song.mybatisplus.visualizer.model.WrapperCall;
 import cn.song.mybatisplus.visualizer.psi.ArgResolver;
+import cn.song.mybatisplus.visualizer.psi.EntityFieldCollector;
 import cn.song.mybatisplus.visualizer.psi.ExpressionEvaluator;
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver;
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaMetadataReader;
@@ -474,6 +475,8 @@ public final class EasyQueryConverter {
         List<Condition> conditions = ctx.conditions;
         if (ctx.sets.isEmpty()) {
             // updatable(entity) 无 setColumns：实体全列更新 + 主键 WHERE（对齐 merge 语义的静态近似）
+            // D255：每列占位符带唯一参数键（`entity.col`），否则参数面板只有一个 `#?` 行、一个值填满全列。
+            String prefix = ParamSourceNaming.sanitize(firstArgumentText(entry));
             ColumnInfo idColumn = null;
             for (ColumnInfo col : table.getColumns()) {
                 if (col.isId()) {
@@ -484,12 +487,13 @@ public final class EasyQueryConverter {
             List<SetClause> sets = new ArrayList<>();
             for (ColumnInfo col : table.getColumns()) {
                 if (!col.isId()) {
-                    sets.add(new SetClause(new ColumnRef(col.getColumnName()), new SqlValue.Placeholder("?")));
+                    sets.add(new SetClause(new ColumnRef(col.getColumnName()),
+                            new SqlValue.Placeholder(ParamSourceNaming.source(prefix, col.getColumnName()))));
                 }
             }
             List<Condition> where = idColumn != null
                     ? List.of(new Condition.Simple(new ColumnRef(idColumn.getColumnName()), "=",
-                            new SqlValue.Placeholder("?"), null))
+                            new SqlValue.Placeholder(ParamSourceNaming.source(prefix, idColumn.getColumnName())), null))
                     : conditions;
             SqlStatement statement = new UpdateStatement(table, sets, where);
             GeneratedSql generated = SqlGenerator.generateWithParams(statement);
@@ -1009,6 +1013,17 @@ public final class EasyQueryConverter {
         }
     }
 
+    /**
+     * D255：实体全列 API 的首参源码文本（{@code updatable(entity)} → {@code "entity"}）。
+     *
+     * <p>前缀只用于参数键命名，之后再经 {@link ParamSourceNaming#sanitize} 清洗——不可命名的表达式
+     * （字面量 / {@code new Xxx()} / 静态可求值式）回退 {@code entity}。形参缺失回退 null。</p>
+     */
+    private static String firstArgumentText(PsiMethodCallExpression entry) {
+        PsiExpression[] args = entry.getArgumentList().getExpressions();
+        return args.length > 0 ? args[0].getText() : null;
+    }
+
     private static String joinNotes(List<String> notes) {
         StringBuilder sb = new StringBuilder();
         for (String note : notes) {
@@ -1057,7 +1072,8 @@ public final class EasyQueryConverter {
         Set<String> generatedKeyColumns() {
             if (generatedKeyColumnsCache == null) {
                 Set<String> result = new LinkedHashSet<>();
-                for (PsiField field : entityClass.getAllFields()) {
+                // D254：allFields 不按名去重、不过静态——按实体列语义收（同名取子类定义、排除 static/transient）
+                for (PsiField field : EntityFieldCollector.collectColumns(entityClass)) {
                     PsiAnnotation column = JpaMetadataReader.findFlex(field, JpaMetadataReader.FQN_EASY_QUERY_COLUMN);
                     if (column == null) {
                         continue;

@@ -172,12 +172,14 @@ public final class UpdateJoinConverter implements WrapperConverter {
                         value instanceof SqlValue.Placeholder ph ? List.of(ph.getSource()) : List.of()));
             }
             case SET_UPDATE_ENTITY, SET_UPDATE_ENTITY_AND_NULL -> {
+                // D255：每列独立参数键（`entity.col`），避免多列 SET 在参数面板共用一个值。
+                String prefix = ParamSourceNaming.prefixOf(args);
                 List<SetClause> result = new ArrayList<>();
                 for (ColumnInfo col : table.getColumns()) {
                     if (col.isId()) continue;
                     result.add(new SetClause(
                             new ColumnRef(mainAlias, col.getColumnName(), null, null, null, null, null),
-                            new SqlValue.Placeholder("?"), null));
+                            new SqlValue.Placeholder(ParamSourceNaming.source(prefix, col.getColumnName())), null));
                 }
                 return result;
             }

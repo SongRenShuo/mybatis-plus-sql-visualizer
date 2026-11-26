@@ -44,6 +44,9 @@ public final class QueryWrapperParser {
     /** 动态条件 toggle id 序号（M12，pre-order 递增，同一 parse 树内稳定）。 */
     private int toggleSeq = 0;
 
+    /** setEntity 展开序号（D255）：同一条链多次 setEntity 时用于区分参数键前缀。 */
+    private int setEntitySeq = 0;
+
     private final TableInfo table;
     private final String columnPrefix;
     private final Dialect dialect;
@@ -104,6 +107,7 @@ public final class QueryWrapperParser {
      */
     public SelectStatement parse(WrapperChain chain) {
         toggleSeq = 0;
+        setEntitySeq = 0;
         return parseInternal(chain);
     }
 
@@ -186,7 +190,7 @@ public final class QueryWrapperParser {
                 case "leSql" -> orPending = addConditionFlagged(conditions, flagged(compareSql(call, "<="), analysis), orPending);
                 case "allEq" -> orPending = addConditionFlagged(conditions, flagged(parseAllEq(call), analysis), orPending);
                 case "setEntity" -> {
-                    for (Condition cond : parseSetEntity()) {
+                    for (Condition cond : parseSetEntity(call)) {
                         orPending = addConditionFlagged(conditions, flagged(cond, analysis), orPending);
                     }
                 }
@@ -472,13 +476,24 @@ public final class QueryWrapperParser {
         return new Condition.Group(Connector.AND, children, null, false);
     }
 
-    /** setEntity：实体非 null 字段追加 where 等值条件（静态近似：全列 `col = ?`）。 */
-    private List<Condition> parseSetEntity() {
+    /**
+     * setEntity：实体非 null 字段追加 where 等值条件（静态近似：全列 {@code col = ?}）。
+     *
+     * <p>D255：每列的占位符必须带<b>唯一参数键</b>（{@code query.id}、{@code query.password}…），
+     * 不能共用匿名 {@code "?"}。预览参数面板按 source 建输入框、按 source 取值回填——共用 {@code "?"}
+     * 会让 15 个输入框读写同一个 {@code paramValues} 键：改一个框全列跟着变，清除只写回第一个框。
+     * 前缀取实参表达式（{@code setEntity(query)} → {@code query}），不可命名时回退 {@code entity}；
+     * 同一条链多次 setEntity 用序号区分。</p>
+     */
+    private List<Condition> parseSetEntity(WrapperCall call) {
+        String prefix = ParamSourceNaming.uniquePrefix(
+                ParamSourceNaming.prefixOf(call.getArgs()), ++setEntitySeq);
         List<Condition> result = new ArrayList<>();
         for (ColumnInfo col : table.getColumns()) {
             ColumnRef column = new ColumnRef(null, col.getColumnName(), null, null, null, null, null);
             ColumnRef qualified = columnPrefix != null ? WrapperConverterKt.withTableAlias(column, columnPrefix) : column;
-            result.add(new Condition.Simple(qualified, "=", new SqlValue.Placeholder("?"), null));
+            result.add(new Condition.Simple(qualified, "=",
+                    new SqlValue.Placeholder(ParamSourceNaming.source(prefix, col.getColumnName())), null));
         }
         return result;
     }
