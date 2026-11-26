@@ -172,16 +172,31 @@ class ConvertToSqlAction : AnAction() {
         // PSI 转换在后台线程执行（EDT 上慢操作会被 2025.3+ 禁止），回调在 EDT 渲染
         val wrapperContext = java.util.concurrent.atomic.AtomicReference<cn.song.mybatisplus.visualizer.context.PreviewSourceContext?>()
         val kotlinWrapperUnavailable = java.util.concurrent.atomic.AtomicBoolean(false)
+        // T-PreviewFallbackEdtSlowOps（2026-11-26 真机 SEVERE「Slow operations are prohibited on EDT」，
+        // 平台点名本动作）：Mapper XML 兜底的锚点解析走自定义 fileBasedIndex
+        // （`MapperNamespaceIndex` → `FileBasedIndex.getContainingFiles`），必须在 compute 块（BGT +
+        // ReadAction）里做；放到下面的 onResult 回调里就是在 EDT 上查索引。回调只消费这里的预解析结果。
+        val mapperXmlTags = java.util.concurrent.atomic.AtomicReference<List<XmlTag>>(emptyList())
         SqlPreviewService.previewAsync(project, {
             kotlinWrapperUnavailable.set(kotlinWrapperUnavailableAt(file, offset))
             val context = service.resolveWrapperSourceContext(element)
             wrapperContext.set(context)
-            service.preview(element, context)
+            val result = try {
+                service.preview(element, context)
+            } catch (t: Throwable) {
+                // compute 抛错时回调仍会走兜底链（既有语义）——异常分支同样要备料，
+                // 否则 XML 档会在"预览计算失败"这条路径上静默失效。
+                mapperXmlTags.set(mapperXmlTagsFor(element))
+                throw t
+            }
+            // 只有 Wrapper 链未命中才需要兜底锚点：命中路径零额外索引查询。
+            if (result == null) mapperXmlTags.set(mapperXmlTagsFor(element))
+            result
         }) { result ->
             if (result != null) {
                 // 统一展示入口（M10-03）：按显示方式（F-16）弹窗 / 工具窗口 / 两者
                 SqlPreviewService.showResult(project, result, sourceLocation, wrapperContext.get())
-            } else if (!tryMapperXmlMethodFallback(project, element, sourceLocation)
+            } else if (!tryMapperXmlMethodFallback(project, mapperXmlTags.get(), sourceLocation)
                 && !tryMapperAnnotationMethodFallback(project, element, sourceLocation)
                 && !tryIbatisCallFallback(project, element, sourceLocation)
                 && !tryIbatisMethodFallback(project, element, sourceLocation)
@@ -201,6 +216,27 @@ class ConvertToSqlAction : AnAction() {
     }
 
     /**
+     * Mapper XML 兜底的锚点：光标处接口方法 → 同 namespace XML 里的同名语句（含 `databaseId` 变体）。
+     *
+     * **只许在后台线程的 ReadAction 内调用**：解析走自定义 fileBasedIndex
+     * （`MapperNamespaceIndex.getMapperXmlFiles` → `FileBasedIndex.getContainingFiles`），EDT 上调它
+     * 就是 `SlowOperations` 断言源（2026-11-26 真机 SEVERE，见
+     * `20261126-1514-T-PreviewFallbackEdtSlowOps` 计划）。非 fatal 异常吞成空表——尤其
+     * `IndexNotReadyException` 不得冒泡到 `previewAsync`（它会把「预览无命中」变成 runWhenSmart
+     * 重试，改变语义）。
+     *
+     * `internal` 供测试直调（无 UI 副作用）。
+     */
+    internal fun mapperXmlTagsFor(element: PsiElement): List<XmlTag> = try {
+        MapperNavigationTargets.nearestMapperMethod(element)
+            ?.let { MapperNavigationTargets.statementTagsFor(it) }
+            ?: emptyList()
+    } catch (t: Throwable) {
+        if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) throw t
+        emptyList()
+    }
+
+    /**
      * Mapper XML 绑定兜底（T-MapperMethodSqlPreview，2026-11-26）：光标在 Mapper **接口方法**上
      * （方法名、参数、返回类型任意位置）→ 该方法在同 namespace XML 中的语句预览。
      *
@@ -211,10 +247,11 @@ class ConvertToSqlAction : AnAction() {
      *
      * 排在 fallback 链首位：iBatis / JDBC / HQL 等家族的判据都看方法体或调用形态，对无 body 的
      * Mapper 接口方法本来就不命中，顺序不改变它们的行为；MyBatis XML 绑定语义最直接。
+     *
+     * `tags` 是 [mapperXmlTagsFor] 在 `previewAsync` 的 compute 块里预解析的结果——本函数只做分发
+     * （单条直预览 / 多变体弹选择器），不查索引（T-PreviewFallbackEdtSlowOps）。
      */
-    private fun tryMapperXmlMethodFallback(project: Project, element: PsiElement, sourceLocation: String?): Boolean {
-        val method = MapperNavigationTargets.nearestMapperMethod(element) ?: return false
-        val tags = MapperNavigationTargets.statementTagsFor(method)
+    private fun tryMapperXmlMethodFallback(project: Project, tags: List<XmlTag>, sourceLocation: String?): Boolean {
         if (tags.isEmpty()) return false
         if (tags.size == 1) {
             previewXmlStatementTag(project, tags[0], sourceLocation)

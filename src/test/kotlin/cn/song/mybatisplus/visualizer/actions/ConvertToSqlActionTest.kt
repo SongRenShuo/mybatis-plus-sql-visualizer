@@ -418,6 +418,58 @@ class ConvertToSqlActionTest : BasePlatformTestCase() {
         )
     }
 
+    // ---------- T-PreviewFallbackEdtSlowOps：兜底锚点在 BGT 解析（2026-11-26 真机 SEVERE） ----------
+
+    /**
+     * 数据面：接口方法名 → [ConvertToSqlAction.mapperXmlTagsFor] 命中间名 XML 语句。
+     *
+     * 真机 SEVERE 的成因是这步原先在 EDT 回调里做（`FileBasedIndex` 是慢操作门控 API）；
+     * 本用例钉住"换到 compute 块后解析结果仍然可用"这一前提。
+     */
+    fun testMapperXml兜底锚点解析_命中同名XML语句() {
+        myFixture.addFileToProject(
+            "mapper/UserMapper.xml",
+            """<mapper namespace="com.demo.UserMapper"><select id="selectById">SELECT ID FROM T_USER WHERE ID = #{id}</select></mapper>""",
+        )
+        val iface = myFixture.addFileToProject(
+            "com/demo/UserMapper.java",
+            """
+            package com.demo;
+            public interface UserMapper {
+                Object selectById(Long id);
+            }
+            """.trimIndent(),
+        )
+        val methodName = PsiTreeUtil.findChildrenOfType(iface, com.intellij.psi.PsiIdentifier::class.java)
+            .first { it.text == "selectById" }
+        val tags = ConvertToSqlAction().mapperXmlTagsFor(methodName)
+        assertEquals("兜底锚点应命中间名 XML 语句", 1, tags.size)
+        assertEquals("select", tags[0].name)
+        assertEquals("selectById", tags[0].getAttributeValue("id"))
+    }
+
+    /**
+     * 结构守卫（与 [testMapperXml回落排在iBatis之前] 同族，源文本断言）：索引解析只许出现在
+     * [ConvertToSqlAction.mapperXmlTagsFor] 辅助函数体内，EDT 回调链只消费预解析结果——
+     * 把 `statementTagsFor` 调回回调里就等于让 `FileBasedIndex` 在 EDT 上跑
+     * （2026-11-26 真机 SEVERE「Slow operations are prohibited on EDT」，平台点名本动作）。
+     */
+    fun testMapperXml兜底锚点解析不在EDT回调链() {
+        val source = java.io.File(
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/actions/ConvertToSqlAction.kt",
+        ).readText()
+        val occurrences = Regex("MapperNavigationTargets\\.statementTagsFor\\(").findAll(source).count()
+        assertEquals("索引解析只能在 mapperXmlTagsFor 辅助函数里出现一次（BGT + ReadAction）", 1, occurrences)
+        val helperAt = source.indexOf("internal fun mapperXmlTagsFor(")
+        val parseAt = source.indexOf("MapperNavigationTargets.statementTagsFor(")
+        assertTrue("辅助函数必须存在（helper=$helperAt）", helperAt > 0)
+        assertTrue("解析只能落在辅助函数体内（helper=$helperAt parse=$parseAt）", parseAt > helperAt)
+        assertTrue(
+            "回调链必须消费预解析结果（形参 mapperXmlTags.get()）——传 element 又会回到 EDT 查索引",
+            source.contains("tryMapperXmlMethodFallback(project, mapperXmlTags.get(), sourceLocation)"),
+        )
+    }
+
     // ---------- T-MapperPreviewDedupAndAnnotationShortcut：注解方法按方法定位（2026-11-26） ----------
 
     /**
