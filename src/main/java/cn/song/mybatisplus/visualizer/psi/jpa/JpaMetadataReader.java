@@ -10,6 +10,7 @@ import cn.song.mybatisplus.visualizer.model.SecondaryTableInfo;
 import cn.song.mybatisplus.visualizer.model.SequenceGeneratorInfo;
 import cn.song.mybatisplus.visualizer.model.SoftDeleteInfo;
 import cn.song.mybatisplus.visualizer.model.TableGeneratorInfo;
+import cn.song.mybatisplus.visualizer.psi.EntityFieldCollector;
 import cn.song.mybatisplus.visualizer.util.NamingStrategy;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAnnotationMemberValue;
@@ -1065,7 +1066,8 @@ public final class JpaMetadataReader {
             EmbeddedColumnNaming naming) {
         if (!seen.add(clazz)) return List.of();
         List<EmbeddedColumnSpec> result = new ArrayList<>();
-        for (PsiField field : clazz.getAllFields()) {
+        // D254：嵌入对象同样走实体列语义收集（同名合并取子类；static/transient 已由收集器排除）
+        for (PsiField field : EntityFieldCollector.collectColumns(clazz)) {
             String fieldName;
             try {
                 fieldName = field.getName();
@@ -1073,14 +1075,9 @@ public final class JpaMetadataReader {
                 continue;
             }
             if (fieldName == null) continue;
+            // 第二道防线：serialVersionUID 归一化名字（规范形态为 static final，已被收集器过滤；
+            // 保留判定以挡住非规范写法）
             if (fieldName.toLowerCase().replace("_", "").equals("serialversionuid")) continue;
-            boolean isStatic;
-            try {
-                isStatic = field.hasModifierProperty("static");
-            } catch (Throwable ignored) {
-                isStatic = false;
-            }
-            if (isStatic) continue;
             if (findFlex(field, FQN_TRANSIENT) != null) continue;
             // 嵌套 @Embedded / @Embeddable：递归展平（D1）。覆写键空间双层并存——类级键（实体根相对）
             // 随 overrides 逐层传递、pathPrefix 累积；该字段自身 @AttributeOverride(s) 的相对键合并进

@@ -50,6 +50,8 @@ import java.util.function.Function;
  *       移除表名前缀/后缀（{@code ;} 分隔首匹配）；添加表前缀/后缀为<b>单值</b></li>
  *   <li>T-EntityCache：解析结果按「PsiFile + classQualifiedName + configSignature」三维缓存，
  *       文件修改戳（modificationStamp）+ 配置签名双维度失效，避免大项目重复 PSI 遍历</li>
+ *   <li>D254：继承实体的列来自父类字段，故缓存命中判定额外叠加<b>父类链修改戳</b>
+ *       （{@link EntityInheritanceStamp#inheritanceChainStamp}）——父类文件被改后子类结果失效</li>
  *   <li>O-58：返回边界接 {@link ColumnNameCalibrator}——数据源可用时用真实列集合纠正猜测出的列名
  *       （{@code orderID} → {@code order_i_d} 而库里是 {@code order_id}），不可用/查不了/开关关闭时逐字段原样返回</li>
  * </ul>
@@ -61,6 +63,8 @@ public class EntityResolver {
      *
      * <p>缓存键：PsiFile + classQualifiedName + configSignature（三维）。
      * 失效机制：文件修改（modificationStamp 变化）→ 缓存自然失效；
+     * 父类链文件修改（{@link EntityInheritanceStamp#inheritanceChainStamp} 变化，D254）→ 缓存失效
+     * （继承实体的列来自父类字段）；
      * 配置签名变化（tablePrefix/tableSuffix/tableNameInference 等设置变更）→ 缓存失效。</p>
      *
      * <p>O-58（列名数据源校正）：缓存<b>继续只存未校正的 PSI 产物</b>，校正在返回前作为一步廉价后处理
@@ -86,15 +90,18 @@ public class EntityResolver {
                 file.getVirtualFile() != null ? file.getVirtualFile().getUrl() : null,
                 System.identityHashCode(file), qName, configSig);
         long stamp = file.getModificationStamp();
+        // D254（M5）：父类链修改戳一并参与命中判定——父类文件被改（加 @TableLogic / 改字段 / 换列名）
+        // 后子类解析结果必须失效；只看当前文件会让预览继续沿用旧映射。
+        long inheritanceStamp = EntityInheritanceStamp.inheritanceChainStamp(entityClass);
         Entry entry = cache.get(key);
-        if (entry != null && entry.stamp == stamp) {
+        if (entry != null && entry.stamp == stamp && entry.inheritanceStamp == inheritanceStamp) {
             return ColumnNameCalibrator.calibrate(project, entry.value);
         }
 
         TableInfo value = resolveInternal(entityClass);
         // 券02（T-PerfSweep27-02）：写入前容量守卫——超限整体清空再写（上限语义见 maxCacheEntries）。
         if (cache.size() >= maxCacheEntries) cache.clear();
-        cache.put(key, new Entry(stamp, value));
+        cache.put(key, new Entry(stamp, inheritanceStamp, value));
         return ColumnNameCalibrator.calibrate(project, value);
     }
 
@@ -114,8 +121,9 @@ public class EntityResolver {
                 ? annotated
                 : decorateTableName(inferTableName(className, entityClass.getProject()), entityClass.getProject());
 
-        // T-M16.2-02：递归父类收集字段（父类字段在前；@TableLogic/@TableId/@TableField 标注随字段本身生效）
-        List<PsiField> fields = collectFieldsIncludingSuper(entityClass, new HashSet<>());
+        // T-M16.2-02：继承链字段收集（父类字段在前；@TableLogic/@TableId/@TableField 标注随字段本身生效）
+        // D254：委托 EntityFieldCollector——同名合并（子类优先）+ 排除 static/transient
+        List<PsiField> fields = collectFieldsIncludingSuper(entityClass);
         // T-M19.4-03-②：忽略字段名配置（`;` 分隔，按 Java 字段名匹配）——命中字段不进
         // SELECT 全列展开/参数对照/补全列集合（resolveColumn 返回 null 跳过；@TableField(exist=false) 注解优先）
         // T-M23.3：按角色分组稳定排序（PRIMARY 置顶 → BUSINESS 居中 → AUDIT/SYSTEM 沉底，
@@ -172,21 +180,17 @@ public class EntityResolver {
     }
 
     /**
-     * 递归收集类及其所有父类的字段（T-M16.2-02）：
+     * 继承链字段收集（T-M16.2-02；D254 起委托 {@link EntityFieldCollector#collectColumns}）：
      * <ul>
-     *   <li><b>父类字段在前、子类字段在后</b>（对齐 MP 声明顺序语义）；</li>
-     *   <li>仅沿 {@code superClass} 类继承链——接口字段不纳入（M16.2-R2），{@code Object} 无字段天然过滤；</li>
-     *   <li>{@code seen} 集合防循环继承（异常 PSI 场景防御）。</li>
+     *   <li><b>父类字段在前、子类字段在后</b>（T-M23.3 既有顺序契约；同名冲突时输出子类字段对象、占父类槽位）；</li>
+     *   <li>同名合并（子类优先）＋ 排除 {@code static} / {@code transient}——对齐 MP {@code ReflectionKit.getFieldList}
+     *       （先去重后过滤，顺序语义见 {@link EntityFieldCollector} 类 KDoc）；</li>
+     *   <li>仅沿 {@code superClass} 类继承链——接口字段不纳入（M16.2-R2）；</li>
+     *   <li>{@code seen} 集合防循环继承（异常 PSI 场景防御）由收集器内部处理。</li>
      * </ul>
      */
-    private static List<PsiField> collectFieldsIncludingSuper(PsiClass clazz, Set<PsiClass> seen) {
-        if (!seen.add(clazz)) return List.of();
-        List<PsiField> result = new ArrayList<>();
-        if (clazz.getSuperClass() != null) {
-            result.addAll(collectFieldsIncludingSuper(clazz.getSuperClass(), seen));
-        }
-        result.addAll(Arrays.asList(clazz.getFields()));
-        return result;
+    private static List<PsiField> collectFieldsIncludingSuper(PsiClass clazz) {
+        return EntityFieldCollector.collectColumns(clazz);
     }
 
     /**
@@ -693,13 +697,20 @@ public class EntityResolver {
         }
     }
 
-    /** 缓存条目：文件修改戳 + 解析结果。 */
+    /**
+     * 缓存条目：文件修改戳 + 父类链修改戳 + 解析结果。
+     *
+     * <p>D254（M5）：{@code inheritanceStamp} 见 {@link EntityInheritanceStamp#inheritanceChainStamp}——
+     * 继承实体的列集合来自父类，父类文件改动必须让条目失效，否则预览沿用旧列。</p>
+     */
     private static final class Entry {
         final long stamp;
+        final long inheritanceStamp;
         final TableInfo value;
 
-        Entry(long stamp, TableInfo value) {
+        Entry(long stamp, long inheritanceStamp, TableInfo value) {
             this.stamp = stamp;
+            this.inheritanceStamp = inheritanceStamp;
             this.value = value;
         }
     }

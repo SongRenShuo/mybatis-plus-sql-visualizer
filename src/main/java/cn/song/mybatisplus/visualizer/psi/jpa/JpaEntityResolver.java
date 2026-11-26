@@ -10,6 +10,8 @@ import cn.song.mybatisplus.visualizer.model.CollectionAssociationInfo;
 import cn.song.mybatisplus.visualizer.model.JoinColumnRef;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
 import cn.song.mybatisplus.visualizer.psi.ColumnNameCalibrator;
+import cn.song.mybatisplus.visualizer.psi.EntityFieldCollector;
+import cn.song.mybatisplus.visualizer.psi.EntityInheritanceStamp;
 import cn.song.mybatisplus.visualizer.util.NamingStrategy;
 import cn.song.mybatisplus.visualizer.util.TableConfigSignature;
 import com.intellij.openapi.diagnostic.Logger;
@@ -60,6 +62,7 @@ public class JpaEntityResolver {
      *
      * <p>缓存键：PsiFile + classQualifiedName + configSignature（三维）。
      * 失效机制：文件修改（modificationStamp 变化）→ 缓存自然失效；
+     * 父类链文件修改（{@link EntityInheritanceStamp#inheritanceChainStamp} 变化，D254）→ 缓存失效（继承实体的列来自父类字段）；
      * 配置签名变化（tableNameInference 等设置变更）→ 缓存失效。</p>
      *
      * <p>O-58（列名数据源校正）：缓存<b>继续只存未校正的 PSI 产物</b>，校正在返回前作为一步廉价后处理
@@ -101,9 +104,11 @@ public class JpaEntityResolver {
                 file.getVirtualFile() != null ? file.getVirtualFile().getUrl() : null,
                 System.identityHashCode(file), qName, configSig, hostAnchorUrl);
         long stamp = file.getModificationStamp();
+        // D254（M5）：父类链修改戳一并参与命中判定（与 EntityResolver 同口径）
+        long inheritanceStamp = EntityInheritanceStamp.inheritanceChainStamp(entityClass);
         JpaEntry entry = cache.get(key);
         if (entry != null) {
-            if (entry.stamp() == stamp) {
+            if (entry.stamp() == stamp && entry.inheritanceStamp() == inheritanceStamp) {
                 return ColumnNameCalibrator.calibrate(project, entry.value());
             }
         }
@@ -111,7 +116,7 @@ public class JpaEntityResolver {
         TableInfo value = resolveInternal(entityClass, hostAnchorVirtualFile);
         // 券02（T-PerfSweep27-02）：写入前容量守卫——超限整体清空再写（上限语义见 maxCacheEntries）。
         if (cache.size() >= maxCacheEntries) cache.clear();
-        cache.put(key, new JpaEntry(stamp, value));
+        cache.put(key, new JpaEntry(stamp, inheritanceStamp, value));
         return ColumnNameCalibrator.calibrate(project, value);
     }
 
@@ -164,6 +169,7 @@ public class JpaEntityResolver {
         }
         columns.sort(Comparator.comparing(ColumnInfo::getRole));
         // 去重：同一列名只保留第一个（简单字段优先于 @ManyToOne 关联字段）
+        // D254：同名字段已在收集层合并（子类优先），这里只挡「不同字段撞同一列名」的用户代码形态
         // 示例：departmentId(@Column) 和 department(@ManyToOne+@JoinColumn) 同映射 department_id
         LinkedHashMap<String, ColumnInfo> byCol = new LinkedHashMap<>();
         for (ColumnInfo c : columns) {
@@ -233,28 +239,14 @@ public class JpaEntityResolver {
     }
 
     /**
-     * 递归收集类及其所有父类的字段（支持 @MappedSuperclass 继承）：
-     *  - 父类字段在前、子类字段在后；
-     *  - 仅沿 superClass 类继承链——接口字段不纳入；
-     *  - seen 集合防循环继承（异常 PSI 场景防御）；
-     *  - 父类本身标注 @MappedSuperclass 或 @Entity 时字段均纳入。
+     * 继承链字段收集（支持 @MappedSuperclass 继承；D254 起委托 {@link EntityFieldCollector#collectColumns}）：
+     *  - 父类字段在前、子类字段在后；同名冲突时输出子类字段对象、占父类槽位（子类优先，对齐 MP/Hibernate）；
+     *  - 排除 `static` / `transient`（JPA 不持久化静态字段；Hibernate 亦忽略 Java `transient`）；
+     *  - 仅沿 superClass 类继承链——接口字段不纳入；循环继承由收集器 seen 集防御。
      */
     @NotNull
     private List<PsiField> collectFieldsIncludingSuper(@NotNull PsiClass clazz) {
-        return collectFieldsIncludingSuper(clazz, new LinkedHashSet<>());
-    }
-
-    private List<PsiField> collectFieldsIncludingSuper(
-            @NotNull PsiClass clazz,
-            @NotNull Set<PsiClass> seen) {
-        if (!seen.add(clazz)) return List.of();
-        List<PsiField> superFields = clazz.getSuperClass() != null
-                ? collectFieldsIncludingSuper(clazz.getSuperClass(), seen)
-                : List.of();
-        List<PsiField> selfFields = new ArrayList<>(Arrays.asList(clazz.getFields()));
-        List<PsiField> result = new ArrayList<>(superFields);
-        result.addAll(selfFields);
-        return result;
+        return EntityFieldCollector.collectColumns(clazz);
     }
 
     /**
@@ -861,18 +853,27 @@ public class JpaEntityResolver {
     }
 }
 
-    /** 缓存条目：文件修改戳 + 解析结果。 */
+    /**
+     * 缓存条目：文件修改戳 + 父类链修改戳 + 解析结果。
+     *
+     * <p>D254（M5）：{@code inheritanceStamp} 见 {@link EntityInheritanceStamp#inheritanceChainStamp}——
+     * 继承实体的列来自父类字段，父类文件改动必须让条目失效。</p>
+     */
     private static final class JpaEntry {
     private final long stamp;
+    private final long inheritanceStamp;
     private final TableInfo value;
 
-    public JpaEntry(long stamp, TableInfo value) {
+    public JpaEntry(long stamp, long inheritanceStamp, TableInfo value) {
         this.stamp = stamp;
+        this.inheritanceStamp = inheritanceStamp;
         this.value = value;
     }
 
     public long getStamp() { return stamp; }
     public long stamp() { return stamp; }
+    public long getInheritanceStamp() { return inheritanceStamp; }
+    public long inheritanceStamp() { return inheritanceStamp; }
     public TableInfo getValue() { return value; }
     public TableInfo value() { return value; }
 
@@ -881,17 +882,19 @@ public class JpaEntityResolver {
         if (this == o) return true;
         if (!(o instanceof JpaEntry)) return false;
         JpaEntry that = (JpaEntry) o;
-        return java.util.Objects.equals(this.stamp, that.stamp) && java.util.Objects.equals(this.value, that.value);
+        return java.util.Objects.equals(this.stamp, that.stamp)
+                && java.util.Objects.equals(this.inheritanceStamp, that.inheritanceStamp)
+                && java.util.Objects.equals(this.value, that.value);
     }
 
     @Override
     public int hashCode() {
-        return java.util.Objects.hash(stamp, value);
+        return java.util.Objects.hash(stamp, inheritanceStamp, value);
     }
 
     @Override
     public String toString() {
-        return "JpaEntry[" + "stamp=" + stamp + ", " + "value=" + value + "]";
+        return "JpaEntry[" + "stamp=" + stamp + ", " + "inheritanceStamp=" + inheritanceStamp + ", " + "value=" + value + "]";
     }
 }
 
