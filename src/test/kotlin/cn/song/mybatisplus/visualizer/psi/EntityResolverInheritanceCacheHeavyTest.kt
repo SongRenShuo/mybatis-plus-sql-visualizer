@@ -59,8 +59,8 @@ class EntityResolverInheritanceCacheHeavyTest : HeavyPlatformTestCase() {
         sourceRootRegistered = true
         val module = com.intellij.openapi.module.ModuleManager.getInstance(project).modules.firstOrNull()
             ?: return
-        com.intellij.openapi.roots.ModuleRootModificationUtil.updateModel(module) { model ->
-            val entry = model.contentEntries.firstOrNull() ?: return@updateModel
+        com.intellij.openapi.roots.ModuleRootModificationUtil.updateModel(module) { m ->
+            val entry = m.contentEntries.firstOrNull() ?: return@updateModel
             if (entry.sourceFolders.none { it.file == src }) {
                 entry.addSourceFolder(src, false)
             }

@@ -220,10 +220,9 @@ public final class WrapperAnchorDetector {
             // 且不能复用场景 D 的 `hasWrapperArgument` 让位（wrapper 实参必然存在，让位后永远不亮）。
             // 判定单一来源：{@link WrapperLocator#isMpjJoinConsumerCall}（名字 + 实参非空 + MP receiver），
             // 与选择区候选 {@code WrapperLocator.isSqlCandidate} 共用，保证「亮图标 ⟺ 能预览」。
-            if (ref.getParent() instanceof PsiMethodCallExpression) {
-                if (WrapperLocator.isMpjJoinConsumerCall((PsiMethodCallExpression) ref.getParent())) {
-                    return element;
-                }
+            if (!(ref.getParent() instanceof PsiMethodCallExpression)) return null;
+            if (WrapperLocator.isMpjJoinConsumerCall((PsiMethodCallExpression) ref.getParent())) {
+                return element;
             }
             // 场景 D：批量操作调用（`service.updateBatchById(list)` 等，F-15/M6）
             if (BatchOperationConverter.getBatchOperationMethodNames().contains(referenceName)) {

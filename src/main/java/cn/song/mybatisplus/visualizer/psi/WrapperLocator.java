@@ -2432,7 +2432,8 @@ public final class WrapperLocator {
         if (qualified == null) qualified = simpleName != null ? simpleName : "";
         out.add(new SuperChainNode(qualified, simpleName));
         if (depth >= WRAPPER_SUPER_CHAIN_MAX_DEPTH) return;
-        for (PsiType superType : clazz.getSuperTypes()) {
+        // getSuperTypes() 返回 PsiClassType[]（extends 类与 implements 接口同列）
+        for (PsiClassType superType : clazz.getSuperTypes()) {
             String canonical;
             try {
                 canonical = superType.getCanonicalText();
@@ -2440,12 +2441,11 @@ public final class WrapperLocator {
                 canonical = null;
             }
             if (canonical != null) {
-                out.add(new SuperChainNode(canonical,
-                        superType instanceof PsiClassType ? ((PsiClassType) superType).getClassName() : null));
+                out.add(new SuperChainNode(canonical, superType.getClassName()));
             }
             PsiClass resolved;
             try {
-                resolved = superType instanceof PsiClassType superClassType ? superClassType.resolve() : null;
+                resolved = superType.resolve();
             } catch (Throwable ignored) {
                 resolved = null;
             }
