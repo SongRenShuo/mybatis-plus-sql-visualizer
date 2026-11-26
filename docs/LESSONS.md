@@ -1328,6 +1328,33 @@ finally 改 `join(2000)` → `assertFalse(isAlive)` → `clearQueued()`；`prefi
 
 **Seen 1× (2026-11-26)**
 
+### L108 钩子/MCP 里调外部命令一律写绝对路径，别指望 PATH 继承
+
+**规则**：任何 `hooks` / MCP `command` 字段里指向**本机安装的第三方工具**（WinGet、npm 全局、
+scoop 等包管理器装的），一律写可执行文件的绝对路径，不写裸命令名。包管理器安装只写注册表
+`HKCU\Environment\Path`，而**运行中的进程 PATH 是创建时快照**——装完之后才起来的、或者由
+旧环境父进程拉起的宿主，都拿不到新条目；`which` 查不到、钩子却静默从 `enabled: true` 变成
+每次 `failed`，功能已经不工作而配置界面仍显示开启。排查判据：配置里 `command` 是裸名时，
+先比对「注册表 USER PATH 有它」与「当前进程 PATH 没有它」，两者不一致即本条病灶；
+确认工具本体可用（直接跑绝对路径 `--version`）后再断言是路径问题而非工具损坏。
+
+**证据**：ZCode 侧 `rtk` 压缩钩子（2026-11-26，工具环境问题，未落提交）。
+`~/.zcode/cli/config.json` 的 `hooks.events.PreToolUse[0].hooks[0].command` 原为裸 `"rtk"`；
+当日 `~/.zcode/cli/log/zcode-2026-11-26.jsonl` 累计 **1486 条 `hook.run.failed`**，过滤后
+形态单一：`hookEventName=PreToolUse` / `matcher=Bash` / `source=config.PreToolUse.0.0`，
+无一条 SessionStart（同在 hooks 段、但用的是 `node` + 绝对脚本路径，故不受影响）。三证：
+①`which rtk` → 空，`/usr/bin/bash: rtk: command not found`；②注册表
+`[Environment]::GetEnvironmentVariable('Path','User')` **含** `…\WinGet\Packages\rtk-ai.rtk_…`
+（第 29 条）；③该目录下 `rtk.exe` 直接执行 `--version` → `rtk 1.2.1`、
+`echo '{}' | rtk hook claude` → **exit 0**，本体与钩子协议均正常。修复＝`command` 改绝对路径
+后配置界面即显示 WinGet 全路径；备份 `config.json.bak-rtk-1319`。
+
+**正例**：`"command": "C:\\…\\Packages\\rtk-ai.rtk_…\\rtk.exe"`；或进程内自解析路径后再 spawn。
+**反例**：写 `"command": "rtk"` 后靠「重启一下就继承到了」自我安慰——父进程环境没刷新时重启
+继承的仍是旧快照；也不要把 `hook.run.failed` 的密集刷屏当成「钩子参数填错」去改 `args`。
+
+**Seen 1× (2026-11-26)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
