@@ -140,10 +140,15 @@ object DialectVerifySupport {
     )
 
     /** TC-01/02：插件渲染的分页 SELECT。 */
-    fun renderPagedSelect(dialect: Dialect, offset: Long?, count: Long): String =
+    fun renderPagedSelect(
+        dialect: Dialect,
+        offset: Long?,
+        count: Long,
+        tableName: String = "dev_info",
+    ): String =
         SqlGenerator.generate(
             SelectStatement(
-                table = businessTable(),
+                table = businessTable(tableName),
                 limit = LimitClause(
                     offset = offset?.let { SqlValue.Literal(it.toString()) },
                     count = SqlValue.Literal(count.toString()),
@@ -179,10 +184,10 @@ object DialectVerifySupport {
         )
 
     /** TC-07：IN 子句（保留字列 + 多值）。 */
-    fun renderInSelect(dialect: Dialect): String =
+    fun renderInSelect(dialect: Dialect, tableName: String = "dev_info"): String =
         SqlGenerator.generate(
             SelectStatement(
-                table = businessTable(),
+                table = businessTable(tableName),
                 selectColumns = listOf(ColumnRef(columnName = "id")),
                 conditions = listOf(
                     Condition.In(
@@ -197,10 +202,10 @@ object DialectVerifySupport {
         )
 
     /** TC-08：聚合函数（COUNT(status) + GROUP BY）。 */
-    fun renderAggregateSelect(dialect: Dialect): String =
+    fun renderAggregateSelect(dialect: Dialect, tableName: String = "dev_info"): String =
         SqlGenerator.generate(
             SelectStatement(
-                table = businessTable(),
+                table = businessTable(tableName),
                 selectColumns = listOf(
                     ColumnRef(columnName = "status", function = "COUNT", alias = "cnt"),
                 ),
@@ -211,10 +216,10 @@ object DialectVerifySupport {
         )
 
     /** UPDATE 语句（SET 保留字列 + WHERE 主键）。 */
-    fun renderUpdate(dialect: Dialect): String =
+    fun renderUpdate(dialect: Dialect, tableName: String = "dev_info"): String =
         SqlGenerator.generate(
             UpdateStatement(
-                table = businessTable(),
+                table = businessTable(tableName),
                 sets = listOf(
                     SetClause(column = ColumnRef(columnName = "order"), value = SqlValue.Literal("20")),
                     SetClause(column = ColumnRef(columnName = "biz_name"), value = SqlValue.Literal("'updated'")),
@@ -251,62 +256,101 @@ object DialectVerifySupport {
             dialect = dialect,
         ).renderSql(activeColumns = setOf("id", "biz_name", "order", "table"))
 
-    /** dev_info 表 BatchModel 模板的绑定值（列序 id, biz_name, order, table）。 */
+    /** 业务表 BatchModel 模板的绑定值（列序 id, biz_name, order, table）。 */
     fun batchValues(id: Int): List<Any?> = listOf(id, "v", 1, "v")
+
+    // ------------------------------------------------------------------
+    // L24 根治：运行唯一表名（2026-11-26）
+    // ------------------------------------------------------------------
+
+    /**
+     * 本轮运行的唯一后缀：`<pid>_<启动时间戳 base36>_<轮次序号 base36>`。
+     *
+     * L24（2026-11-07 登记，2026-11-26 实施）：多个套件轮次（本地 Docker 外指腿 /
+     * `dialectExternalVerify` / CI 夜间方言腿 / DBX 临时探测）并发打**同一共享实例**时，
+     * 夹具表固定叫 `dev_info`、多语句探测表固定叫 `mpv_batch_probe`——各自开跑先 DROP、
+     * 收尾再 DROP，两轮并发即互删对方的表，读数红且难归因。表名带上本轮后缀后，
+     * 每轮只动自己建的表。
+     *
+     * 三段各有分工：进程号区分跨进程并发（L24 的主要场景）；轮次序号区分同一进程内并发
+     * （外部矩阵多计划共用同一 URL）；启动时间戳让 pid 复用后的新进程不与上一进程的崩溃残留撞名
+     * （每轮收尾仍照常 DROP，正常退出不留表）。
+     *
+     * 长度：`dev_info` + `_` + ≤7 位 pid + `_` + ≤8 位时间戳 + `_` + 轮次 ≤ 30 字符，
+     * 兼容 Oracle 12c 前的 30 字符标识符上限。名字不引用（交由引擎折叠大小写），
+     * 与插件渲染的表名形态一致——插件渲染 SQL 与夹具 DDL 指向同一张表。
+     */
+    private fun runSuffix(): String {
+        val pid = runCatching { ProcessHandle.current().pid() }.getOrDefault(0L)
+        return "${pid.toString(36)}_${STARTUP_MILLIS.toString(36)}_${runSeq.incrementAndGet().toString(36)}"
+    }
+
+    /** 进程启动时刻（类初始化即取，近似进程启动；仅用于与 pid 一起构成唯一标记）。 */
+    private val STARTUP_MILLIS: Long = System.currentTimeMillis()
+
+    /** 同进程内的轮次序号（并发安全）。 */
+    private val runSeq = AtomicInteger()
+
+    /** 给基础表名加本轮唯一后缀（后缀为空时退回原名——反向验证用，见 [runSuffix]）。 */
+    private fun suffixed(base: String): String = runSuffix().let { if (it.isEmpty()) base else "${base}_$it" }
 
     /**
      * TC-01~08 全套执行（插件渲染 SQL 在引擎上逐条执行，任一失败 AssertionError 汇总报告）。
      *
      * 夹具 DDL（非插件产物）仅对保留字列使用方言引用符号包裹——与引擎内对象名保持一致，
      * 使插件渲染的按需引用（quoteIfKeyword）命中后能正确解析。
+     *
+     * 表名为**本轮唯一**（[suffixed]，L24）：插件渲染的 TC 语句与夹具 DDL 用同一个名字，
+     * 两轮套件并发打同一实例时互不删表。
      */
     fun runTcSuite(connection: Connection, spec: EngineSpec) {
         val dialect = spec.dialect
         val q = dialect::quoteIdentifier
+        val table = suffixed("dev_info")
         // 夹具：业务表（order/table 为保留字列）+ 种子数据
-        // T-SuiteIdempotent（2026-10-30 D2 实测）：**先删后建**，否则持久库（真库外部实例）第二次跑必红
-        // （首轮 HighGo/Vastbase 就是被上一轮残留的 dev_info 挡住）。DDL 无 IF EXISTS 的引擎靠 runCatching 兜。
-        runCatching { exec(connection, "DROP TABLE dev_info") }
+        // T-SuiteIdempotent（2026-10-30 D2 实测）：**先删后建**，否则同一轮次重跑（同一后缀）时持久库
+        // 第二次跑必红（首轮 HighGo/Vastbase 就是被上一轮残留表挡住）。DDL 无 IF EXISTS 的引擎靠 runCatching 兜。
+        runCatching { exec(connection, "DROP TABLE $table") }
         assertExecutable(
             connection,
             listOf(
-                "CREATE TABLE dev_info (id INT PRIMARY KEY, biz_name VARCHAR(50), ${q("order")} INT, " +
+                "CREATE TABLE $table (id INT PRIMARY KEY, biz_name VARCHAR(50), ${q("order")} INT, " +
                     "${q("table")} VARCHAR(50), status INT)",
             ),
         )
         assertExecutableParams(
             connection,
-            seedRows(spec).map { it to emptyList() },
+            seedRows(spec, table).map { it to emptyList() },
         )
 
         val statements = mutableListOf<Pair<String, List<Any?>>>(
             // TC-01 基础分页 / TC-02 带偏移分页
-            renderPagedSelect(dialect, offset = null, count = 10) to emptyList(),
-            renderPagedSelect(dialect, offset = 1, count = 2) to emptyList(),
+            renderPagedSelect(dialect, offset = null, count = 10, tableName = table) to emptyList(),
+            renderPagedSelect(dialect, offset = 1, count = 2, tableName = table) to emptyList(),
             // TC-03/04 保留字引用（列清单 + WHERE + LIKE + ORDER BY）
-            renderReservedColumnSelect(dialect) to emptyList(),
+            renderReservedColumnSelect(dialect, table) to emptyList(),
             // TC-07 IN 子句 / TC-08 聚合
-            renderInSelect(dialect) to emptyList(),
-            renderAggregateSelect(dialect) to emptyList(),
+            renderInSelect(dialect, table) to emptyList(),
+            renderAggregateSelect(dialect, table) to emptyList(),
             // UPDATE（保留字列进 SET）/ INSERT 模板（BatchModel，`?` 绑定执行）
-            renderUpdate(dialect) to emptyList(),
-            renderBatch(dialect, BatchKind.INSERT) to batchValues(id = 100),
+            renderUpdate(dialect, table) to emptyList(),
+            renderBatch(dialect, BatchKind.INSERT, table) to batchValues(id = 100),
         )
 
         // TC-05/06 UPSERT：按方言原生形态执行（SKIP = 引擎不支持该形态，Docker 测试覆盖）
         when (spec.upsertMode) {
             UpsertMode.REAL -> {
                 // 冲突路径（id=1 已存在 → DO UPDATE/ON DUPLICATE/MERGE 更新分支）
-                statements.add(renderBatch(dialect, BatchKind.UPSERT) to batchValues(id = 1))
+                statements.add(renderBatch(dialect, BatchKind.UPSERT, table) to batchValues(id = 1))
                 // 插入路径（id=200 不存在 → 插入分支）
-                statements.add(renderBatch(dialect, BatchKind.UPSERT) to batchValues(id = 200))
+                statements.add(renderBatch(dialect, BatchKind.UPSERT, table) to batchValues(id = 200))
             }
             UpsertMode.DEGRADE_ONLY -> {
                 // 降级路径必须可执行：方言无原生 upsert（renderUpsert/renderUpsertStatement 均 null）→ 纯 INSERT
                 if (dialect.renderUpsert("id", listOf("name")) == null &&
                     dialect.renderUpsertStatement("t", listOf("id", "name"), "id") == null
                 ) {
-                    statements.add(renderBatch(dialect, BatchKind.UPSERT) to batchValues(id = 200))
+                    statements.add(renderBatch(dialect, BatchKind.UPSERT, table) to batchValues(id = 200))
                 }
             }
             UpsertMode.SKIP -> Unit
@@ -315,10 +359,10 @@ object DialectVerifySupport {
         assertExecutableParams(connection, statements)
 
         // DELETE 最后执行
-        assertExecutableParams(connection, listOf(renderDelete(dialect) to emptyList()))
+        assertExecutableParams(connection, listOf(renderDelete(dialect, table) to emptyList()))
 
         // T-SuiteIdempotent：收尾清场——外部实例（真库）不留夹具表，重复跑与人工复查都干净。
-        runCatching { exec(connection, "DROP TABLE dev_info") }
+        runCatching { exec(connection, "DROP TABLE $table") }
     }
 
     /**
@@ -328,8 +372,8 @@ object DialectVerifySupport {
      * Oracle Free 23 实测支持 `INSERT … VALUES (…),(…)`（12c 起支持，11g 不支持）。
      * 外部实例默认按支持处理，指向老版本（11g）时用 `-Dmpvs.dialect.multiRowValues=false` 回退。
      */
-    private fun seedRows(spec: EngineSpec): List<String> {
-        val base = "INSERT INTO dev_info (id, biz_name, ${spec.dialect.quoteIdentifier("order")}, " +
+    private fun seedRows(spec: EngineSpec, tableName: String): List<String> {
+        val base = "INSERT INTO $tableName (id, biz_name, ${spec.dialect.quoteIdentifier("order")}, " +
             "${spec.dialect.quoteIdentifier("table")}, status) VALUES "
         return if (spec.multiRowValues) {
             listOf("$base (1, 'alpha', 10, 't1', 0), (2, 'beta', 20, 't2', 1), (3, 'gamma', 30, 't3', 0)")
@@ -345,9 +389,6 @@ object DialectVerifySupport {
     /** 多语句探测结论（[supported] = 分号分隔的多语句被接受**且每条都真的执行**）。 */
     data class BatchProbe(val supported: Boolean, val evidence: String)
 
-    /** 多语句探测表（一次性，探测完即删；与保留字探测表分开，互不影响）。 */
-    private const val BATCH_PROBE_TABLE = "mpv_batch_probe"
-
     /**
      * 探测引擎是否接受「分号分隔的多语句」**且每条都真的执行**（T-DialectSweepSpeed，2026-11-06）。
      *
@@ -357,16 +398,19 @@ object DialectVerifySupport {
      *
      * 探测本身也顺带产出 P-3 的读数：引擎拒绝时把它的原话首行带出来（记进 summary 明细，见
      * [sweepReservedWords] 的 `notes`），「不支持」因此可审计，而不是靠猜。
+     *
+     * 探测表名按本轮唯一（[suffixed]，L24）——同一实例上多轮并发探测互不删表。
      */
     fun probeMultiStatement(connection: Connection): BatchProbe {
-        runCatching { exec(connection, "DROP TABLE $BATCH_PROBE_TABLE") }
+        val table = suffixed("mpv_batch_probe")
+        runCatching { exec(connection, "DROP TABLE $table") }
         return try {
             execBatch(
                 connection,
-                "CREATE TABLE $BATCH_PROBE_TABLE (id INT PRIMARY KEY); " +
-                    "INSERT INTO $BATCH_PROBE_TABLE (id) VALUES (7)",
+                "CREATE TABLE $table (id INT PRIMARY KEY); " +
+                    "INSERT INTO $table (id) VALUES (7)",
             )
-            val rows = exec(connection, "SELECT id FROM $BATCH_PROBE_TABLE")
+            val rows = exec(connection, "SELECT id FROM $table")
             if (rows == 1) {
                 BatchProbe(true, "多语句受支持且两条都生效")
             } else {
@@ -375,7 +419,7 @@ object DialectVerifySupport {
         } catch (e: Exception) {
             BatchProbe(false, "引擎拒绝多语句：${e.message?.lineSequence()?.firstOrNull()}")
         } finally {
-            runCatching { exec(connection, "DROP TABLE $BATCH_PROBE_TABLE") }
+            runCatching { exec(connection, "DROP TABLE $table") }
         }
     }
 
