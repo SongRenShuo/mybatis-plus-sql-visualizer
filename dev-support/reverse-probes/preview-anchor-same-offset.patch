@@ -1,0 +1,19 @@
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/MapperMethodPreviewLineMarkerProvider.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/MapperMethodPreviewLineMarkerProvider.kt
+@@ -103,15 +103,7 @@
+      * 取不到（方法名是该行首叶、或前叶在上一行）时退回方法名本身。
+      */
+     private fun previewAnchor(method: PsiMethod, nameLeaf: PsiElement): PsiElement {
+-        val document = method.containingFile.viewProvider.document ?: return nameLeaf
+-        val nameLine = document.getLineNumber(nameLeaf.textRange.startOffset)
+-        var prev: PsiElement? = com.intellij.psi.util.PsiTreeUtil.prevLeaf(nameLeaf)
+-        while (prev != null && (prev.textLength == 0 || prev is com.intellij.psi.PsiWhiteSpace)) {
+-            prev = com.intellij.psi.util.PsiTreeUtil.prevLeaf(prev)
+-        }
+-        if (prev == null) return nameLeaf
+-        if (document.getLineNumber(prev.textRange.startOffset) != nameLine) return nameLeaf
+-        return prev
++        return nameLeaf // 反向探针：退回与跳转同 offset
+     }
+ 
+     private fun buildPreviewMarker(element: PsiElement): LineMarkerInfo<*> = LineMarkerInfo(

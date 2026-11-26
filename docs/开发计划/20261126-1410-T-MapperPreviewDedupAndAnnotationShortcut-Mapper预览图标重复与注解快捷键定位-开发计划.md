@@ -216,20 +216,73 @@ private fun tryMapperAnnotationMethodFallback(project: Project, element: PsiElem
 
 ## 九、补：方法行图标左右序（T-MapperPreviewOrder，2026-11-26 同日）
 
-用户追加反馈：「mapper 的预览图标首次渲染时老是在右边，过一会出现在左边了，希望保持左边，对齐 xml」。
+用户三次反馈：「mapper 的预览图标首次渲染时老是在右边，过一会出现在左边了，希望保持左边，对齐 xml」→ 修完仍复现（16:27 构建）→ 「你应该先尝试通过非 gui 的方式复现问题」。
 
-### 9.1 机制
+### 9.1 三轮演进（前两版都不够）
 
-平台慢趟按 **provider 顺序**收集（`LineMarkersPass.queryProviders` 外层遍历 providers，每个 provider 的 `collectSlowLineMarkers` 结果按 add 顺序消费），同一行多枚图标的左右序由此决定。此前预览与跳转都在 `MapperJavaToXmlLineMarkerProvider` 一个 provider 内，首次 daemon pass 与后续重算的收集/合并差异让顺序翻转；XML 侧因为「预览 provider 在前、跳转 provider 在后」两个类而稳定——用户说的「对齐 xml」正是这个结构。
+| 版本 | 做法 | 为什么不够 |
+|---|---|---|
+| v1（首版） | 预览拆成独立 provider、`plugin.xml` 注册在跳转之前 | 只决定**慢趟收集顺序**；真机多轮 daemon 复用下仍翻转 |
+| v2（锚点偏移） | 预览锚点取方法名同行的前一个 leaf（startOffset 小一档） | 让 gutter 按 offset 排序时偏向自己；仍依赖 highlighter 的入队序，不能保证 |
+| **v3（最终，`6c1dc40a6`）** | **预览用 `Alignment.LEFT`、跳转保持 `CENTER`** | 由平台**布局**决定，与收集顺序完全无关 |
 
-### 9.2 修法
+### 9.2 最终机制（平台源码实证）
 
-- 预览图标拆成独立 provider `MapperMethodPreviewLineMarkerProvider`，`plugin.xml` 注册在 `MapperJavaToXmlLineMarkerProvider` **之前**；跳转 provider 只产箭头（让位门语义不变）。
-- 预览侧判定用新增的 `MapperXmlLocator.existsOrUnknown`（索引候选 + PSI 子树匹配，**不建 document**）——跳转侧仍用 `locateOrUnknown`（要行号）；两边各付一次查询，但预览侧不碰 document，成本低于复用。
-- 顺序守卫 `MapperPreviewProviderOrderGuardTest`：① 平台 `LineMarkersPass.getMarkerProviders(Java)` 里预览在跳转之前；② `plugin.xml` 注册段顺序。
+`EditorGutterComponentImpl.processIconsRowForY` 按 `Alignment` **分列**：
 
-### 9.3 读数
+```java
+int x = getIconAreaOffset() + 2;
+for (GutterMark r : row) {
+  switch (alignment) {
+    case LEFT   -> { process(x, ...); x += icon.getIconWidth() + gap; }   // 先从左排满 LEFT
+    case CENTER -> { middleCount++; middleSize += ...; }                  // CENTER 只记账
+    ...
+  }
+}
+int leftSize = x - getIconAreaOffset();
+x = getIconAreaOffset() + myIconsAreaWidth;
+for (GutterMark r : row) {                                              // RIGHT 从右倒排
+  if (alignment == RIGHT) { x -= icon.getIconWidth(); process(x, ...); }
+}
+if (middleCount > 0) {                                                  // CENTER 整体居中
+  x = getIconAreaOffset() + leftSize + (myIconsAreaWidth - leftSize - rightSize - middleSize) / 2;
+  ...
+}
+```
 
-- 定向 9 类 **157/0**（含新守卫 2 条；4 个既有测试类按「两 provider 各收集一次」同步）。
-- 反向：把 `plugin.xml` 两个注册元素对调 → 守卫 **2/2 红**；还原后 2/0。
-- 一处测试坑：守卫最初用裸类名 `indexOf` 定位注册点，结果先命中**注释里的类名说明**（注释也在注册元素之前），假红一次；改用 `implementationClass="<全名>"` 片段定位。
+预览 `LEFT` ⇒ 几何上恒在最左；跳转 `CENTER` ⇒ 排在 LEFT 右侧。与 marker 收集顺序、daemon 增量复用、provider 注册顺序**全部无关**。
+
+### 9.3 修法
+
+- `MapperMethodPreviewLineMarkerProvider.buildPreviewMarker` 的 `Alignment` 由 `CENTER` 改为 `LEFT`；跳转箭头（`MapperJavaToXmlLineMarkerProvider`）保持 `CENTER`。
+- 保留 v1 的 provider 拆分与 v2 的锚点偏移（都对稳定性有正作用，且不冲突）。
+- 保留 `MapperXmlLocator.existsOrUnknown`（预览侧不建 document）。
+
+### 9.4 验证
+
+**非 GUI 单测**（10 类 **160/0**）：
+
+- 新增 `MapperPreviewDaemonOrderTest`：读 `DaemonCodeAnalyzerImpl.getLineMarkers`（gutter 渲染消费的那一份）断言预览在前，并做两轮 `doHighlighting` 断言跨轮稳定。
+- `MapperNavigationLineMarkerProvidersTest` 新增 `testJavaMethodPreviewAlignmentIsLeftAndNavIsCenter`（用 `createGutterRenderer()!!.alignment` 断言 LEFT/CENTER）与锚点偏移断言。
+- `MapperPreviewProviderOrderGuardTest` 钉住 provider 列表顺序与 `plugin.xml` 注册顺序。
+- 既有 4 类按「两 provider 各收集一次」「预览按 tooltip 独立计入」同步。
+
+**反向**（git 补丁形式，`dev-support/reverse-probes/`，`git apply` 应用 / `git apply -R` 还原）：
+
+| 补丁 | 摘掉的东西 | 读数 |
+|---|---|---|
+| `preview-alignment-center.patch` | `Alignment.LEFT` → `CENTER` | `MapperNavigationLineMarkerProvidersTest` **33 tests / 1 红**（alignment 用例） |
+| `preview-anchor-same-offset.patch` | `previewAnchor` 退回方法名（同 offset） | 同文件 **33 tests / 1 红**（锚点偏移用例） |
+| （原 `plugin.xml` 对调，见 §9.2 v1） | 预览 provider 排到跳转之后 | 顺序守卫 **2/2 红** |
+
+三者还原后复跑 **160/0**（`git diff -- src/main` 为空）。
+
+**沙盒 GUI**（IU-243，`record/prevorder_probe.py` + `record/prevorder_judge.py`）：
+
+- 7 个 mapper × 2 轮（顺序开 + 逆序重开）× 5 帧连拍 = **70 帧，逐帧色相判定全部「预览在左」**。
+- **同一探针在 v2（锚点偏移）代码上同样 70 帧全「预览在左」** ⇒ 243 沙盒复现不出真机的翻转窗口（light fixture 每次全量重建，沙盒索引热度也不足）。这正是改 v3 的原因：不依赖能否复现，直接让顺序由布局决定。
+- 探针可复用：`record/prevorder_probe.py <tag> [mapper...]` 连拍落 `record/tmp/prevorder-multi/`，`record/prevorder_judge.py "<glob>"` 逐帧判定（`REVERSED(跳转左)` 即以退出码 1 报告复现）。
+
+### 9.5 一处内容遗漏（已补）
+
+历史被重写时（`025f207dd` → `6c1dc40a6`）只恢复了代码与测试，本节 §9.1~§9.4 当时未落盘；本节内容为事后补齐，与 `6c1dc40a6` 的实现一致。
