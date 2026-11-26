@@ -1303,6 +1303,31 @@ CI run 45562438538 的 test(4)：第 1/2 次真竞态（1m02 / 49s），第 3 �
 
 **Seen 1× (2026-11-25)**
 
+### L107 共享静态状态 + 未 join 的生产线程 = 跨用例 off-by-one；收尾必须 join 之后再清理
+
+**规则**：测试用例里凡是起了**自己生产数据**的线程（持续 offer / 持续写队列），收尾顺序必须是
+「置停止标志 → **join 并断言线程已死** → 清理共享静态状态 → 停被测对象」。只置标志不 join 时，
+线程可能已通过标志判断、正停在写动作之前，它最后一轮写入会落在 `@After` 与下一个用例 `setUp`
+的清理之后，在 JVM 级共享状态里留下 ±1 条存量——下一个用例把它算进自己的账，表现成与代码无关的
+`expected:<N> but was:<N+1>`。同时把「起点干净」写成断言（清理后 / 预填后各断言一次条数），
+让未来的 polluter 自报家门，而不是伪装成业务缺陷。
+
+**证据**：`SenderLoopDrainRateTest > 风暴排水期CONFIG到达…` 两次 CI 偶发红
+（`expected:<512> but was:<513>`，run 45578089046 attempt 1 与 run 45730701535 的 `extras` job，
+两次提交都与 agent 传输层无交集，复跑即绿）。机制三证：①`EventBus.QUEUE` 是测试 JVM 内的
+`static final` 队列；②JUnit4 `MethodSorters.DEFAULT`（方法名 hashCode 升序）实测把
+「持续风暴从未收到CONFIG…」（-340849885）排在「风暴排水期CONFIG到达…」（751907909）**前一位**；
+③前者 finally 只有 `producing.set(false)`，无 `producer.join()`、无 `clearQueued()`。修复 `6925c7a8b`：
+finally 改 `join(2000)` → `assertFalse(isAlive)` → `clearQueued()`；`prefillEvents` 填前后各断言队列条数。
+读数：定向 4/0；反向探针在失败用例体首行种 1 条残留 → **恰 1 红**且消息点名「上一个用例残留 1 条」
+（`expected:<0> but was:<1>`）→ 撤探针复绿；transport 全包 12 类 59/0；`cleanTest` 连跑 3 轮全绿。
+
+**正例**：`join` → 断言线程已死 → 清理共享单例 → 再停被测对象；共享队列/单例进断言。
+**反例**：`producing.set(false)` 就当清理完成；把这类偶发红当 flake 反复 rerun 不改判据；
+或改断言去容忍 N±1（真丢事件就再没人发现）。
+
+**Seen 1× (2026-11-26)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
