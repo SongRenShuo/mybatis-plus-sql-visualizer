@@ -159,7 +159,8 @@ public final class ChainStateDetector {
         // new 构造链首：new LambdaQueryWrapper<X>()
         if (qualifier instanceof PsiNewExpression) {
             PsiType type = ((PsiNewExpression) qualifier).getType();
-            return WrapperLocator.detectWrapperType(type);
+            // D256 M1：与预览链路同源（自研 Wrapper 子类走父链/规则 4 识别）
+            return WrapperLocator.detectWrapperTypeDeep(type);
         }
 
         // 工厂/服务链首：Wrappers.<X>lambdaQuery() / service.lambdaQuery()

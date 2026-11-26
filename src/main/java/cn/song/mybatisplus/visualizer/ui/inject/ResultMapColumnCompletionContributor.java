@@ -2,6 +2,7 @@
 // T-SyncK2JMaster104 波C 增量同步：W5-10 resultMap 引用列候选 + F89 memo 双槽化 + F93 DumbAware
 package cn.song.mybatisplus.visualizer.ui.inject;
 
+import cn.song.mybatisplus.visualizer.psi.EntityFieldCollector;
 import com.intellij.codeInsight.completion.CompletionContributor;
 import com.intellij.codeInsight.completion.CompletionParameters;
 import com.intellij.codeInsight.completion.CompletionProvider;
@@ -149,8 +150,9 @@ public class ResultMapColumnCompletionContributor extends CompletionContributor 
             if (clazz == null) {
                 return List.of();
             }
+            // D254：不用 getAllFields（平台不按名去重、不过静态）——resultMap property 候选按实体列语义收
             java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
-            for (com.intellij.psi.PsiField field : clazz.getAllFields()) {
+            for (com.intellij.psi.PsiField field : EntityFieldCollector.collectColumns(clazz)) {
                 String name = field.getName();
                 if (name != null && !name.isBlank()) names.add(name);
             }

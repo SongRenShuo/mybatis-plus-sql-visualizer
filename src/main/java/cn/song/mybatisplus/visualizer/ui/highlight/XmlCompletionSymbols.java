@@ -1,6 +1,7 @@
 // T-SyncK2JMaster104 波C 翻译自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/highlight/XmlCompletionSymbols.kt
 package cn.song.mybatisplus.visualizer.ui.highlight;
 
+import cn.song.mybatisplus.visualizer.psi.EntityFieldCollector;
 import cn.song.mybatisplus.visualizer.ui.SourceSqlContext;
 import com.intellij.ide.highlighter.XmlFileType;
 import com.intellij.openapi.project.DumbService;
@@ -177,13 +178,18 @@ public final class XmlCompletionSymbols {
         return !fields.isEmpty() ? fields : fallback;
     }
 
-    /** 类名（FQN 或简单名）→ 全部字段名；不可解析 → 空。 */
+    /**
+     * 类名（FQN 或简单名）→ 全部字段名；不可解析 → 空。
+     *
+     * <p>D254：字段来源改 {@link EntityFieldCollector#collectColumns}（不用平台 {@code getAllFields}——
+     * 不按名去重、不过静态，父类同名字段会各出现一次且后写覆盖方向与真机相反）。</p>
+     */
     public static List<String> fieldsOfClass(Project project, String typeName) {
         try {
             PsiClass clazz = resolveClass(project, typeName);
             if (clazz == null) return List.of();
             LinkedHashSet<String> names = new LinkedHashSet<>();
-            for (com.intellij.psi.PsiField field : clazz.getAllFields()) {
+            for (com.intellij.psi.PsiField field : EntityFieldCollector.collectColumns(clazz)) {
                 String name = field.getName();
                 if (name != null && !name.isBlank()) names.add(name);
             }
@@ -258,8 +264,9 @@ public final class XmlCompletionSymbols {
             if (typeArgs.length != 1 || !(typeArgs[0] instanceof PsiClassType)) return List.of();
             PsiClass element = ((PsiClassType) typeArgs[0]).resolve();
             if (element == null) return List.of();
+            // D254：foreach 元素属性候选同样按实体列语义（合集未必是实体，仍走同一收集器）
             LinkedHashSet<String> names = new LinkedHashSet<>();
-            for (com.intellij.psi.PsiField field : element.getAllFields()) {
+            for (com.intellij.psi.PsiField field : EntityFieldCollector.collectColumns(element)) {
                 String name = field.getName();
                 if (name != null && !name.isBlank()) names.add(name);
             }

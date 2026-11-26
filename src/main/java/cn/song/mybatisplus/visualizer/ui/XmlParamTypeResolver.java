@@ -1,6 +1,7 @@
 // T-SyncK2JMaster115 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/XmlParamTypeResolver.kt 移植（T-FCA-01 集合快捷别名 + kindOfTypeText 数组判定前移）
 package cn.song.mybatisplus.visualizer.ui;
 
+import cn.song.mybatisplus.visualizer.psi.EntityFieldCollector;
 import cn.song.mybatisplus.visualizer.sql.ParamQuote;
 import cn.song.mybatisplus.visualizer.xml.ParamKind;
 import cn.song.mybatisplus.visualizer.xml.ParamTypeInfo;
@@ -229,10 +230,26 @@ public final class XmlParamTypeResolver {
         return derived;
     }
 
-    /** DTO/实体字段递归收集：`p.字段名` → 类型类别；嵌套 DTO 继续递归（`p.dto.x`）。 */
+    /**
+     * DTO/实体字段递归收集：`p.字段名` → 类型类别；嵌套 DTO 继续递归（`p.dto.x`）。
+     *
+     * <p>D254：<b>不使用 {@code getAllFields()}（master {@code allFields}）</b>——平台实现不按名去重
+     * （本类字段先、父类后），{@code sink[key] =} 的后写覆盖会让父类同名字段<b>盖掉子类</b>，与真机
+     * {@code Reflector}（本类字段先注册、父类同名不覆盖）方向相反。改用
+     * {@link EntityFieldCollector#collectProperties}：
+     * <ul>
+     *  <li>同名合并取子类；</li>
+     *  <li>{@code static} 常量<b>保留</b>（{@code Reflector.addFields} 仍注册其 getter，真机
+     *      {@code #{p.CONST}} 可取值）；</li>
+     *  <li>{@code serialVersionUID} / {@code class} / {@code $} 前缀不产出键
+     *      （{@code Reflector.isValidPropertyName} 同口径）。</li>
+     * </ul>
+     */
     private void collectFieldTypes(@NotNull String prefix, @NotNull PsiClass psiClass, @NotNull Map<String, ParamTypeInfo> sink) {
-        for (PsiField field : psiClass.getAllFields()) {
-            String key = prefix + "." + field.getName();
+        for (PsiField field : EntityFieldCollector.collectProperties(psiClass)) {
+            String fieldName = field.getName();
+            if (fieldName == null) continue;
+            String key = prefix + "." + fieldName;
             PsiClass fieldClass = (field.getType() instanceof PsiClassType)
                     ? ((PsiClassType) field.getType()).resolve() : null;
             if (fieldClass != null && isDtoLike(fieldClass)) {
