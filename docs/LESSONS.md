@@ -1355,6 +1355,55 @@ scoop 等包管理器装的），一律写可执行文件的绝对路径，不�
 
 **Seen 1× (2026-11-26)**
 
+### L109 沙盒 IDE 的崩溃日志会写进 gradle transform 缓存，把整个平台包判失效
+
+**规则**：`runIde` 的沙盒 JVM 工作目录**就是平台解压目录**
+（`~/.gradle/caches/<ver>/transforms/<hash>/transformed/ideaIU-*`），HotSpot 崩溃时默认把
+`hs_err_pid<pid>.log` 与 `replay_pid<pid>.log` 写进当前目录——等于往 Gradle 的 artifact
+transform 输出里塞外来文件。Gradle 校验 transform 输出快照后判其失效，下次求值
+`runtimeDirectory` 就把整个目录删掉重解压；此时若主 IDE 的 Kotlin daemon、或沙盒残留的 JPS
+`ExternalJavacProcess` 正占着 `lib/*.jar`，就报 `Unable to delete directory`，而报错点只写
+「Failed to query the value of task ':runIde' property 'runtimeDirectory'」，从字面看不出与崩溃
+有关（这条与 L106 的区别：L106 是只剩 app.jar 的半成品，本条是**目录里多了崩溃产物**）。
+三层对策必须同时成立：
+
+1. 所有跑沙盒 IDE 的任务传 `-XX:ErrorFile=` / `-XX:ReplayDataFile=` 指到工程 `build/hs-err/`
+   （本仓 `buildSrc/src/main/kotlin/mpv-runide.gradle.kts` 的 T-TransformLockGuard，runIde 与
+   runIdeHotSwap 同口径），崩溃产物永不落进任何缓存目录。参数路径只能写成**各任务块内的局部
+   val**：预编译脚本的顶层 val 会变成脚本类字段，argument provider 闭包随之捕获脚本实例，配置
+   缓存直接拒绝（`cannot serialize Gradle script object references`，本轮踩过一次）；
+2. 沙盒退出即执行 `T-SandboxCacheHygiene`（两任务的 `finalizedBy`，正常退出/崩溃/任务失败三条
+   出口都跑），它直接调 `dev-support/gradle-transform-doctor.ps1 -Fix`：杀「**父进程已死**」的
+   JPS `ExternalJavacProcess` 孤儿，并回收此前挪开的 `*.locked-*` 目录。判据只能用父进程存活，
+   不能用启动日期——当天崩溃的沙盒留下的孤儿按日期筛会漏掉，而它们正是下一次重解压的阻塞者；
+   写这类判定也必须走 WMI：本机 `ProcessHandle.Info.commandLine()` 对**所有**进程都返回空
+   （连 Gradle daemon 自己都是 `cmdLen=0`），Java 侧认不出谁是 javac worker（首版实现
+   `killed=0` 实证），只能 `Get-CimInstance Win32_Process` 取 CommandLine；
+3. 已经锁死时手工跑同一个脚本（不加 `-Fix` 是只读体检）：列占用者（Restart Manager）→ 杀孤儿 →
+   把污染目录改名 `<hash>.locked-<stamp>`。Windows 允许改名「里面有打开文件」的目录，所以不必
+   关 IDE；Gradle 下次构建自动在原路径重解压。
+
+**证据**：2026-11-26 同日两段日志拼出完整链条。①`F:\gradle-home\daemon\9.7.0\daemon-42976.out.log`
+12:21:35：`java.lang.OutOfMemoryError` + `Native memory allocation (malloc) failed to allocate
+1606416 bytes. Error detail: Chunk::new`，出事的 JVM 是
+`transforms/cfd911…/transformed/ideaIU-2024.3.7.1-win/jbr/bin/java.exe`（runIde 沙盒），紧随
+`An error report file ... hs_err_pid88668.log` 与 `Compiler replay data is saved as ...
+replay_pid88668.log`——两个产物路径都落在 transform 输出目录内。②13:52 用户起沙盒失败：
+`Unable to delete directory '…\transforms\cfd911…'`；Restart Manager 逐个点名占用者＝PID 8224
+（主 IDE 窗口）、82660（IDE 的 Kotlin compile daemon）、以及两个 11-25 起就一直活着的
+`ExternalJavacProcess` 孤儿（30864/94092，classpath 指该目录）。③把目录改名
+`.locked-20261126` 后 `runIde` 直接正常：新解压出 2261 文件 / 102 个 lib jar（完整），旧目录剩
+1541 文件 / 10 jar + 6.8MB `replay_pid88668.log`（多次失败的删除尝试已删掉一部分）。
+④沙盒关闭后复查：又留下 4 个孤儿 worker（14:09:52 起，父进程 25044 已死）仍在锁新目录——
+所以判据写「父进程已死」而非「今天之前启动」。
+
+**正例**：起沙盒前先跑 `gradle-transform-doctor.ps1`（只读）看有无 `CONTAMINATED` / `INCOMPLETE`，
+命中就 `-Fix`；修完再起沙盒。
+**反例**：把 `Failed to query ... runtimeDirectory` 当成 IPGP 版本问题去升降级插件；或反复重试
+runIde——每次重试都再删一遍，把目录删得更残，原本 `unzip -n` 就能补齐的形态最后只能重解压。
+
+**Seen 1× (2026-11-26)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
