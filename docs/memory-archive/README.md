@@ -3,17 +3,29 @@
 > 本目录存放从本地记忆系统（`~/.zcode/cli/memories/projects/.../memory/`）归档的历史记忆文件。
 > 这些内容已完成/已交付/已修复，不再需要每次会话加载，但作为历史记录保留。
 >
-> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简），2026-09-17（第十一次精简），2026-09-18（第十二次精简），2026-09-19（第十三次精简），2026-09-20（第十四次精简），2026-09-23（第十五次精简），2026-09-24（第十六次精简），2026-09-25（第十七次精简），2026-09-29（第二十一次精简），2026-09-30（第二十二次精简，零归档收拢轮），2026-10-01（第二十三次精简，零归档索引瘦身轮），2026-10-02~05（第二十四~二十七次精简，四连零归档读数刷新轮），2026-10-06（第二十八次精简，零归档勘正轮），2026-10-07（第二十九次精简，零归档勘正+双档去重轮），2026-10-08（第三十次精简，零归档勘正+双孤儿入册轮），2026-10-29（第三十一次精简，47 文件归档波次+索引瘦身 247→198 行），2026-11-07（第三十二次精简，51 文件归档波次+索引重建 304→236 行），2026-11-10（第三十三次精简，16 文件归档波次+孤儿 33 补册），2026-11-13（第三十四次精简，28 文件归档波次+孤儿 7 补册），2026-11-17（第三十五次精简，15 文件归档波次+孤儿 8 补册），2026-11-18（第三十六次精简，8 文件归档+去重 4+错记忆订正），2026-11-19（第三十七次精简，4 文件归档+孤儿 2 处置+去重 1+错记忆订正），2026-11-20（第三十八次精简，105 文件归档波次+全局移 1+MEMORY.md 索引重建 392→154 行），2026-11-25（第三十九次精简，26 文件归档+索引重建 219→115 行 / 44.4KB→19.7KB）
+> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简），2026-09-17（第十一次精简），2026-09-18（第十二次精简），2026-09-19（第十三次精简），2026-09-20（第十四次精简），2026-09-23（第十五次精简），2026-09-24（第十六次精简），2026-09-25（第十七次精简），2026-09-29（第二十一次精简），2026-09-30（第二十二次精简，零归档收拢轮），2026-10-01（第二十三次精简，零归档索引瘦身轮），2026-10-02~05（第二十四~二十七次精简，四连零归档读数刷新轮），2026-10-06（第二十八次精简，零归档勘正轮），2026-10-07（第二十九次精简，零归档勘正+双档去重轮），2026-10-08（第三十次精简，零归档勘正+双孤儿入册轮），2026-10-29（第三十一次精简，47 文件归档波次+索引瘦身 247→198 行），2026-11-07（第三十二次精简，51 文件归档波次+索引重建 304→236 行），2026-11-10（第三十三次精简，16 文件归档波次+孤儿 33 补册），2026-11-13（第三十四次精简，28 文件归档波次+孤儿 7 补册），2026-11-17（第三十五次精简，15 文件归档波次+孤儿 8 补册），2026-11-18（第三十六次精简，8 文件归档+去重 4+错记忆订正），2026-11-19（第三十七次精简，4 文件归档+孤儿 2 处置+去重 1+错记忆订正），2026-11-20（第三十八次精简，105 文件归档波次+全局移 1+MEMORY.md 索引重建 392→154 行），2026-11-25（第三十九次精简，26 文件归档+索引重建 219→115 行 / 44.4KB→19.7KB），2026-11-26（第四十次精简，168 项迁 `global/from-mpvs-20261126/`+13 文件归档+索引重建 115→106 行 / 23.8KB→13.5KB / 369→176 内容文件）
 > **原始位置**：`~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-09474abd1ce62ee6/memory/`
-> **全局备份**：`~/.zcode/cli/memories/global/`（129 个 md，2026-11-20 实测）
-> **项目记忆**：保留 363 个内容文件 + MEMORY.md 索引（第三十九次精简后）
+> **全局备份**：`~/.zcode/cli/memories/global/`（129 个 + 迁移子目录 `from-mpvs-20261126/` 180 个，2026-11-26 实测）
+> **项目记忆**：保留 176 个内容文件 + MEMORY.md 索引（第四十次精简后，176/176 全部入索引、零死链零孤儿）
 
 ---
 
-## 已修复 Bug（318 个）
+## 已修复 Bug（350 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
+| [project-dialect-gate-exit.md](bug-fixes/project-dialect-gate-exit.md) | T-DialectGateExit / UI-040（20261020 拍板 P0+P1）——回滚弹窗被方言闸门挡住只有红字的出口：面板闸请求 + 阻断态两按钮（按目标方言重渲染重试 / 强制换源）+ forceChoose 跳过静默选择；P1=源方言升级后按目标方言重渲染 |
+| [project-dialect-gate-ux.md](bug-fixes/project-dialect-gate-ux.md) | T-DialectGateUx——阻断态红条加「切换数据源」「方言设置」蓝字；20261102 补定案：放行态也须保留入口，切源走 forceChoose+forceChoosePopup 就地弹列表、只换源不自动执行（「打开 Database 工具窗」已否决） |
+| [project-dialect-gate-release-on-conflict.md](bug-fixes/project-dialect-gate-release-on-conflict.md) | 方言冲突不再阻断执行（用户定案）——三处修复、边界保留与真机验证证据 |
+| [project-explain-console-first.md](bug-fixes/project-explain-console-first.md) | T-ExplainConsoleFirst（20261024 `6e6da1d4`）——执行计划默认/回退改回内嵌原生控制台；根治 `currentEditorSql()` 漂移用 `previewSqlForReadonly()`；结构化通道保留默认关，推荐通知只提示一次 |
+| [project-preview-side-query.md](bug-fixes/project-preview-side-query.md) | T-PreviewSideQuery（20261019 `1a1cf724`）——预览只读动作改旁路查询不换编辑器；P1 内联结果 / P2 EXPLAIN 非模态 / P3a 执行视图返回预览；15 类 147/0/0/0 |
+| [project-toolbar-icon-semantics.md](bug-fixes/project-toolbar-icon-semantics.md) | T-ToolbarIconSemantics（20261019）——四页签工具栏图标全部克隆为插件自带 SVG 抹平 243/262 差异；21 组克隆+1 组自绘、定向 71/0；内联 SVG 预览须保留根 `fill="none"` |
+| [project-embedded-col-prefix-gap.md](bug-fixes/project-embedded-col-prefix-gap.md) | @Embeddable 嵌入列前缀识别（20261013 起 A+B+校正兜底+探测收范围；W1 信号面+W1b 策略识别+W2 EntityClassFinder 库兜底改 allScope，性能红线=只走快路径） |
+| [project-degraded-preview-ux.md](bug-fixes/project-degraded-preview-ux.md) | 预览降级横幅体验（T-DegradedPreviewUx P0/P1/P2 已合 dev）——UI-022 headless 未复现判不成立，真缺陷改判「首开必降级」并修（方言重解析使预热 PSI 失效） |
+| [project-route-branch-inventory-20261118.md](bug-fixes/project-route-branch-inventory-20261118.md) | 2026-11-18 route 分支包含关系（patch-id 口径）与合入 master 的差量清单快照 |
+| [project-competitor-docs-open-source-exposure.md](bug-fixes/project-competitor-docs-open-source-exposure.md) | 开源仓内竞品逆向内容暴露风险分级与处置（20261012 收口：占位全删、11 份改名、闭源指纹清零、4 篇移出、4 笔未推提交压成一笔）+ filter-repo 影响面实测与「不清史」结论 |
+| [project-docs-site-merge-and-compare-page-20261123.md](bug-fixes/project-docs-site-merge-and-compare-page-20261123.md) | 文档站 20261123 两批（合并 dev `23e5608`、对比页中英重写、全站审查、部署 `e913123`）+ 双远端推送机制与 CF Pages 部署验证口径 |
+| [project-gauss-multimodule-repro-fixture-20261125.md](bug-fixes/project-gauss-multimodule-repro-fixture-20261125.md) | Gauss 双模块并行捕获复验装置（demo 仓 gauss-multi-module-a/b）——截图+「并存只剩后启动的」定位到 EP 装配时机，修复 `ad4f5994b`；装置用法可复用 |
 | [project-round40-audit-20261118.md](bug-fixes/project-round40-audit-20261118.md) | 第四十轮全分支审计+竞品对比（2026-11-18）：patch-id 拓扑改写合流批次、D220~D229 新候选、V240 判据刷新、过期结论订正（审计提交 `27a54cfa4` 实测已推双仓；接替轮=R41/R42，pending 全在仓内落地册与 pending-plans） |
 | [project-license-apache-vs-mit-assessment.md](bug-fixes/project-license-apache-vs-mit-assessment.md) | 20261021 用户问「Apache-2.0 是否适合改 MIT」的评估结论——可改（全史单一人类作者）但建议维持现状（仓根 LICENSE 已落 Apache-2.0） |
 | [project-explain-pwd-prompt.md](bug-fixes/project-explain-pwd-prompt.md) | T-ExplainPwdPrompt（20261024 已实施 4bccd331，W4 回落后被 W9~W12 取代）——结构化执行计划/预估行数未存密码不弹原生密码框；修法=必填 askPassword 按通道表态+失败分型；V1 已由用户真机实测通过 |
@@ -380,10 +392,11 @@
 | [project-master-into-dev-merge-20261103.md](bug-fixes/project-master-into-dev-merge-20261103.md) | T-MasterToDevMerge 两轮反向合流档（1103 首轮 `1bf55efa`+1106 二轮 `fafc2042`/`f80d7aab`，二轮 22 冲突）——master 语义增量必须搬进 dev 新文件；源码扫描守卫前提会过期；判失败是否合并引入=临时 worktree 检出合并前 HEAD 对照复跑 |
 | [reference-ci-linux-migration.md](bug-fixes/reference-ci-linux-migration.md) | CI 换 Linux runner 调研定案（2026-11-05：只值 2~4 分钟、7 处硬阻塞、混合迁移被 10GB 缓存上限互踢）——维持 Windows runner 不迁；再提迁移先读本档 |
 
-## 已解决踩坑（198 个）
+## 已解决踩坑（199 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
+| [pitfall-cf-pages-html-308-baidu-verifier.md](pitfalls/pitfall-cf-pages-html-308-baidu-verifier.md) | CF Pages 把 `/xxx.html` 308 到 `/xxx`，百度验证器不跟跳转报「未知原因:308」——中间件按精确路径放行修复 |
 | [pitfall-hot-update-settings-apply-cnfe.md](pitfalls/pitfall-hot-update-settings-apply-cnfe.md) | 本地安装包热更新后设置页「确定」无反应=apply 链实例化 configurable 抛 CNFE 被吞（类在包里：tag 源码/plugin.xml/jar 三处核过）⇒ 完全退出 IDE 即恢复；待补「热更新后探测设置页可用性，否则提示重启」；附 MPV-Build 时间戳对提交时间判包内容的读法 |
 | [pitfall-m2-warm-retry-self-exciting-loop.md](pitfalls/pitfall-m2-warm-retry-self-exciting-loop.md) | 首开转后台补齐的自激环：warm start→unresolved→async ready applied 反复（3 秒 10 轮重算）；修=warmAttempted 同 key 同缓存代只补一次（缓存失效/调度失败才退回），判定放在测试缝之前；任何「就绪→重算」闭环都要问一句重算会不会再次触发等待 |
 | [pitfall-preview-open-stage-split.md](pitfalls/pitfall-preview-open-stage-split.md) | 「预览首开慢」按 request→compute→装配→dialog 四段切：内层埋点只覆盖 preview() 内部；实测装配 53ms 而弹窗 11.9s，其间是 JavaBuilder 编译（IDE 冷启动固定成本）；同一条第三次 278ms——拿「刚打开工程第一次点」判插件慢会误判 |
@@ -664,13 +677,15 @@
 
 **第三十九次精简（2026-11-25，26 个归档 + 去重 2 + MEMORY.md 重写到注入上限内）**：起因＝「新仓要播种现有经验」时发现 MEMORY.md 已达 219 行 / 44.4KB，超出自动注入上限（约 200 行 / 25,000 字符），本会话只加载了前 103 行，播种出去会是残缺索引。归档判定先 git 实测：`ddd37a5be`（Mapper 类名跳转）、`95ecbea44`（OldJvmPremainGuard）、`4214ac37a`（MultiModuleConsoleYield）、`b3900d236`（DriverInternalSqlFilter）、`7e470a9e4`（UserFreezeTriage）、`756011136`（D238/D239）、`d88413eb0`（McpToolDisplayDesc）、`5dfae3264`（D237）经 `merge-base --is-ancestor <hash> master` 全在 master；**撤出 3 个候选**：`19b88f8e2`（增强捕获）、`8a67887ae`（T-SAF-10）、`0574fa1e`（EmbeddedConsole）实测不在 master，留役；11.24-beta.1 内测条目被 `452692060`（v2026.11.25 正式版落账）取代。归 **bug-fixes 20**（三轮发行链 11.21/11.23/11.24-beta、11 笔已合 master 战役、r44 审计、PEV 两篇、PerfSweep33、竞品 R41/R44、SandboxReuse、7shell）+ **user-context 5**（SEO 收官、微信发文、W1 文案、Agensi 冷邮件、coolrequest-vip 渠道）+ **methodology 1**（16px gutter 图标预览法与角标结局）。去重 2：可发现性 D244~D252 双行并一；「反向验证别用 git checkout（未提交修复）」并入反向探针组。**MEMORY.md 同轮重写**：219 行/44.4KB → **115 行/19,658 字符**（链接 281 个，抽查无失效），并把「§一 进行中」收敛到 32 条真在途、长期参考改族归并。**规范订正**：`docs/规范/记忆精简规范.md` §1 的「通用经验 → global/」实测等于放进不自动注入的抽屉，已改为「跨仓硬规则写用户级 AGENTS.md，其余留项目内压缩」。项目 memory 390→364 文件（内容 363）。全量备份 `memory-backup-20261125-3`（390 项）。
 
+**第四十次精简（2026-11-26，168 项迁全局 + 13 文件归档 + 索引重建）**：起因＝用户「记忆 300 多条还是有点多」。**起始读数**（脚本实测，非目测）：369 个内容文件、目录 26MB（其中 7 个历史备份目录 22MB）、MEMORY.md 115 行 / 23.8KB、索引链接 295 个、孤儿 74 个、死链 0。**处置分三档**：①**迁全局 168 项**——66 个 `feedback-*` 用户口径全部 + 102 个平台/工具通用 pitfall（PSI/EDT/WIRA、沙盒 GUI、Git Bash 工具链、Swing/平台 API、并行会话、gradle 构建、Git 版本控制族等），落在 `global/from-mpvs-20261126/`；②**归档 13**——12 个已完成实施记录（方言闸门三件、执行计划控制台优先、预览旁路查询、工具栏图标语义、@Embeddable 前缀、降级横幅 UX、route 分支清单、竞品文档暴露处置、文档站合并、Gauss 复验装置）入 bug-fixes，`pitfall-cf-pages-html-308-baidu-verifier` 入 pitfalls；③**留役 176**——52 project（在役架构/活跃待办）+ 71 reference（demo 装置、DBX/测试服务器、CI/发行链、真机沙盒链、竞品矩阵、内容线）+ 45 本仓专有 pitfall（守卫族、testFast/testShards、方言表守卫、预览/捕获/日志还原链）+ 8 杂项（`xml-engine`/`parallel-build-resource-rules` 等）。**判据与坦白**：第三十九次已订正过「global 等于不自动注入的抽屉」，所以这一步是**冷存档**而非活跃检索——MEMORY.md 只保项目在役知识，通用族靠 `grep ~/.zcode/cli/memories/global/from-mpvs-20261126/` 找回；留役 pitfall 全部是本仓守卫/断言或插件行为专属，移出会让排障钩子断链。**索引同步重建**：115 行/23.8KB → **106 行/13.5KB**，脚本校验 176/176 全覆盖、0 死链 0 孤儿（前一轮 74 个孤儿已随之清零）。**规范同轮订正**：`docs/规范/记忆精简规范.md` §1/§4/§5 的「通用经验→global 即减负」改为「global 是冷存档，项目索引只留活跃面；跨仓硬规则进用户级 AGENTS.md」。备份 `memory-backup-20261126`（370 项，含全部移出件）。
+
 ---
 
 ## 统计
 
 | 位置 | 文件数 |
 |------|--------|
-| 项目 memory（保留） | 364（含 MEMORY.md；内容文件 363） |
-| 全局记忆 global/ | 129 |
-| 归档 archive/ | 562（bug-fixes 338 + pitfalls 198 + methodology 4 + user-context 21 + README） |
-| **合计** | **1055** |
+| 项目 memory（保留） | 177（含 MEMORY.md；内容文件 176） |
+| 全局记忆 global/ | 309（根 129 + `from-mpvs-20261126/` 迁移 180） |
+| 归档 archive/ | 574（bug-fixes 350 + pitfalls 199 + methodology 4 + user-context 21）+ README |
+| **合计** | **1061** |
