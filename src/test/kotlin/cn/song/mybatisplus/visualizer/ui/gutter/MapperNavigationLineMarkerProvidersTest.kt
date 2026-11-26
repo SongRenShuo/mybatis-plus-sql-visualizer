@@ -441,6 +441,50 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         assertEquals("跳转 tooltip 不变", MpSqlVisualizerBundle.message("gutter.mapperMethod.tooltip"), all[1].lineMarkerTooltip)
     }
 
+    /**
+     * T-MapperPreviewOrder 决定判据：**平台按 Alignment 分列**（`processIconsRowForY` 先排满
+     * LEFT 再排 CENTER），所以「预览恒在跳转左侧」等价于「预览 = LEFT 且跳转 = CENTER」。
+     * 这条不再依赖收集顺序/offset/daemon 复用，是唯一机制层保证。
+     */
+    fun testJavaMethodPreviewAlignmentIsLeftAndNavIsCenter() {
+        val java = addMapper()
+        addXml("  <select id=\"count\">SELECT 1</select>")
+        val leaves = methodNameLeaves(java).filter { it.text == "count" }
+        val preview = collectFor(previewProvider, leaves).single()
+        val nav = collectFor(javaProvider, leaves).single()
+        assertEquals(
+            "预览必须用 Alignment.LEFT——平台先从左排 LEFT、再把 CENTER 整体排其右侧",
+            com.intellij.openapi.editor.markup.GutterIconRenderer.Alignment.LEFT,
+            preview.createGutterRenderer()!!.alignment,
+        )
+        assertEquals(
+            "跳转箭头保持 CENTER（排在 LEFT 右侧）",
+            com.intellij.openapi.editor.markup.GutterIconRenderer.Alignment.CENTER,
+            nav.createGutterRenderer()!!.alignment,
+        )
+    }
+
+    fun testJavaMethodPreviewAnchorOffsetLessThanName() {
+        val java = addMapper()
+        addXml("  <select id=\"count\">SELECT 1</select>")
+        val nameLeaf = methodNameLeaves(java).first { it.text == "count" }
+        val ms = collectFor(previewProvider, listOf(nameLeaf))
+        assertEquals("count 方法行应产出一枚预览图标", 1, ms.size)
+        val previewEl = ms.single().element!!
+        assertTrue(
+            "预览锚点必须比方法名 offset 更小——gutter 同 offset 的先后受 daemon 增量复用影响会翻转，" +
+                "小 offset 恒排在跳转箭头左侧（preview=${previewEl.textRange.startOffset} " +
+                "name=${nameLeaf.textRange.startOffset}）",
+            previewEl.textRange.startOffset < nameLeaf.textRange.startOffset,
+        )
+        val document = java.viewProvider.document!!
+        assertEquals(
+            "预览锚点必须与方法名同行（跨行会变成两行各一枚图标）",
+            document.getLineNumber(nameLeaf.textRange.startOffset),
+            document.getLineNumber(previewEl.textRange.startOffset),
+        )
+    }
+
     fun testJavaMethodPreviewMarkerAbsentWithoutXml() {
         val java = addMapper()
         assertEmpty("无 XML 语句的方法行不得出预览图标（不出点了必空的入口）", collectFor(previewProvider, methodNameLeaves(java)))

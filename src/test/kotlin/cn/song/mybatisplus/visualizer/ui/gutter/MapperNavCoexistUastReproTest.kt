@@ -206,7 +206,10 @@ class MapperNavCoexistUastReproTest : BasePlatformTestCase() {
         }
         return result.filter { info ->
             val el = info.element
-            el is PsiIdentifier && (el.parent as? PsiMethod)?.nameIdentifier === el
+            // T-MapperPreviewOrder：预览图标的锚点是「方法名同行前一叶」（offset 小一档），
+            // 不再落在方法名 leaf 上——按 tooltip 单独保留，避免该行预览被过滤掉。
+            (el is PsiIdentifier && (el.parent as? PsiMethod)?.nameIdentifier === el) ||
+                info.lineMarkerTooltip == MpSqlVisualizerBundle.message("gutter.mapperMethodPreview.tooltip")
         }
     }
 
