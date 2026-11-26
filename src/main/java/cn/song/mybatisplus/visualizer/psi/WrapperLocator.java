@@ -43,9 +43,12 @@ import kotlin.Pair;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
+import java.util.WeakHashMap;
 
 /**
  * Wrapper 定位器（M1-02，F-01 入口）：从光标所在元素定位 Wrapper 调用链。
@@ -175,7 +178,7 @@ public final class WrapperLocator {
         PsiExpression headQualifier = chainHead.getMethodExpression().getQualifierExpression();
         if (headQualifier instanceof PsiNewExpression) {
             PsiNewExpression newExpr = (PsiNewExpression) headQualifier;
-            if (detectWrapperType(newExpr.getType()) != null) {
+            if (detectWrapperTypeDeep(newExpr.getType()) != null) {
                 return buildChainFromNew(newExpr, resolveVariables, anchor, preferredConsumption);
             }
             return null;
@@ -192,7 +195,7 @@ public final class WrapperLocator {
      */
     public static boolean isChainHeadCall(PsiMethodCallExpression call) {
         PsiExpression qualifier = call.getMethodExpression().getQualifierExpression();
-        return (qualifier instanceof PsiNewExpression && detectWrapperType(qualifier.getType()) != null)
+        return (qualifier instanceof PsiNewExpression && detectWrapperTypeDeep(qualifier.getType()) != null)
             || isWrapperFactoryCall(call);
     }
 
@@ -200,7 +203,7 @@ public final class WrapperLocator {
     private static WrapperType wrapperTypeOfChainHead(PsiMethodCallExpression call) {
         PsiExpression qualifier = call.getMethodExpression().getQualifierExpression();
         if (qualifier instanceof PsiNewExpression) {
-            return detectWrapperType(qualifier.getType());
+            return detectWrapperTypeDeep(qualifier.getType());
         }
         if (isWrapperFactoryCall(call)) return factoryWrapperType(call);
         return null;
@@ -216,7 +219,33 @@ public final class WrapperLocator {
      * 否则 {@code redisTemplate.delete(null)} / {@code list.remove(0)} 会进候选列表。
      */
     public static boolean isSqlCandidate(PsiMethodCallExpression call) {
-        return isChainHeadCall(call) || BatchOperationConverter.isBatchOperationCall(call);
+        return isChainHeadCall(call) || BatchOperationConverter.isBatchOperationCall(call)
+            || isMpjJoinConsumerCall(call);
+    }
+
+    /**
+     * D256 M2：MPJ join 消费族方法名（{@code JoinMapper} / {@code MPJBaseService} 与自研 Service 封装的同名转发）。
+     *
+     * <p>这批名字<b>不进</b> {@link BatchOperationConverter} 的批量注册表——批量 SELECT 模板会拿首参
+     * {@code XxxDTO.class} 当实体、产出 {@code WHERE id IN (?, ?, ...)} 的错误 SQL（M3 守卫兜底）；
+     * 它们的 SQL 由 wrapper 链路径渲染，本集合只用于<b>锚点/候选入口</b>。
+     * {@code selectJoinMaps} / {@code selectJoinMapsPage} 已在批量注册表且既有独立锚点契约，不在此列。</p>
+     */
+    public static final Set<String> MPJ_JOIN_CONSUMER_METHOD_NAMES =
+        Set.of("selectJoinList", "selectJoinOne", "selectJoinMap", "selectJoinCount");
+
+    /**
+     * D256 M2：调用是否为 MPJ join 消费入口（锚点 / 选择区候选共用同一判定）。
+     *
+     * <p>三道门：方法名在 {@link #MPJ_JOIN_CONSUMER_METHOD_NAMES}、实参非空（无实参没有 SQL 可预览）、
+     * receiver 属 MP Service/Mapper 家族（复用 {@link BatchOperationConverter#hasMpCrudReceiver}，
+     * 普通类同名方法不亮）。</p>
+     */
+    public static boolean isMpjJoinConsumerCall(PsiMethodCallExpression call) {
+        String name = call.getMethodExpression().getReferenceName();
+        if (name == null || !MPJ_JOIN_CONSUMER_METHOD_NAMES.contains(name)) return false;
+        if (call.getArgumentList().getExpressions().length == 0) return false;
+        return BatchOperationConverter.hasMpCrudReceiver(call);
     }
 
     /**
@@ -386,7 +415,9 @@ public final class WrapperLocator {
      * （文本匹配 + initializer 链首回溯，无 resolve），符合 M10 性能红线。</p>
      */
     public static boolean isWrapperVariable(PsiVariable variable) {
-        if (detectWrapperType(variable.getType()) != null) return true;
+        // T-ServiceJoinWrapperPreview（D256 M1）：自研 Wrapper 子类（声明类型不在浅层白名单）走父链识别。
+        // 名字前门 + 类级缓存见 {@link #detectWrapperTypeDeep}（gutter 热路径性能口径与 BATCH_CHAIN_COLLISION 例外同源）。
+        if (detectWrapperTypeDeep(variable.getType()) != null) return true;
         // var 声明的语法判定走 typeElement 文本（不依赖 getType() 推断成败，O(1) 纯文本）；
         // var 仅限局部变量，字段/形参不可能命中
         if (variable instanceof PsiLocalVariable) {
@@ -396,8 +427,15 @@ public final class WrapperLocator {
             }
         }
         String typeName = variable.getType() instanceof PsiClassType ? ((PsiClassType) variable.getType()).getClassName() : null;
-        if (typeName == null || !WRAPPER_BASE_TYPE_NAMES.contains(typeName)) return false;
-        return detectWrapperTypeFromInitializer(variable.getInitializer()) != null;
+        if (typeName != null && WRAPPER_BASE_TYPE_NAMES.contains(typeName)) {
+            return detectWrapperTypeFromInitializer(variable.getInitializer()) != null;
+        }
+        // T-ServiceJoinWrapperPreview（D256 M1 规则 4）：名字像 Wrapper（`*Wrapper`/`*Join`/`*Chain`）
+        // 但父链完全接不到 MP/MPJ（内部复制改名库、依赖未索引）→ 用链方法启发兜底。
+        // 只在名字前门命中后执行，普通类型零成本。
+        if (typeName == null) return false;
+        if (looksLikeWrapperName(typeName)) return wrapperTypeFromChainMethods(variable) != null;
+        return false;
     }
 
     /**
@@ -417,7 +455,7 @@ public final class WrapperLocator {
             expr = lastCall.getMethodExpression().getQualifierExpression();
         }
         if (expr instanceof PsiNewExpression) {
-            return detectWrapperType(((PsiNewExpression) expr).getType());
+            return detectWrapperTypeDeep(((PsiNewExpression) expr).getType());
         }
         if (lastCall != null && isWrapperFactoryCall(lastCall)) {
             return factoryWrapperType(lastCall);
@@ -459,7 +497,7 @@ public final class WrapperLocator {
             expr = ((PsiMethodCallExpression) expr).getMethodExpression().getQualifierExpression();
         }
         if (expr instanceof PsiNewExpression) {
-            return detectWrapperType(((PsiNewExpression) expr).getType());
+            return detectWrapperTypeDeep(((PsiNewExpression) expr).getType());
         }
         if (expr instanceof PsiMethodCallExpression) {
             return factoryWrapperType((PsiMethodCallExpression) expr);
@@ -500,11 +538,11 @@ public final class WrapperLocator {
         // T-M29-03：扫锚点子树全部 new 表达式取<b>首个 wrapper 构造</b>（原 findChildOfType 只取第一个——
         // `selectPage(new Page<>(...), new LambdaQueryWrapper<>()...)` 的 Page 先于 wrapper 时漏检）
         for (PsiNewExpression newExpr : PsiTreeUtil.collectElementsOfType(anchor, PsiNewExpression.class)) {
-            if (detectWrapperType(newExpr.getType()) != null) return newExpr;
+            if (detectWrapperTypeDeep(newExpr.getType()) != null) return newExpr;
         }
         PsiElement current = anchor;
         while (current != null) {
-            if (current instanceof PsiNewExpression && detectWrapperType(((PsiNewExpression) current).getType()) != null) {
+            if (current instanceof PsiNewExpression && detectWrapperTypeDeep(((PsiNewExpression) current).getType()) != null) {
                 return (PsiNewExpression) current;
             }
             current = current.getParent();
@@ -531,7 +569,8 @@ public final class WrapperLocator {
      */
     private static LocatedWrapper buildChainFromNew(PsiNewExpression newExpr, boolean resolveVariables,
                                                     PsiElement anchor, ConsumptionKind preferredConsumption) {
-        WrapperType wrapperType = detectWrapperType(newExpr.getType());
+        // T-ServiceJoinWrapperPreview（D256 M1）：内联 new 的自研子类（`new CustomJoinWrapper<>()`）走父链识别
+        WrapperType wrapperType = detectWrapperTypeDeep(newExpr.getType());
         if (wrapperType == null) return null;
         // T-M20-03：`new MPJLambdaWrapper<>(userEntity)` 菱形 + 实体变量实参（无泛型实参，
         // entityInfoFromType 解析不到实体）时，从构造第一参表达式类型解析实体；
@@ -1208,9 +1247,12 @@ public final class WrapperLocator {
         PsiElement varTypeElement = variable instanceof PsiLocalVariable
             ? ((PsiLocalVariable) variable).getTypeElement() : null;
         boolean isVarDeclaration = varTypeElement != null && "var".equals(varTypeElement.getText());
-        WrapperType wrapperType = detectWrapperType(variable.getType());
+        // T-ServiceJoinWrapperPreview（D256 M1）：第一顺位走父链识别（自研 Wrapper 子类），后两顺位保持浅层
+        WrapperType wrapperType = detectWrapperTypeDeep(variable.getType());
         if (wrapperType == null) wrapperType = detectWrapperTypeFromInitializer(variable.getInitializer());
         if (wrapperType == null && isVarDeclaration) wrapperType = wrapperTypeFromInitializerChain(variable.getInitializer());
+        // D256 M1 规则 4：父链全断时的链方法启发（与 isWrapperVariable 同源）
+        if (wrapperType == null) wrapperType = wrapperTypeFromChainMethods(variable);
         if (wrapperType == null) return null;
         // O-8（缺陷 A）：var/推断形态声明类型不可识别 → 泛型实参解析不到实体，
         // 从 initializer 链头补实体解析（`var w = Wrappers.<Device>query()` 显式类型实参 /
@@ -2225,6 +2267,314 @@ public final class WrapperLocator {
             default: return null;
         }
     }
+
+    // ------------------------------------------------------------------
+    // T-ServiceJoinWrapperPreview（D256 M1）：Wrapper 类型父链识别
+    // ------------------------------------------------------------------
+
+    /** MPJ 官方包前缀——父链命中该族任何类型/接口即联表 wrapper（最强证据）。 */
+    private static final String MPJ_FQN_PREFIX = "com.github.yulichang.";
+
+    /** MyBatis-Plus 官方包前缀——父链命中共根基类/接口，确认 MP 家族后再细分。 */
+    private static final String MP_FQN_PREFIX = "com.baomidou.mybatisplus.";
+
+    /** 父链识别深度上限：F13 实测用户四层自研 + MPJ 基类链路为 0~6 跳，留一档余量。 */
+    private static final int WRAPPER_SUPER_CHAIN_MAX_DEPTH = 8;
+
+    /** 父链遍历节点上限（防御性：宽接口 / 异常 PSI 下避免遍历爆炸）。 */
+    private static final int WRAPPER_SUPER_CHAIN_MAX_NODES = 64;
+
+    /**
+     * 父链识别结果<b>类级缓存</b>：键 = resolve 后的 {@link PsiClass}。
+     *
+     * <p>用 {@link WeakHashMap} 而非项目级 / PSI 版本缓存：键随类 PSI 释放自动回收，改文件后旧
+     * {@code PsiClass} 实例被新实例取代、旧条目自然失效（L64 口径：反查类缓存别挂
+     * {@code PsiModificationTracker}；本链路的键本身就是 PSI 元素，失效随重建发生）。
+     * {@code WeakHashMap} 不保存 null 值，故用 {@link Optional} 包一层，使「确认不是 Wrapper」的否定结果
+     * 也能缓存（自研子类常见：名字像 Wrapper 但父链不接 MP/MPJ，每次重复 resolve 无意义）。</p>
+     */
+    private static final WeakHashMap<PsiClass, Optional<WrapperType>> WRAPPER_SUPER_CHAIN_CACHE = new WeakHashMap<>();
+    private static final Object WRAPPER_SUPER_CHAIN_CACHE_LOCK = new Object();
+
+    /**
+     * 父链 DFS 收集节点：祖先/接口的 canonicalText + 简单名（简单名可 null——resolve 失败时仍保留文本线索）。
+     *
+     * <p>原 Kotlin {@code Pair<String, String?>}；Java 侧落私有 record，字段名与语义一一对应
+     * （{@code canonical} 判 FQN 前缀、{@code simpleName} 判家族细分与接口同名组合）。</p>
+     */
+    private record SuperChainNode(String canonical, String simpleName) {
+    }
+
+    /**
+     * T-ServiceJoinWrapperPreview（D256 M1）：Wrapper 类型识别——先走浅层白名单
+     * （{@link #detectWrapperType}，命中时零额外成本），未命中时按<b>父链</b>识别，覆盖自研子类
+     * （{@code CustomJoinWrapper extends ... -> MPJLambdaWrapper}）。
+     *
+     * <p>性能红线（M10）：只有简单名以 {@code Wrapper} / {@code Join} / {@code Chain} 结尾才 resolve
+     * （O(1) 文本前门），其余类型直接返回 null——gutter / 预览每次判型都会经过这里，不能对任意类型做
+     * {@code resolve()}。与 {@link WrapperAnchorDetector} 的 {@code BATCH_CHAIN_COLLISION_NAMES}
+     * 例外同款口径：名字前门 + 类级缓存。</p>
+     *
+     * <p>接入范围：仅预览定位链路（{@link #buildChain} 三顺位、{@link #isWrapperVariable}、内联 new 判定）；
+     * {@link #detectWrapperType} 保持浅层语义，供补全 / 锚点快速路径复用。</p>
+     */
+    public static WrapperType detectWrapperTypeDeep(PsiType type) {
+        WrapperType shallow = detectWrapperType(type);
+        if (shallow != null) return shallow;
+        String className = type instanceof PsiClassType ? ((PsiClassType) type).getClassName() : null;
+        if (className == null || !looksLikeWrapperName(className)) return null;
+        try {
+            return wrapperTypeFromSuperChain(type);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    /** 名字前门：只对「像 Wrapper 的简单名」付出 resolve 成本（见 {@link #detectWrapperTypeDeep}）。 */
+    private static boolean looksLikeWrapperName(String simpleName) {
+        return simpleName.endsWith("Wrapper") || simpleName.endsWith("Join") || simpleName.endsWith("Chain");
+    }
+
+    /**
+     * 沿 {@code PsiClass.superTypes} 递归识别 Wrapper 家族（深度上限 {@link #WRAPPER_SUPER_CHAIN_MAX_DEPTH}）。
+     * {@code superTypes} 同时含 extends 类与 implements 接口，故「自研类继承自研抽象类、抽象类实现
+     * MPJ 接口」这类链路可见。resolve 失败按未命中处理（try/catch，索引未就绪不抛）。
+     * 结果按类缓存（含否定结果），见 {@link #WRAPPER_SUPER_CHAIN_CACHE}。
+     */
+    private static WrapperType wrapperTypeFromSuperChain(PsiType type) {
+        if (!(type instanceof PsiClassType classType)) return null;
+        PsiClass root = classType.resolve();
+        if (root == null) return null;
+        synchronized (WRAPPER_SUPER_CHAIN_CACHE_LOCK) {
+            Optional<WrapperType> cached = WRAPPER_SUPER_CHAIN_CACHE.get(root);
+            if (cached != null) return cached.orElse(null);
+        }
+        WrapperType result;
+        try {
+            result = classifySuperChain(root);
+        } catch (Throwable ignored) {
+            result = null;
+        }
+        synchronized (WRAPPER_SUPER_CHAIN_CACHE_LOCK) {
+            WRAPPER_SUPER_CHAIN_CACHE.put(root, Optional.ofNullable(result));
+        }
+        return result;
+    }
+
+    /**
+     * 收集 root 自身与全部祖先/接口（canonicalText + 简单名），按固定优先级判定：
+     * <ol>
+     *   <li>任一祖先/接口 canonicalText 以 {@code com.github.yulichang.} 开头 → {@link WrapperType#MPJ_LAMBDA}；</li>
+     *   <li>接口同名组合 {@code QueryJoin} + ({@code Chain} | {@code SelectWrapper} | {@code MPJBaseJoin}) → MPJ_LAMBDA
+     *       （复制改名内部库的兜底；单个 {@code Query} / {@code Chain} 属泛名，不认）；</li>
+     *   <li>命中 {@code com.baomidou.mybatisplus.} 的 {@code *Wrapper} / {@code *Abstract*} → MP 家族确认，细分：
+     *       链上有简单名含 {@code Join} → MPJ_LAMBDA；含 {@code Lambda} → {@link WrapperType#LAMBDA_QUERY}；
+     *       否则 {@link WrapperType#QUERY}；</li>
+     *   <li>全落空 → null。</li>
+     * </ol>
+     *
+     * <p>第 2 步先于第 3 步：用户自研最底层 {@code Wrapper}（F12/F14）若 {@code implements com.baomidou...Wrapper}，
+     * 仅按 MP 家族细分只能得到 QUERY，会丢掉联表语义；而 {@code QueryJoin} + {@code Chain}/{@code SelectWrapper}
+     * 组合是该内部库确认联表家族的更强证据。第 3 步细分按 {@code Join} 优先于 {@code Lambda}
+     * （用户链上 {@code AbstractLambdaJoinBaseWrapper} 两者都含，Join 才是家族信号）。</p>
+     */
+    private static WrapperType classifySuperChain(PsiClass root) {
+        List<SuperChainNode> ancestors = new ArrayList<>();
+        collectSuperChain(root, 0, new HashSet<>(), ancestors);
+        Set<String> simpleNames = new HashSet<>();
+        for (SuperChainNode node : ancestors) {
+            if (node.simpleName() != null) simpleNames.add(node.simpleName());
+        }
+        for (SuperChainNode node : ancestors) {
+            if (node.canonical().startsWith(MPJ_FQN_PREFIX)) return WrapperType.MPJ_LAMBDA;
+        }
+        boolean interfaceCombo = simpleNames.contains("QueryJoin")
+                && (simpleNames.contains("Chain")
+                    || simpleNames.contains("SelectWrapper")
+                    || simpleNames.contains("MPJBaseJoin"));
+        if (interfaceCombo) return WrapperType.MPJ_LAMBDA;
+        boolean hasMpFamily = false;
+        for (SuperChainNode node : ancestors) {
+            if (node.canonical().startsWith(MP_FQN_PREFIX)
+                    && node.simpleName() != null
+                    && (node.simpleName().contains("Wrapper") || node.simpleName().contains("Abstract"))) {
+                hasMpFamily = true;
+                break;
+            }
+        }
+        if (!hasMpFamily) return null;
+        for (String simple : simpleNames) {
+            if (simple.contains("Join")) return WrapperType.MPJ_LAMBDA;
+        }
+        for (String simple : simpleNames) {
+            if (simple.contains("Lambda")) return WrapperType.LAMBDA_QUERY;
+        }
+        return WrapperType.QUERY;
+    }
+
+    /**
+     * DFS 收集 root 及其祖先/接口（含 resolve 失败父类型的<b>文本</b> canonicalText / 简单名——
+     * 源码里的名字仍可为接口同名组合提供线索）。
+     *
+     * @param depth 当前节点深度（root = 0）；达到 {@link #WRAPPER_SUPER_CHAIN_MAX_DEPTH} 后不再展开
+     */
+    private static void collectSuperChain(
+            PsiClass clazz, int depth, Set<PsiClass> visited, List<SuperChainNode> out) {
+        if (visited.size() >= WRAPPER_SUPER_CHAIN_MAX_NODES) return;
+        if (!visited.add(clazz)) return;
+        String simpleName = clazz.getName();
+        String qualified;
+        try {
+            qualified = clazz.getQualifiedName();
+        } catch (Throwable ignored) {
+            qualified = null;
+        }
+        if (qualified == null) qualified = simpleName != null ? simpleName : "";
+        out.add(new SuperChainNode(qualified, simpleName));
+        if (depth >= WRAPPER_SUPER_CHAIN_MAX_DEPTH) return;
+        for (PsiType superType : clazz.getSuperTypes()) {
+            String canonical;
+            try {
+                canonical = superType.getCanonicalText();
+            } catch (Throwable ignored) {
+                canonical = null;
+            }
+            if (canonical != null) {
+                out.add(new SuperChainNode(canonical,
+                        superType instanceof PsiClassType ? ((PsiClassType) superType).getClassName() : null));
+            }
+            PsiClass resolved;
+            try {
+                resolved = superType instanceof PsiClassType superClassType ? superClassType.resolve() : null;
+            } catch (Throwable ignored) {
+                resolved = null;
+            }
+            if (resolved == null) continue;
+            collectSuperChain(resolved, depth + 1, visited, out);
+        }
+    }
+
+    /**
+     * D256 M1 规则 4：<b>链方法启发</b>——父链完全接不到 MP/MPJ（内部复制改名库、依赖未索引）时的最后兜底。
+     *
+     * <p>判据（严格，只在前置名字前门 {@code *Wrapper} / {@code *Join} / {@code *Chain} 命中后执行）：</p>
+     * <ul>
+     *   <li>链（<b>初始化表达式 + 变量引用上的分步调用</b>，如 {@code w = new X(); w.leftJoin(...)}）含任一联表方法
+     *       （{@code leftJoin}/{@code rightJoin}/{@code innerJoin}/{@code selectAs}/{@code selectCollection}/{@code on}）
+     *       → MPJ_LAMBDA；</li>
+     *   <li>否则链非空、<b>每个</b>方法名都在已知条件/结构方法集合内，且该变量被已知 MP 消费方法
+     *       （{@code selectList}/{@code list}/{@code page} 等，receiver 属 MP Service/Mapper 家族）引用 → LAMBDA_QUERY；</li>
+     *   <li>其它（链上有未知方法名 / 无消费引用）→ null，宁可不识别不可误判。</li>
+     * </ul>
+     *
+     * <p>成本：只在名字前门命中且父链失败的兜底路径执行；需要一次 {@code ReferencesSearch} 收集分步调用
+     * （用户现场 {@code w = new CustomJoinWrapper<>(); w.eq(...)} 的链在后续语句，只看 initializer 会漏）。
+     * 与 {@link WrapperAnchorDetector} 的 {@code BATCH_CHAIN_COLLISION_NAMES} 变量 resolve 同款文档化例外；
+     * 预览链路 {@link #buildChain} 本就要为同一变量做一次引用扫描，实际增量有限。</p>
+     */
+    private static WrapperType wrapperTypeFromChainMethods(PsiVariable variable) {
+        Set<String> methodNames = new HashSet<>();
+        // ① 初始化表达式内的链（`new X().eq(...)` / `Wrappers.lambdaQuery()...`）
+        PsiElement initializer = variable.getInitializer();
+        if (initializer != null) {
+            List<PsiMethodCallExpression> initCalls;
+            try {
+                initCalls = ArgResolver.collectChainFromInitializer(initializer);
+            } catch (Throwable ignored) {
+                initCalls = null;
+            }
+            if (initCalls != null) {
+                for (PsiMethodCallExpression call : initCalls) {
+                    String referenceName = call.getMethodExpression().getReferenceName();
+                    if (referenceName != null) methodNames.add(referenceName);
+                }
+            }
+        }
+        // ② 变量引用上的分步调用（`w.eq(...)` / `w.leftJoin(...)`）——现场主形态
+        try {
+            for (com.intellij.psi.PsiReference ref : ReferencesSearch.search(variable).findAll()) {
+                if (!(ref.getElement() instanceof PsiReferenceExpression refExpression)) continue;
+                PsiMethodCallExpression call = enclosingMethodCall(refExpression);
+                if (call == null) continue;
+                if (call.getMethodExpression().getQualifierExpression() != refExpression) continue;
+                String referenceName = call.getMethodExpression().getReferenceName();
+                if (referenceName != null) methodNames.add(referenceName);
+            }
+        } catch (Throwable ignored) {
+            // 索引未就绪 / PSI 已释放：按未命中处理（降级，不产出错误识别）
+        }
+        if (methodNames.isEmpty()) return null;
+        for (String name : methodNames) {
+            if (JOIN_CHAIN_METHOD_NAMES.contains(name)) return WrapperType.MPJ_LAMBDA;
+        }
+        for (String name : methodNames) {
+            if (!CONDITION_CHAIN_METHOD_NAMES.contains(name)) return null;
+        }
+        return isReferencedByMpConsumer(variable) ? WrapperType.LAMBDA_QUERY : null;
+    }
+
+    /**
+     * 向上取最近的 {@link PsiMethodCallExpression}（原 Kotlin
+     * {@code generateSequence(ref.parent){it.parent}.filterIsInstance<PsiMethodCallExpression>().firstOrNull()}）。
+     */
+    private static PsiMethodCallExpression enclosingMethodCall(PsiElement start) {
+        PsiElement cursor = start;
+        while (cursor != null) {
+            if (cursor instanceof PsiMethodCallExpression call) return call;
+            cursor = cursor.getParent();
+        }
+        return null;
+    }
+
+    /** 变量是否被已知 MP 消费方法引用（实参位置 + receiver 属 MP 家族）——规则 4 第二半的证据门。 */
+    private static boolean isReferencedByMpConsumer(PsiVariable variable) {
+        try {
+            for (com.intellij.psi.PsiReference ref : ReferencesSearch.search(variable).findAll()) {
+                if (!(ref.getElement() instanceof PsiReferenceExpression refExpression)) continue;
+                PsiMethodCallExpression call = consumerCallOf(refExpression);
+                if (call == null) continue;
+                String referenceName = call.getMethodExpression().getReferenceName();
+                if (referenceName != null && MP_CONSUMER_METHOD_NAMES.contains(referenceName)
+                        && BatchOperationConverter.hasMpCrudReceiver(call)) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /** 联表链方法（规则 4 第一判据）：出现任一即视为 MPJ 语义。 */
+    private static final Set<String> JOIN_CHAIN_METHOD_NAMES = Set.of(
+        "leftJoin", "rightJoin", "innerJoin", "fullJoin", "join",
+        "selectAs", "selectAsClass", "selectCollection", "selectAssociation", "on");
+
+    /**
+     * 已知条件 / 结构方法（规则 4 第二判据的闭集）：链上方法名全落此集合、且被 MP 消费方法引用，
+     * 才认作普通 lambda wrapper。<b>不做「未知方法也算」</b>——那是误判源头。
+     */
+    private static final Set<String> CONDITION_CHAIN_METHOD_NAMES = Set.of(
+        "eq", "ne", "gt", "ge", "lt", "le", "like", "notLike", "likeLeft", "likeRight",
+        "notLikeLeft", "notLikeRight", "in", "notIn", "between", "notBetween", "isNull", "isNotNull",
+        "orderBy", "orderByAsc", "orderByDesc", "groupBy", "having", "exists", "notExists",
+        "and", "or", "nested", "not", "func", "last", "set", "select", "selectAll", "distinct",
+        "selectCount", "selectSum", "selectMax", "selectMin", "selectAvg",
+        "eqSql", "gtSql", "geSql", "ltSql", "leSql", "inSql", "notInSql", "apply", "comment");
+
+    /**
+     * MP 消费方法（规则 4 第二判据的消费侧门）。
+     *
+     * <p>含 <b>MPJ join 消费族</b>（{@code selectJoin*}）：用户现场的 wrapper 只被
+     * {@code repository.selectJoinList(Dto.class, w)} 消费，漏掉这一族会让规则 4 在自研封装场景失效
+     * （D256 实施期实测：{@code WrapperTypeSuperChainTest} 绿而 {@code CustomWrapperServicePreviewTest} 四条红）。</p>
+     */
+    private static final Set<String> MP_CONSUMER_METHOD_NAMES = Set.of(
+        "selectList", "selectOne", "selectMaps", "selectObjs", "selectById", "selectCount", "selectPage",
+        "list", "listByIds", "getOne", "getById", "getOptById", "page", "one", "oneOpt", "count",
+        "remove", "delete", "update",
+        "selectJoinList", "selectJoinOne", "selectJoinMap", "selectJoinCount",
+        "selectJoinMaps", "selectJoinMapsPage", "selectJoinPage");
 
     /**
      * 从 Wrapper 泛型参数解析实体类：`LambdaQueryWrapper<DeviceInfoEntity>` → PsiClass。

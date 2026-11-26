@@ -6,6 +6,7 @@ import com.intellij.psi.PsiExpression;
 import com.intellij.psi.PsiIdentifier;
 import com.intellij.psi.PsiKeyword;
 import com.intellij.psi.PsiLambdaExpression;
+import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiMethodCallExpression;
 import com.intellij.psi.PsiNewExpression;
 import com.intellij.psi.PsiParameter;
@@ -104,12 +105,28 @@ public final class WrapperAnchorDetector {
                     && variable.getParent().getParent() instanceof PsiLambdaExpression) {
                 return null;
             }
-            if (WrapperLocator.detectWrapperType(variable.getType()) != null) return element;
+            // T-MapperPreviewDedup（2026-11-26 用户报障）：抽象/接口方法（无 body）的参数**不是链起点**。
+            // Mapper 接口里的 `@Param("ew") Wrapper<Order> ew` 只是 `${ew.customSqlSegment}` 占位符，
+            // 参数名上再出一枚 Wrapper 预览图标会与方法行的 SQL 预览图标同款同行（用户看到「图标重复」）。
+            // 有 body 的方法（实现类 / 接口 default 方法）参数仍可能是方法体内的链源，照旧锚定。
+            // O(1) 语法级（parent 链），零 resolve。
+            if (variable instanceof PsiParameter) {
+                PsiElement paramParent = variable.getParent();
+                PsiMethod owner = paramParent != null && paramParent.getParent() instanceof PsiMethod
+                        ? (PsiMethod) paramParent.getParent() : null;
+                if (owner != null && owner.getBody() == null) return null;
+            }
+            if (WrapperLocator.detectWrapperTypeDeep(variable.getType()) != null) return element;
             // 降级：变量用抽象基类型声明（`Wrapper<X> w = new LambdaQueryWrapper<X>()...`），
             // 初始化表达式链首是具体 wrapper 构造 / Wrappers 工厂 → 仍应标变量声明。
             // 仅限 Wrapper 基类型（T-M15-01 回归）：`long total = service.lambdaQuery()...` 的 total 不是锚点
             String typeName = variable.getType() instanceof PsiClassType ? ((PsiClassType) variable.getType()).getClassName() : null;
-            if (typeName == null || !WRAPPER_BASE_TYPE_NAMES.contains(typeName)) return null;
+            if (typeName == null || !WRAPPER_BASE_TYPE_NAMES.contains(typeName)) {
+                // D256 M1 规则 4：名字像 Wrapper（`*Wrapper`/`*Join`/`*Chain`）但父链接不到 MP/MPJ
+                // （内部复制改名库 / 依赖未索引）→ 与预览链路同一判定（isWrapperVariable 内含名字前门，
+                // 普通类型返回 false，不影响 `String`/`List` 等海量负例）
+                return typeName != null && WrapperLocator.isWrapperVariable(variable) ? element : null;
+            }
             PsiExpression init = variable.getInitializer();
             if (init == null) return null;
             return initializerHeadIsWrapper(init) ? element : null;
@@ -119,7 +136,7 @@ public final class WrapperAnchorDetector {
         if (element instanceof PsiKeyword && "new".equals(element.getText())) {
             if (!(element.getParent() instanceof PsiNewExpression)) return null;
             PsiNewExpression newExpr = (PsiNewExpression) element.getParent();
-            if (WrapperLocator.detectWrapperType(newExpr.getType()) == null) return null;
+            if (WrapperLocator.detectWrapperTypeDeep(newExpr.getType()) == null) return null;
             // 该 new 位于某 Wrapper 变量初始化表达式内（`w = new W()...`）→ 去重，只标变量声明
             return isInsideWrapperVariableInitializer(newExpr) ? null : element;
         }
@@ -197,6 +214,16 @@ public final class WrapperAnchorDetector {
                 }
                 // 该工厂/链调用位于某 Wrapper 变量初始化表达式内（`w = Wrappers.lambdaQuery()...`）→ 去重
                 return isInsideWrapperVariableInitializer(call) ? null : element;
+            }
+            // D256 M2：MPJ join 消费族调用行独立承载锚点（selectJoinList / One / Map / Count）。
+            // 必须**先于**场景 D：这几个名字不在批量注册表，落到后面会被 `return null` 挡掉；
+            // 且不能复用场景 D 的 `hasWrapperArgument` 让位（wrapper 实参必然存在，让位后永远不亮）。
+            // 判定单一来源：{@link WrapperLocator#isMpjJoinConsumerCall}（名字 + 实参非空 + MP receiver），
+            // 与选择区候选 {@code WrapperLocator.isSqlCandidate} 共用，保证「亮图标 ⟺ 能预览」。
+            if (ref.getParent() instanceof PsiMethodCallExpression) {
+                if (WrapperLocator.isMpjJoinConsumerCall((PsiMethodCallExpression) ref.getParent())) {
+                    return element;
+                }
             }
             // 场景 D：批量操作调用（`service.updateBatchById(list)` 等，F-15/M6）
             if (BatchOperationConverter.getBatchOperationMethodNames().contains(referenceName)) {
@@ -302,7 +329,7 @@ public final class WrapperAnchorDetector {
             return true;
         }
         if (expr instanceof PsiNewExpression) {
-            return WrapperLocator.detectWrapperType(((PsiNewExpression) expr).getType()) != null;
+            return WrapperLocator.detectWrapperTypeDeep(((PsiNewExpression) expr).getType()) != null;
         }
         if (expr instanceof PsiMethodCallExpression) {
             return WrapperLocator.WRAPPER_FACTORY_METHOD_NAMES
@@ -329,7 +356,7 @@ public final class WrapperAnchorDetector {
             if (arg instanceof PsiMethodCallExpression) {
                 if (initializerHeadIsWrapper(arg)) return true;
             } else if (arg instanceof PsiReferenceExpression) {
-                if (WrapperLocator.detectWrapperType(arg.getType()) != null) {
+                if (WrapperLocator.detectWrapperTypeDeep(arg.getType()) != null) {
                     return true;
                 }
                 PsiElement resolved;
