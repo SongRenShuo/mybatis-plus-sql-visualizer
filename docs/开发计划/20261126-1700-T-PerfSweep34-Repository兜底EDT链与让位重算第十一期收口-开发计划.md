@@ -185,7 +185,9 @@ D256 链方法启发缓存（调研报告 §4.5）列为**观察项不进本计�
 
 ### 未做项与理由
 
-- **券02 未新增结构守卫**：计划要求「反向验证：改回无参 `restart()` 守卫必红」，但 `refreshGutterLineMarkers` 的形态断言只能是源文本扫描，而 `restart(psi)` 与 `restart()` 的区别在实参上，用正则钉「回调里不得出现无参 restart」会误伤平台上其它合法无参调用形态（同文件范围内可控，但收益低）。本券的行为正确性靠「图标刷新效果不变」的真机验收；结构守卫留待 TE 若认为有必要再补。
+- **券02 结构守卫已补（`7d6359b`）**：初次实施时我以为「`restart(psi)` 与 `restart()` 的差别在实参上，正则钉无参会误伤平台其它合法调用」——这个理由只在**全文扫描**时成立。改为把 `refreshGutterLineMarkers` 的**方法体切片**出来判据（与 F36 的 `GutterProviderSingleLookupGuardTest` 同一手法）就不误伤了：该方法的唯一职责就是本次重算，里面出现无参 `restart()` 即为退回旧形态。守卫 `GutterYieldRefreshScopeGuardTest` 含三条判据 + 判据自证；反向验证确认会红。
+
+- **同笔自查修了一处真缺陷**：初次实现的 `PsiManager.findFile` 在 EDT 上裸调、缺读动作。仓内既有惯例（`ChooseDataSourceTakeover`、`DataSourceSelector`）都包 `ReadAction.compute`；裸调靠 EDT 恰好持读权限侥幸通过，平台加断言即为新的非法访问源。已包上。这类问题单测看不见、只在真机 log 暴露，与 L110 同型。
 - **真机读数全部未取**（§四 T0 四项）：本批为代码级实施，未起沙盒。券01 的 SlowOperations 前后对照、券02 的 Apply 墙钟、券03 的暖态 P50/P95 均待真机采样。
 
 ### 环境事故记录
