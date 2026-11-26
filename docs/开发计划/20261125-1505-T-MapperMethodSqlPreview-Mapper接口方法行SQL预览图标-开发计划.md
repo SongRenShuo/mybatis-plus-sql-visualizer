@@ -246,7 +246,7 @@ bundle 中英各加两键（`MpSqlVisualizerBundle.properties` / `_zh.properties
 
 ---
 
-## 九、实施记录（2026-11-25，分支 `mapper-method-preview`，工作树 `.worktrees/t-mapper-method-preview`；**未合并主分支**）
+## 九、实施记录（2026-11-25，分支 `mapper-method-preview`，工作树 `.worktrees/t-mapper-method-preview`；**已并入 master（`3960546a0`，2026-11-26）**；后续补齐快捷键 `3d6bb9b57`）
 
 ### 9.1 落地
 
@@ -276,6 +276,10 @@ bundle 中英各加两键（`MpSqlVisualizerBundle.properties` / `_zh.properties
 
 - 沙盒 GUI 目视验收（一行两枚图标的左右顺序、点击预览面板内容、让位开只留预览）未执行——当前平台缓存被占用、未启动 `runIde`；P-1/P-2 由单测钉住（同一 element 收集到 2 枚、预览在 `result[0]`），真机渲染待验收。
 - 多语句（`databaseId` 变体）选择器与 MP 内置 CRUD 预览仍按 §二 非目标搁置。
+
+### 9.6 后续补齐（2026-11-26）
+
+- 2026-11-26 补齐快捷键入口：`ConvertToSqlAction.tryMapperXmlMethodFallback`（`3d6bb9b57`），光标停 Mapper 接口方法上按 `Alt+Shift+Q` 走同一渲染链；单条直出、同名多方言变体弹 `SqlSelectionDialog`、无 XML 语句回落原有链。
 
 ### 9.6 补漏（2026-11-26，master）：预览快捷键接入
 
