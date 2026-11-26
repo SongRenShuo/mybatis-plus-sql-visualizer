@@ -10,9 +10,9 @@
 | --- | --- |
 | [Hibernate 和 Mybatis 哪家强？](https://www.zhihu.com/question/13394020029) | 2026-11-25 答 |
 | [有没有人知道 mybatis-plus,mybatis-flex,mybatis-mp 那个好用？](https://www.zhihu.com/question/12377739798) | 2026-11-24 答 |
-| [如何评价 MyBatis-Plus？](https://www.zhihu.com/question/279766037) | 2026-11-26 答 |
-| [以后 Spring Data JPA 和 mybatis 哪个会更流行？](https://www.zhihu.com/question/317183937) | 2026-11-26 答 |
-| [为什么 90% 的开发者放弃使用 Hibernate，而选择 MyBatis？](https://www.zhihu.com/question/532452772) | 2026-11-26 答 |
+| [如何评价 MyBatis-Plus？](https://www.zhihu.com/question/279766037) | 2026-11-26 答（150 答） |
+| [以后 Spring Data JPA 和 mybatis 哪个会更流行？](https://www.zhihu.com/question/317183937) | 2026-11-26 答（131 答） |
+| [为什么 90% 的开发者放弃使用 Hibernate，而选择 MyBatis？](https://www.zhihu.com/question/532452772) | 2026-11-26 答（144 答） |
 
 ## 二、值得答（按性价比排序）
 
