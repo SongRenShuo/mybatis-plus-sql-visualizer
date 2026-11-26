@@ -75,9 +75,89 @@ POSSIBILITY OF SUCH DAMAGE.
   插件经 `plugin.xml` 的 `<standardResource>` 把 iBatis 的 8 个 DOCTYPE 标识
   （4 个 systemId + 4 个 publicId）映射到这两份副本，使 iBatis 2 的 XML 在离线状态下可校验。
 
-## 5. 运行期平台依赖（不随包分发）
+## 5. PostgreSQL JDBC Driver 42.7.1（BSD 2-Clause）
+
+- 位置：随 OpenIDEA 侧引擎 jar（`sub-projects/engine-jar` 构建产物）自包含分发，用于 T5-5 真连库 EXPLAIN
+- 版权：Copyright (c) 1996-2024, PostgreSQL Global Development Group；Copyright (c) 1994, The Regents of the University of California
+- 来源：<https://jdbc.postgresql.org/>（Maven Central `org.postgresql:postgresql:42.7.1`），未修改
+- 许可：BSD 2-Clause（PostgreSQL License），全文如下
+
+```text
+PostgreSQL Database Management System
+(formerly known as Postgres, then as Postgres95)
+
+Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+Portions Copyright (c) 1994, The Regents of the University of California
+
+Permission to use, copy, modify, and distribute this software and its
+documentation for any purpose, without fee, and without a written agreement
+is hereby granted, provided that the above copyright notice and this
+paragraph and the following two paragraphs appear in all copies.
+
+IN NO EVENT SHALL THE UNIVERSITY OF CALIFORNIA BE LIABLE TO ANY PARTY FOR
+DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES, INCLUDING
+LOST PROFITS, ARISING OUT OF THE USE OF THIS SOFTWARE AND ITS
+DOCUMENTATION, EVEN IF THE UNIVERSITY OF CALIFORNIA HAS BEEN ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+
+THE UNIVERSITY OF CALIFORNIA SPECIFICALLY DISCLAIMS ANY WARRANTIES,
+INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS FOR A PARTICULAR PURPOSE. THE SOFTWARE PROVIDED HEREUNDER IS
+ON AN "AS IS" BASIS, AND THE UNIVERSITY OF CALIFORNIA HAS NO OBLIGATIONS TO
+PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
+```
+
+## 6. Microsoft JDBC Driver for SQL Server 12.4.2（MIT）
+
+- 位置：同上，随引擎 jar 自包含分发，用于 T5-5 真连库 EXPLAIN（`SET SHOWPLAN_XML ON`）
+- 版权：Copyright (c) Microsoft Corporation
+- 来源：<https://github.com/microsoft/mssql-jdbc>（Maven Central `com.microsoft.sqlserver:mssql-jdbc:12.4.2.jre11`），未修改
+- 许可：MIT，全文如下
+
+```text
+MIT License
+
+Copyright (c) Microsoft Corporation.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## 7. 运行期平台依赖（不随包分发）
 
 - IntelliJ Platform / IntelliJ IDEA：由宿主 IDE 提供，不在插件 zip 内。
+- openidea-plugin SDK：链接期依赖，不随包分发。
+
+## 8. Kotlin Standard Library 2.3.20（Apache License 2.0）
+
+- 位置：随 OpenIDEA 侧引擎 jar（`sub-projects/engine-jar` 构建产物 `mpsv-engine-<version>.jar`）自包含分发
+- 版权：Copyright 2010-2024 JetBrains s.r.o. and Kotlin Programming Language contributors
+- 来源：<https://github.com/JetBrains/kotlin>（Maven Central `org.jetbrains.kotlin:kotlin-stdlib:2.3.20`），未修改
+- 许可：Apache License 2.0，全文见本文件上方第 2/3 节同款条款（<https://www.apache.org/licenses/LICENSE-2.0>）
+- 为何需要（k2j 特有）：主插件 zip 内不需要 stdlib（平台捆绑），但 `mpsv-engine` 是**独立制品**。
+  k2j 生产 Java 树把 Kotlin 的值类型落成了真 `kotlin` 类型（`kotlin.Pair`、
+  `kotlin.jvm.functions.Function0`、`kotlin.text.Regex`，引擎保留集内 15 件），摘掉 stdlib 会导致
+  运行时 `NoClassDefFoundError`。实测 stdlib 2.3.20 jar 内 0 个 `intellij` 路径条目、0 个 class
+  常量池 `com/intellij` 命中，不破坏引擎的零平台渗透守卫。
+
+> 说明：`mpsv-engine` 自包含 jsqlparser 5.3 + PostgreSQL JDBC 42.7.1 + SQL Server JDBC 12.4.2 + stdlib，
+> 但**不在**插件 zip 内（独立制品，由 OpenIDEA 侧消费）。第 2/5/6 节描述的组件在两条通道上都出现，
+> 许可与版本同一，无需分列。
 
 ---
 

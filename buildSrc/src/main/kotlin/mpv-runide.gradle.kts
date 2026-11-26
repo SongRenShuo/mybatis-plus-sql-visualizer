@@ -1,3 +1,4 @@
+import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
 import org.gradle.process.CommandLineArgumentProvider
@@ -8,6 +9,20 @@ plugins {
 
 // T-BuildScriptSplit：开发沙盒分治——块级逐字搬运自根 build.gradle.kts（锚点 4c3e268），
 // 注释随迁；验收=任务注册点查 + 真机走查（runIde 噪音修复/runIdeHotSwap 热替换链路）。
+
+// T-TransformLockGuard（2026-11-26）：沙盒 IDE 的 JVM 工作目录就是平台首页，也就是
+// ~/.gradle/caches/<ver>/transforms/<hash>/transformed/ideaIU-*。它崩溃时 HotSpot 默认把
+// hs_err_pid<pid>.log 与 replay_pid<pid>.log 写进当前目录，等于往 Gradle 的 transform 输出里
+// 塞外来文件——Gradle 校验 transform 输出快照后会判其失效，下次查询 runtimeDirectory 时把整个
+// 目录删掉重解压；而此时主 IDE 的 Kotlin daemon、崩溃残留的 JPS javac worker 正占着 lib/*.jar，
+// 于是 "Unable to delete directory" 直接把 runIde 打死，而且报错点只是「查询 runtimeDirectory
+// 失败」，看不出与崩溃有关。
+// 把两类崩溃产物显式指到 build/hs-err/：崩溃不再污染 transform 输出，日志也留在工程内可查。
+// 实证链条（12:21 OOM 崩溃 → 缓存被污染 → 13:52 起沙盒锁死失败）见 docs/LESSONS.md L109。
+//
+// 注意：两个路径必须写成**各任务块内的局部 val**（下面 runIde / runIdeHotSwap 各一份），
+// 不能提到脚本顶层——预编译脚本的顶层 val 会变成脚本类字段，provider 闭包随之捕获脚本实例，
+// 配置缓存直接拒绝（实测报 "cannot serialize Gradle script object references"）。
 
 tasks {
     // T-M31.9：消除 runIde 启动日志的 RegionUrlMapper SecurityException: setContextClassLoader 噪音。
@@ -46,15 +61,59 @@ tasks {
             runCatching { pidFile.delete() }
         }
     }
+    // T-SandboxCacheHygiene：沙盒退出后收尾清缓存。两件事一起做，都交给
+    // dev-support/gradle-transform-doctor.ps1（唯一实现）：
+    //  ① 杀「父进程已死」的 JPS 外部 javac worker——沙盒 IDE 退出后它们会残留，一直占着
+    //     transforms 里平台首页的 lib/*.jar（2026-11-26 实测：沙盒关掉后仍留 4 个在锁）。
+    //  ② 被 JVM 崩溃产物（hs_err/replay）污染、或解压不完整的平台 transform 目录改名挪开，
+    //     Gradle 下次自动重解压。
+    // 为什么不用 Java 侧判定：实测本机 ProcessHandle.Info.commandLine() 对所有进程返回空
+    //（连 Gradle daemon 自己都是 cmdLen=0），拿不到命令行就认不出谁是 javac worker；
+    // 进程身份只能取 WMI。
+    // 只收尾不报错：清理失败记 WARN，不让它把 runIde 的退出码带坏。
+    register("sandboxCacheHygiene") {
+        group = "intellij platform"
+        description = "Kill JPS javac workers orphaned by a closed runIde sandbox and clear polluted platform transform dirs."
+        val doctor = rootProject.file("dev-support/gradle-transform-doctor.ps1")
+        val hygieneLog = layout.buildDirectory.file("sandbox-hygiene.log").get().asFile
+        doLast {
+            if (!doctor.isFile) {
+                logger.warn("sandboxCacheHygiene: $doctor not found - skipped")
+                return@doLast
+            }
+            // 干净检出（build/ 尚未生成）时重定向目标目录可能不存在
+            hygieneLog.parentFile?.mkdirs()
+            val process = ProcessBuilder(
+                "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", doctor.absolutePath, "-Fix"
+            ).redirectErrorStream(true).redirectOutput(hygieneLog).start()
+            val rc = runCatching { process.waitFor() }.getOrElse { -1 }
+            if (rc == 0) logger.lifecycle("sandbox cache hygiene done (log: $hygieneLog)")
+            else logger.warn("sandbox cache hygiene exited with $rc (log: $hygieneLog)")
+        }
+    }
     runIde {
         autoReload = true
         dependsOn(plainFjpfJar)
+        // 沙盒一退出（正常退出/崩溃/任务失败三条出口）就收尾清缓存，见 T-SandboxCacheHygiene。
+        finalizedBy("sandboxCacheHygiene")
         classpath += files(layout.buildDirectory.file("plain-fjpf/plain-fjpf.jar"))
         jvmArgumentProviders.add(CommandLineArgumentProvider {
             listOf(
                 "-Djava.util.concurrent.ForkJoinPool.common.threadFactory=" +
                     "cn.song.mybatisplus.visualizer.support.PlainForkJoinWorkerThreadFactory"
             )
+        })
+        // 崩溃日志改道 build/hs-err（T-TransformLockGuard）：局部 val，配置缓存安全；
+        // mkdirs 放在执行期求值，配置缓存命中后 build/ 被清也能就地补建。
+        val crashLogDir = layout.buildDirectory.dir("hs-err").get().asFile
+        val crashLogArgs = listOf(
+            "-XX:ErrorFile=" + File(crashLogDir, "hs_err_pid%p.log").absolutePath,
+            "-XX:ReplayDataFile=" + File(crashLogDir, "replay_pid%p.log").absolutePath
+        )
+        jvmArgumentProviders.add(CommandLineArgumentProvider {
+            crashLogDir.mkdirs()
+            crashLogArgs
         })
         // 录制沙盒的许可补丁（本机 IDEA Ultimate 靠 javaagent 绕过签名校验）。
         // 两点事实（2026-10-25 实测，见 docs/经验总结/20261025-0830-…）：
@@ -112,6 +171,16 @@ intellijPlatformTesting {
                             "cn.song.mybatisplus.visualizer.support.PlainForkJoinWorkerThreadFactory"
                     )
                 })
+                // 崩溃日志改道 build/hs-err（T-TransformLockGuard，与开发沙盒同一口径）
+                val crashLogDir = layout.buildDirectory.dir("hs-err").get().asFile
+                val crashLogArgs = listOf(
+                    "-XX:ErrorFile=" + File(crashLogDir, "hs_err_pid%p.log").absolutePath,
+                    "-XX:ReplayDataFile=" + File(crashLogDir, "replay_pid%p.log").absolutePath
+                )
+                jvmArgumentProviders.add(CommandLineArgumentProvider {
+                    crashLogDir.mkdirs()
+                    crashLogArgs
+                })
                 // 清单 URL 转发必须在执行期读（jvmArgumentProviders 每次执行求值）——配置期
                 // System.getProperty 会被配置缓存冻结：首次无 -D 的运行存下空配置，后续带
                 // -D 的运行不再转发（实证：11:21 会话 URL 已转发系旧路径，CC 风险仍在）
@@ -161,6 +230,8 @@ intellijPlatformTesting {
                     throw GradleException("hotswap server not listening on $port within 20s — see $logFile")
                 }
                 finalizedBy("hotswapServerStop")
+                // 与开发沙盒同口径收尾清缓存（T-SandboxCacheHygiene）
+                finalizedBy("sandboxCacheHygiene")
             }
         }
     }
