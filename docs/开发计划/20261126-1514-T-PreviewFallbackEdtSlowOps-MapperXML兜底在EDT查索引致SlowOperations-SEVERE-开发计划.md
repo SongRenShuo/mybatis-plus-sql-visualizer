@@ -123,7 +123,7 @@ SqlPreviewService.previewAsync(project, {
 
 ---
 
-## 八、实施记录（2026-11-26，master）
+## 八、实施记录（2026-11-26，master，提交 `c5685aee8`）
 
 ### 8.1 落地
 

@@ -11,6 +11,7 @@
 - **方法行两枚图标固定为「预览在左、跳转在右」（T-MapperPreviewOrder，`031fb9089`）**：此前预览与跳转在同一个 provider 里产出，首次渲染时偶发「预览在右、过一会跳到左边」，与 XML 语句行的稳定顺序不一致。现在预览图标单独成 provider 并注册在跳转之前——平台慢趟按 provider 顺序收集，同行左右序因此固定，和 XML 侧（预览 provider 在前、跳转 provider 在后）完全同构。功能与图标样式不变。
 - **Mapper 接口方法的 Wrapper 参数不再多出一枚预览图标（T-MapperPreviewDedupAndAnnotationShortcut，`0263bf788`）**：`List<Order> selectByXxx(@Param("ew") Wrapper<Order> ew)` 这种签名里，参数名上曾经也出 Wrapper 预览图标，与方法行的 SQL 预览图标同款同行，看着像「图标重复」。参数在无方法体的接口/抽象方法里只是 `${ew.customSqlSegment}` 占位符、不是可预览的链起点，现在不标；实现类与接口 `default` 方法（有 body）的参数照旧。
 - **注解 SQL 的快捷键按方法定位，不再弹全文件列表（T-MapperPreviewDedupAndAnnotationShortcut，`0263bf788`）**：光标停在 `int createDemoTable();` 这类方法声明行（注解在上一行）时按 `Alt+Shift+Q`，此前会列出整个文件的注解 SQL 让人挑；现在直接预览该方法自己的 `@Select`/`@Update` 等注解 SQL。光标在类体空白处时仍保留文件级列表兜底。
+- **Mapper 接口方法上按快捷键预览时不再在 EDT 查索引（T-PreviewFallbackEdtSlowOps，`c5685aee8`）**：`Alt+Shift+Q` 落在 Mapper 接口方法、且 Wrapper 链没有命中时，兜底要按 namespace 找同名 XML 语句，这步原先跑在 UI 线程（EDT）的预览回调里——`idea.log` 每次留两条 `SEVERE Slow operations ... Plugin to blame: MyBatis SQL Visualizer`，索引要追平时界面还会卡一下。现在锚点解析放回后台线程的读动作里完成，回调只做分发与渲染；预览行为不变（单条直接出、多方言 `databaseId` 变体仍弹选择器）。
 
 ## [2026.11.26-beta.2] - 2026-11-26
 

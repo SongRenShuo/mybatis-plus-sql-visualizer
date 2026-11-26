@@ -1404,6 +1404,16 @@ runIde——每次重试都再删一遍，把目录删得更残，原本 `unzip 
 
 **Seen 1× (2026-11-26)**
 
+### L110 预览回调（EDT）只许渲染：索引/PSI 解析一律在 `previewAsync` 的 compute 块预解析
+
+**规则**：`SqlPreviewService.previewAsync(project, compute) { onResult }` 的 `onResult` 在 EDT 上执行，只能分发与渲染；凡走 `FileBasedIndex`（含自定义索引，如 `MapperNamespaceIndex`）/ `ProjectFileIndex` / VFS 下沉的解析，一律挪进 `compute` 块预解析、用 holder 传给回调——「顺手查一下」也不行。
+
+**证据**：2026-11-26 真机 runIde 两条 `SEVERE - #c.i.u.SlowOperations`（`Plugin to blame: MyBatis SQL Visualizer version: 2026.11.26-beta.2`、`Last Action: cn.song.mybatisplus.visualizer.ConvertToSql`），栈 `ConvertToSqlAction.tryMapperXmlMethodFallback` → `MapperNavigationTargets.statementTagsFor` → `MapperNamespaceIndex.getMapperXmlFiles` → `FileBasedIndex.getContainingFiles`，入口是 `previewAsync$lambda$0$2`（`invokeLater`）。修复提交 `c5685aee8`（T-PreviewFallbackEdtSlowOps），结构守卫 `ConvertToSqlActionTest.testMapperXml兜底锚点解析不在EDT回调链`。
+
+**正例**：解析放进 compute 块，连 compute 抛错的异常分支也备料（否则「预览计算失败」时兜底档静默失效）；守卫钉「解析只出现在辅助函数里、回调消费预解析结果」。**反例**：看见 `previewAsync` 就以为整条链都在 BGT——它的回调设计上就在 EDT；单测与门禁都看不出来，只有真机 log 才暴露。
+
+**Seen 1× (2026-11-26)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
