@@ -2607,6 +2607,20 @@ public final class SqlPreviewService {
                                   @Nullable String sourceLocation,
                                   @Nullable cn.song.mybatisplus.visualizer.context.PreviewSourceContext sourceContext,
                                   boolean autoParseOnPaste) {
+        showResult(project, result, sourceLocation, sourceContext, autoParseOnPaste, null);
+    }
+
+    /**
+     * 全参形态（master 默认参展开 + 本轮新增 {@code sourceText}）。
+     *
+     * @param sourceText T-PreviewActionRow D-7：产出本次预览的原始文本（仅独立工作台开窗传）。
+     *                   面板展示的是渲染后的 SQL，缺 {@code <sql>} 片段要补齐必须用原文重解析；其余入口
+     *                   没有原文，传 null ⇒ 弹窗不挂补齐入口（不制造点了没反应的链接）。
+     */
+    public static void showResult(@NotNull Project project, @Nullable PreviewResult result,
+                                  @Nullable String sourceLocation,
+                                  @Nullable cn.song.mybatisplus.visualizer.context.PreviewSourceContext sourceContext,
+                                  boolean autoParseOnPaste, @Nullable String sourceText) {
         // T-PreviewFast P7：请求→弹窗耗时（第二段锚点；后续控制台可见由面板记）
         try {
             long req = lastPreviewRequestMs;
@@ -2648,7 +2662,8 @@ public final class SqlPreviewService {
                 }
             }
         }
-        SqlPreviewDialog dialog = new SqlPreviewDialog(project, result, sourceLocation, sourceContext, autoParseOnPaste);
+        SqlPreviewDialog dialog = new SqlPreviewDialog(project, result, sourceLocation, sourceContext,
+                autoParseOnPaste, sourceText);
         ACTIVE_PREVIEW_DIALOGS.put(project, new WeakReference<>(dialog));
         dialog.show();
     }

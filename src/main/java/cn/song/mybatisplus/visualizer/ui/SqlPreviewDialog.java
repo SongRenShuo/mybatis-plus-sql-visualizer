@@ -1,7 +1,14 @@
 package cn.song.mybatisplus.visualizer.ui;
 
 import cn.song.mybatisplus.visualizer.model.PreviewResult;
+import cn.song.mybatisplus.visualizer.ui.standalone.MissingFragmentFillFlow;
+import cn.song.mybatisplus.visualizer.ui.standalone.MissingSqlFragmentSupport;
+import cn.song.mybatisplus.visualizer.ui.standalone.StandaloneSqlSourceResolver;
+import cn.song.mybatisplus.visualizer.ui.standalone.StandaloneWarningText;
+import cn.song.mybatisplus.visualizer.util.FatalErrors;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
+import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.DialogWrapper;
 import com.intellij.openapi.util.Disposer;
@@ -12,6 +19,8 @@ import javax.swing.Action;
 import javax.swing.JComponent;
 import java.awt.Dimension;
 import java.awt.Toolkit;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * SQL 预览弹窗（M3-02，F-07 弹窗展示方式）。
@@ -46,6 +55,58 @@ public class SqlPreviewDialog extends DialogWrapper {
      */
     public Action[] actionsAtConstructionForTest = null;
 
+    /** T-PreviewActionRow D-7：产出本次预览的原始文本（null = 本入口无原文，不挂补齐入口）。 */
+    @Nullable
+    private final String sourceText;
+
+    /** master 主构造参数（Kotlin 属性初始化器里可用；Java 侧落字段供注入缝的默认实现读取）。 */
+    @Nullable
+    private final Project dialogProject;
+
+    /**
+     * T-PreviewActionRow D-6/D-7：本弹窗内补齐的片段（refid → 内容）。
+     *
+     * <p>存弹窗自己不存工作台：补完只影响<b>这个弹窗</b>的展示，不回写工作台输入区——用户手里那段
+     * 原文保持原样（与工作台同一语义：补齐不污染原文）。</p>
+     */
+    private final Map<String, String> fragmentOverrides = new LinkedHashMap<>();
+
+    /**
+     * 补齐内容来源（默认弹 {@code MissingFragmentDialog}；测试注入，避免 headless 弹模态框）。
+     *
+     * <p>K2J 注：<b>不得</b>写成字段初始化器 {@code = refid -> …(dialogProject, refid)}——lambda 引用
+     * 构造期才赋值的 blank final 会撞 javac 明确赋值分析（本仓在册坑，见 {@code draftTextProvider}
+     * 的方法引用注释）；改在构造器体内赋值。</p>
+     */
+    @NotNull
+    public java.util.function.Function<String, String> missingFragmentPrompt;
+
+    /**
+     * 最近一次「贴入即识别」用的原文（T-PreviewActionRow D-7）。
+     *
+     * <p>为什么单独存：识别成功后面板里是<b>渲染后的 SQL</b>，缺片段补齐要的却是贴进来那段原文；
+     * {@code draftTextProvider} 那时已经给出渲染结果，不能再用。贴入路径没有 {@code sourceText} 参数，
+     * 只能在这里记一手。</p>
+     */
+    @Nullable
+    private String lastSourceText = null;
+
+    /** 解析代次守卫：只应用最后一次请求的产物（贴入停手与手动操作竞态时保最后一次）。 */
+    private int resolveGeneration = 0;
+
+    /**
+     * 测试缝：替换「池线程计算 + invokeLater 回 EDT」的派发（默认 null = 生产形态）。
+     * 契约：计算完回调 {@code onDone} 恰一次（空文本/识别失败传 null，不回调则无回填）。用例注入
+     * 同步形态即可确定性驱动同一条链——先例＝{@code cn.song.mybatisplus.visualizer.util.EdtDispatch.invokeLaterOverride}。
+     */
+    public interface ResolveOffEdtDispatcher {
+        void dispatch(@NotNull java.util.function.Supplier<String> textSource,
+                      @NotNull java.util.function.Consumer<StandaloneSqlSourceResolver.Resolved> onDone);
+    }
+
+    @Nullable
+    public ResolveOffEdtDispatcher resolveOffEdtDispatcher = null;
+
     public SqlPreviewDialog(@Nullable Project project, @NotNull PreviewResult result) {
         this(project, result, null);
     }
@@ -69,12 +130,34 @@ public class SqlPreviewDialog extends DialogWrapper {
     public SqlPreviewDialog(@Nullable Project project, @NotNull PreviewResult result, @Nullable String sourceLocation,
                             @Nullable cn.song.mybatisplus.visualizer.context.PreviewSourceContext sourceContext,
                             boolean autoParseOnPaste) {
+        this(project, result, sourceLocation, sourceContext, autoParseOnPaste, null);
+    }
+
+    /**
+     * 全参形态（master 默认参展开 + 本轮新增 {@code sourceText}）。
+     *
+     * @param sourceText T-PreviewActionRow D-7：产出本次预览的<b>原始文本</b>（只有工作台开窗这条链传）。
+     *                   面板只拿得到渲染后的 SQL（include 已展开成 TODO 占位），缺片段要补齐就必须用原始
+     *                   XML 重解析。其余入口（gutter / 日志 / 历史 / 语句预览）没有原文可重解析，
+     *                   传 null ⇒ 弹窗不挂补齐入口，避免出现点了没反应的链接。
+     */
+    public SqlPreviewDialog(@Nullable Project project, @NotNull PreviewResult result, @Nullable String sourceLocation,
+                            @Nullable cn.song.mybatisplus.visualizer.context.PreviewSourceContext sourceContext,
+                            boolean autoParseOnPaste, @Nullable String sourceText) {
         super(project, false, DialogWrapper.IdeModalityType.MODELESS);
         this.panel = new SqlPreviewPanel(project);
+        this.dialogProject = project;
+        this.sourceText = sourceText;
+        this.missingFragmentPrompt = refid -> MissingFragmentFillFlow.promptViaDialog(project, refid);
         setTitle(MpSqlVisualizerBundle.message("dialog.preview.title"));
         panel.setSourceLocation(sourceLocation);
         panel.setSourceContext(sourceContext);
         SqlPreviewPanelResultViewKt.showResult(panel, result);
+        // T-PreviewActionRow D-7：注入补齐入口——有原文（工作台开窗 / 贴入即识别）才有得补；
+        // 其余入口（gutter / 日志 / 历史 / 语句预览）拿不到原文，不注入 ⇒ 面板整行不显示。
+        if (sourceText != null || autoParseOnPaste) {
+            panel.setMissingFragmentFillHandler(this::fillMissingFragment);
+        }
         Disposer.register(getDisposable(), panel);
         panel.onClosePanelRequested = this::dispose;
         panel.setMinimumSize(new Dimension(MIN_WIDTH, MIN_HEIGHT));
@@ -122,9 +205,6 @@ public class SqlPreviewDialog extends DialogWrapper {
 
     /** 文本连续未变化的轮询次数（达到 {@link #PASTE_REPARSE_STABLE_TICKS} 即视为停手）。 */
     private int stableTicks = 0;
-
-    /** 面板自身写文档期间抑制（{@code SqlPreviewPanel.showResult} 会重写编辑器全文）。 */
-    private boolean suppressPasteReparse = false;
 
     /**
      * 草稿文本来源（测试缝：headless 下弹窗编辑器可能还没建出来，
@@ -209,15 +289,10 @@ public class SqlPreviewDialog extends DialogWrapper {
         if (!pasteReparseArmed) return;
         String text = draftTextProvider.get();
         if (text == null || text.isBlank()) return;
-        PreviewResult fresh = resolveFreshFromText(text);
-        if (fresh == null) return;
-        stopPasteReparse();
-        suppressPasteReparse = true;
-        try {
-            SqlPreviewPanelResultViewKt.showResult(panel, fresh);
-        } finally {
-            suppressPasteReparse = false;
-        }
+        // T-PreviewActionRow D-7：记一手原文——识别成功后草稿文本变成渲染结果，
+        // 缺片段补齐要的还是「贴进来那段」，只能在这里留底
+        lastSourceText = text;
+        resolveOffEdt(() -> text, this::applyResolvedAsFresh);
     }
 
     /** 测试访问器：是否仍待命。 */
@@ -226,61 +301,96 @@ public class SqlPreviewDialog extends DialogWrapper {
     }
 
     /**
-     * T-DialogPickFile：选一个 mapper XML 文件直接载入并识别。
+     * T-PreviewActionRow D-6/D-7：补齐一个缺失片段 → 用原文重解析 → 就地回填面板。
      *
-     * <p>与「粘贴」走同一条识别链（{@link cn.song.mybatisplus.visualizer.ui.standalone.StandaloneSqlSourceResolver}）——
-     * 选文件只是换了个取文本的入口，不存在第二条口径。载入后立即交还手动（不会再被自动重解析改写）。</p>
+     * <p>不重开弹窗：用户是在结果区看到 TODO 占位后点进来补的，补完应该当场看到展开后的 SQL。
+     * 先停待命：计时器若还在跑，会拿旧草稿再覆盖一次刚补好的结果。</p>
+     *
+     * <p>解析同样走 {@link #resolveOffEdt}（T-PerfSweep33 券01 的唯一出口）：补进来的是整段 mapper，
+     * DOM 解析在 100k 上限下最坏数百毫秒，不能停在 EDT。</p>
      */
-    private void loadFileIntoPreview() {
-        Project proj = panel.project;
-        if (proj == null) return;
-        com.intellij.openapi.fileChooser.FileChooserDescriptor descriptor =
-                com.intellij.openapi.fileChooser.FileChooserDescriptorFactory.createSingleFileDescriptor("xml")
-                        .withTitle(MpSqlVisualizerBundle.message("dialog.preview.loadFile.title"));
-        com.intellij.openapi.vfs.VirtualFile file =
-                com.intellij.openapi.fileChooser.FileChooser.chooseFile(descriptor, proj, null);
-        if (file == null) return;
-        String text = null;
-        try {
-            // 243 编译目标：ReadAction.compute(ThrowableComputable) 仅此重载
-            text = com.intellij.openapi.application.ReadAction.compute(
-                    (com.intellij.openapi.util.ThrowableComputable<String, Throwable>) () ->
-                            com.intellij.openapi.vfs.VfsUtilCore.loadText(file));
-        } catch (Throwable ignored) {
-            // 取文本失败按「没有内容」处理
-        }
-        if (text == null || text.isBlank()) return;
-        reparseText(text);
-    }
-
-    /** 直给文本走一次识别并回填面板（选文件路径用；不依赖待命态）。 */
-    public void reparseText(String text) {
-        PreviewResult fresh = resolveFreshFromText(text);
-        if (fresh == null) return;
+    private void fillMissingFragment(String refid) {
+        String source = sourceText != null ? sourceText : lastSourceText;
+        if (source == null) return;
+        String content = missingFragmentPrompt.apply(refid);
+        if (!MissingFragmentFillFlow.record(refid, content, fragmentOverrides)) return;
         stopPasteReparse();
-        suppressPasteReparse = true;
-        try {
-            SqlPreviewPanelResultViewKt.showResult(panel, fresh);
-        } finally {
-            suppressPasteReparse = false;
+        String finalSource = source;
+        resolveOffEdt(() -> MissingSqlFragmentSupport.withFragments(finalSource, fragmentOverrides),
+                this::applyResolvedAsFresh);
+    }
+
+    /** 测试缝：触发一次补齐（等价点击面板提示行；内容由 {@link #missingFragmentPrompt} 提供）。 */
+    public void fillMissingFragmentForTest(String refid) {
+        fillMissingFragment(refid);
+    }
+
+    /** 测试缝：提示行组件（派发真实点击覆盖监听接线）。 */
+    @Nullable
+    public javax.swing.JLabel missingFragmentLabelForTest() {
+        return panel.missingFragmentLabelForTest();
+    }
+
+    // ------------------------------------------------------------------
+    // T-PerfSweep33 券01：识别链挪池线程（性能分析第十期 §4.1）
+    // ------------------------------------------------------------------
+
+    /**
+     * 识别链后台化。{@code StandaloneSqlSourceResolver.resolve} 是纯文本链（零 PSI/索引；工作台页签同链
+     * 早已池线程化——SqlStandalonePreviewPanel），但最坏 8 次 DOM 解析、输入上限 100k 字符，
+     * EDT 直跑可停数百毫秒。代次守卫只应用最后一次请求；弹窗已释放时丢弃（迟到产物面）。
+     */
+    private void resolveOffEdt(@NotNull java.util.function.Supplier<String> textSource,
+                               @NotNull java.util.function.Consumer<StandaloneSqlSourceResolver.Resolved> applyOnEdt) {
+        int generation = ++resolveGeneration;
+        ResolveOffEdtDispatcher seam = resolveOffEdtDispatcher;
+        if (seam != null) {
+            seam.dispatch(textSource, resolved -> deliverResolved(generation, resolved, applyOnEdt));
+            return;
+        }
+        ApplicationManager app = ApplicationManager.getApplication();
+        app.executeOnPooledThread(() -> {
+            String text;
+            try {
+                text = textSource.get();
+            } catch (Throwable t) {
+                if (FatalErrors.isFatal(t)) throw (Error) t;
+                text = null;
+            }
+            StandaloneSqlSourceResolver.Resolved resolved = null;
+            if (text != null) {
+                try {
+                    resolved = StandaloneSqlSourceResolver.resolve(text);
+                } catch (Throwable t) {
+                    if (FatalErrors.isFatal(t)) throw (Error) t;
+                    resolved = null;
+                }
+            }
+            StandaloneSqlSourceResolver.Resolved delivered = resolved;
+            app.invokeLater(() -> deliverResolved(generation, delivered, applyOnEdt), ModalityState.nonModal());
+        });
+    }
+
+    /** 迟到产物闸：只应用最后一次请求；弹窗已释放时丢弃。 */
+    private void deliverResolved(int generation,
+                                 @Nullable StandaloneSqlSourceResolver.Resolved resolved,
+                                 @NotNull java.util.function.Consumer<StandaloneSqlSourceResolver.Resolved> applyOnEdt) {
+        if (isDisposed() || generation != resolveGeneration) return;
+        if (resolved != null) {
+            applyOnEdt.accept(resolved);
         }
     }
 
-    /** 识别文本 → 失败档换文案 → 预览产物（解析/构造失败返回 null，不抛穿）。 */
-    @Nullable
-    private PreviewResult resolveFreshFromText(String text) {
-        cn.song.mybatisplus.visualizer.ui.standalone.StandaloneSqlSourceResolver.Resolved resolved;
-        try {
-            resolved = cn.song.mybatisplus.visualizer.ui.standalone.StandaloneSqlSourceResolver.resolve(text);
-        } catch (Throwable t) {
-            return null;
-        }
-        if (resolved.failure() != null) {
-            return resolved.result().withWarning(
-                    cn.song.mybatisplus.visualizer.ui.standalone.StandaloneWarningText.failure(resolved.failure()),
-                    false);
-        }
-        return resolved.result();
+    /**
+     * 识别产物回填（失败文案同源 {@link StandaloneWarningText}）；命中后停轮询、交还手动——
+     * 不再自动解析，与用户后续编辑互不打架。
+     */
+    private void applyResolvedAsFresh(StandaloneSqlSourceResolver.Resolved resolved) {
+        PreviewResult fresh = resolved.failure() != null
+                ? resolved.result().withWarning(StandaloneWarningText.failure(resolved.failure()), false)
+                : resolved.result();
+        stopPasteReparse();
+        SqlPreviewPanelResultViewKt.showResult(panel, fresh);
     }
 
     @Override
@@ -312,13 +422,6 @@ public class SqlPreviewDialog extends DialogWrapper {
                     @Override
                     protected void doAction(java.awt.event.ActionEvent actionEvent) {
                         SqlPreviewPanelExecutionKt.executeSql(panel);
-                    }
-                },
-                // T-DialogPickFile：从工程里选一个 mapper XML 直接载入（比复制粘贴省事）
-                new DialogWrapperAction(MpSqlVisualizerBundle.message("dialog.preview.loadFile")) {
-                    @Override
-                    protected void doAction(java.awt.event.ActionEvent actionEvent) {
-                        loadFileIntoPreview();
                     }
                 },
                 new DialogWrapperAction(MpSqlVisualizerBundle.message("panel.copySql")) {

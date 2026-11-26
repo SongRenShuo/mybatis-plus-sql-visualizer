@@ -6,6 +6,7 @@ import cn.song.mybatisplus.visualizer.ui.SqlInputEditor;
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel;
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelExecutionKt;
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelResultViewKt;
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelSqlViewKt;
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService;
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter;
 import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons;
@@ -13,11 +14,13 @@ import cn.song.mybatisplus.visualizer.util.FatalErrors;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.actionSystem.ActionManager;
+import com.intellij.openapi.actionSystem.ActionPlaces;
 import com.intellij.openapi.actionSystem.ActionToolbar;
 import com.intellij.openapi.actionSystem.ActionUpdateThread;
 import com.intellij.openapi.actionSystem.AnAction;
 import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.actionSystem.CustomShortcutSet;
+import com.intellij.openapi.actionSystem.DataContext;
 import com.intellij.openapi.actionSystem.DefaultActionGroup;
 import com.intellij.openapi.actionSystem.KeyboardShortcut;
 import com.intellij.openapi.actionSystem.Shortcut;
@@ -29,18 +32,23 @@ import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.Splitter;
 import com.intellij.openapi.util.Disposer;
 import com.intellij.openapi.util.SystemInfo;
+import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.util.ui.JBUI;
 import com.intellij.util.ui.UIUtil;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import javax.swing.JButton;
 import javax.swing.JPanel;
 import javax.swing.KeyStroke;
 import java.awt.BorderLayout;
+import java.awt.FlowLayout;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
 /**
  * 独立 SQL 预览工作台（T-SqlPreviewStandalone D-2）：不依赖语句入口，用户粘贴一段
@@ -85,8 +93,17 @@ public class SqlStandalonePreviewPanel extends JPanel implements Disposable {
      */
     private final Map<String, String> fragmentOverrides = new LinkedHashMap<>();
 
-    /** 缺失片段提示行（有缺失才可见；点击进入补齐输入）。 */
-    private final JBLabel missingFragmentLabel = createMissingFragmentLabel();
+    /**
+     * 补齐内容来源（T-PreviewActionRow D-6）：默认弹 {@link MissingFragmentDialog}，测试可注入。
+     *
+     * <p>与 {@link MissingFragmentFillFlow#promptViaDialog} 同一实现——注入点只在「怎么问用户」，
+     * 「记进 overrides + 重解析」仍走真实链路。</p>
+     *
+     * <p>K2J 注：<b>不得</b>写成字段初始化器 {@code = refid -> …(project, refid)}——lambda 引用构造期
+     * 才赋值的 blank final {@code project} 会撞 javac 明确赋值分析；改在构造器体内赋值。</p>
+     */
+    @NotNull
+    public Function<String, String> missingFragmentPrompt;
 
     /** 内嵌预览面板（懒创建；Disposer 挂本面板，防双 Editor 常驻）。volatile：ExecuteAction 的 update 在 BGT 读（面板内执行入口同口径先例）。 */
     private volatile SqlPreviewPanel previewPanel;
@@ -97,6 +114,37 @@ public class SqlStandalonePreviewPanel extends JPanel implements Disposable {
     /** 代次守卫：晚到的后台解析结果触碰已过期/已清空的 UI（对齐 SqlToJavaPanel invalidateRequests）。 */
     private long resolveGeneration = 0L;
 
+    /**
+     * 当前输入来自哪个文件（T-LoadFilePlacement D-2）：非 null 时状态行带「已从 X 加载」，
+     * 用户再编辑输入 / 清空 / 换文件即失效。
+     *
+     * <p>为什么记状态而不是只弹一次提示：解析是异步的，加载后状态行会立刻被识别结果覆盖——
+     * 不挂住来源的话，用户看不到「我现在看的是文件里的内容」。</p>
+     */
+    @Nullable
+    private String loadedFileName = null;
+
+    /**
+     * 测试缝：替代真实文件选择框的「选文件」通道（headless 下不能弹 {@code FileChooser}）。
+     *
+     * <p>生产路径为 null → 走 {@link MapperFileLoader#chooseFile}（EDT 选文件）；用例注入一个真实
+     * {@code VirtualFile} 后驱动 {@link LoadFileAction} 的完整动作路径——选文件与读文件由此分离：
+     * 本缝只决定「选了哪个文件」，读文本仍走 {@link #loadTextInvoker}。</p>
+     */
+    @Nullable
+    public java.util.function.Supplier<VirtualFile> fileChooserForTest = null;
+
+    /**
+     * 测试缝：把「读文件文本」这一原语换成可观察的替身（校验读发生在后台线程 / 不该被读时抛错）。
+     *
+     * <p>生产默认 {@link MapperFileLoader#loadText}——读权限 IO，由 {@link LoadFileAction} 派到后台线程执行。</p>
+     */
+    @NotNull
+    public Function<VirtualFile, String> loadTextInvoker = MapperFileLoader::loadText;
+
+    /** 载入文件的代次守卫：晚到的后台读取结果不得触碰已清空/已释放/已被新一次加载取代的 UI。 */
+    private long loadFileGeneration = 0L;
+
     private boolean disposed = false;
 
     /** 解析预览动作实例（字段化：构造期就要注册组件级快捷键，不能每次建工具栏都新建一个）。 */
@@ -104,6 +152,43 @@ public class SqlStandalonePreviewPanel extends JPanel implements Disposable {
 
     /** 执行 SQL 动作实例（字段化同 {@code resolveAction} 先例；enable 随内嵌面板存亡翻转）。 */
     private final ExecuteAction executeAction = new ExecuteAction();
+
+    /** 复制 SQL（T-PreviewActionRow D-1）：页签里唯一的「取走产物」入口。 */
+    private final CopySqlAction copySqlAction = new CopySqlAction();
+
+    private final ClearAction clearAction = new ClearAction();
+
+    private final OpenInDialogAction openInDialogAction = new OpenInDialogAction();
+
+    /**
+     * 顶部工具栏（图标）：解析 / 格式化 / 从文件加载 / 清空 / 在弹框中打开。
+     *
+     * <p>T-PreviewActionRow 二轮（用户 2026-11-20 反馈「清空与在弹框中打开这两个按钮需要保留」）：
+     * 这两项回到顶部——它们是用户按位置记忆的「随时可用」操作；底部只留两个真正新增的产物出口
+     * （执行 SQL / 复制 SQL），同一动作不再两处重复。</p>
+     */
+    private final List<AnAction> inputActions = createInputActions();
+
+    /** 底部动作行（顺序即按钮顺序；enable 由 {@link #refreshBottomActions} 统一刷新）。 */
+    private final List<AnAction> bottomActions = List.of(executeAction, copySqlAction);
+
+    /** 底部按钮（与 {@link #bottomActions} 下标一一对应）。 */
+    private final List<JButton> bottomButtons = new ArrayList<>();
+
+    /** 底部主行动下标（顺序见 {@link #bottomActions}）：复制 SQL——与弹窗「复制 SQL 并关闭」同一取走口径。 */
+    private static final int PRIMARY_BOTTOM_INDEX = 1;
+
+    private List<AnAction> createInputActions() {
+        List<AnAction> actions = new ArrayList<>();
+        actions.add(resolveAction);
+        actions.add(new FormatAction());
+        // 读文件是**输入源**能力，只挂在有输入区的工作台上；通用预览弹窗
+        //（22 个文件 / 53 处调用点共用、只展示已渲染 SQL）不再拥有它。
+        actions.add(new LoadFileAction());
+        actions.add(clearAction);
+        actions.add(openInDialogAction);
+        return List.copyOf(actions);
+    }
 
     private static JBLabel paddedLabel(String text) {
         JBLabel label = new JBLabel(text);
@@ -117,24 +202,11 @@ public class SqlStandalonePreviewPanel extends JPanel implements Disposable {
         return label;
     }
 
-    private JBLabel createMissingFragmentLabel() {
-        JBLabel label = paddedLabel(" ");
-        label.setForeground(JBUI.CurrentTheme.Link.Foreground.ENABLED);
-        label.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
-        label.setVisible(false);
-        label.addMouseListener(new java.awt.event.MouseAdapter() {
-            @Override
-            public void mouseClicked(java.awt.event.MouseEvent e) {
-                promptMissingFragment();
-            }
-        });
-        return label;
-    }
-
     public SqlStandalonePreviewPanel(@NotNull Project project) {
         super(new BorderLayout());
         this.project = project;
         this.inputEditor = new SqlInputEditor(project, "");
+        this.missingFragmentPrompt = refid -> MissingFragmentFillFlow.promptViaDialog(project, refid);
         Disposer.register(this, inputEditor);
 
         JPanel inputPanel = new JPanel(new BorderLayout());
@@ -148,9 +220,9 @@ public class SqlStandalonePreviewPanel extends JPanel implements Disposable {
         splitter.setSecondComponent(previewHolder);
         splitter.setShowDividerControls(false);
         add(splitter, BorderLayout.CENTER);
-        // T-IncludePlaceholder：底部两行——缺失片段提示（有缺失才显示）+ 识别状态行
+        // T-PreviewActionRow：底部两行——产物动作行 + 识别状态行
         JPanel southHost = new JPanel(new BorderLayout());
-        southHost.add(missingFragmentLabel, BorderLayout.NORTH);
+        southHost.add(buildBottomActionRow(), BorderLayout.NORTH);
         southHost.add(statusLabel, BorderLayout.SOUTH);
         add(southHost, BorderLayout.SOUTH);
 
@@ -166,6 +238,8 @@ public class SqlStandalonePreviewPanel extends JPanel implements Disposable {
             @Override
             public void documentChanged(@NotNull DocumentEvent event) {
                 inputHintLabel.setVisible(inputEditor.getText().isBlank());
+                // 输入一变，「来自某个文件」的溯源就不再成立（载入后本字段会立刻重新赋值）
+                loadedFileName = null;
             }
         }, this);
     }
@@ -175,18 +249,59 @@ public class SqlStandalonePreviewPanel extends JPanel implements Disposable {
     // ------------------------------------------------------------------
 
     private JPanel buildInputToolbar() {
-        DefaultActionGroup group = new DefaultActionGroup(
-            resolveAction,
-            executeAction,
-            new FormatAction(),
-            new ClearAction(),
-            new OpenInDialogAction());
+        DefaultActionGroup group = new DefaultActionGroup(inputActions.toArray(new AnAction[0]));
         ActionToolbar toolbar = ActionManager.getInstance()
             .createActionToolbar(TOOLBAR_ID, group, true);
         toolbar.setTargetComponent(this);
         JPanel host = new JPanel(new BorderLayout());
         host.add(toolbar.getComponent(), BorderLayout.WEST);
         return host;
+    }
+
+    /**
+     * 底部产物动作行（T-PreviewActionRow D-1）：文字按钮，右对齐。
+     *
+     * <p>为什么用手工 {@code JButton} 而不是 {@code ActionToolbar}：工具窗工具栏在图标模式下只画图标，
+     * 要文字得逐按钮改 presentation（平台未提供稳定的「强制文字」入口）；而且这一排要和
+     * 预览弹窗底部那排手感一致（弹窗侧也是 {@code JButton}）。</p>
+     *
+     * <p>文案与 enable 都来自 {@link #bottomActions} 的动作本体：先 {@code update(e)} 再读 presentation，
+     * enable 判定只有一处（{@code ExecuteAction}/{@code CopySqlAction} 各看 {@code previewPanel != null}）。</p>
+     */
+    private JPanel buildBottomActionRow() {
+        List<String> labels = List.of(
+            "standalone.action.execute",
+            "standalone.action.copySql");
+        JPanel row = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 4));
+        row.setBorder(JBUI.Borders.empty(2, 6, 2, 6));
+        for (int index = 0; index < bottomActions.size(); index++) {
+            AnAction action = bottomActions.get(index);
+            JButton button = new JButton(MpSqlVisualizerBundle.message(labels.get(index)));
+            button.addActionListener(e -> action.actionPerformed(anActionEventOf(action)));
+            // 主行动＝复制 SQL（与弹窗「复制 SQL 并关闭」同一取走口径；执行 SQL 次之）
+            if (index == PRIMARY_BOTTOM_INDEX) {
+                SqlPreviewPanelExecutionKt.applyPrimaryButtonStyle(button);
+            }
+            bottomButtons.add(button);
+            row.add(button);
+        }
+        refreshBottomActions();
+        return row;
+    }
+
+    /** 按动作自身的 {@code update} 结果刷新底部按钮的 enable（面板未建立时执行/复制禁用）。 */
+    private void refreshBottomActions() {
+        for (int index = 0; index < bottomButtons.size(); index++) {
+            JButton button = bottomButtons.get(index);
+            AnAction action = bottomActions.get(index);
+            AnActionEvent event = anActionEventOf(action);
+            action.update(event);
+            button.setEnabled(event.getPresentation().isEnabled());
+        }
+    }
+
+    private static AnActionEvent anActionEventOf(AnAction action) {
+        return AnActionEvent.createFromAnAction(action, null, ActionPlaces.TOOLBAR, DataContext.EMPTY_CONTEXT);
     }
 
     /** 解析预览：后台跑双源解析器，代次守卫回 EDT 喂内嵌面板。 */
@@ -244,6 +359,122 @@ public class SqlStandalonePreviewPanel extends JPanel implements Disposable {
             }
             SqlPreviewPanelExecutionKt.executeSql(panel);
         }
+    }
+
+    /**
+     * 复制 SQL（T-PreviewActionRow D-1）：页签里最重要的「取走」动作——此前<b>完全没有入口</b>，
+     * 用户要么进弹窗点一次，要么在编辑器里全选 Ctrl+C（复制到的是带注释原文）。
+     *
+     * <p>走 {@code SqlPreviewPanelSqlViewKt.copySql}（与弹窗「复制 SQL」同一条链，含去注释），但<b>必须</b>
+     * {@code offerClosePanelAction = false}：那条通知默认会挂「关闭 SQL 面板」动作，而
+     * {@code onClosePanelRequested} 只有弹窗注入——页签里会挂一条点了没反应的死链接。</p>
+     *
+     * <p><b>{@code public}</b>：回归用例走真实动作路径（同 {@link ExecuteAction} 口径）。</p>
+     */
+    public class CopySqlAction extends AnAction {
+        @Override
+        public void update(@NotNull AnActionEvent e) {
+            e.getPresentation().setText(MpSqlVisualizerBundle.message("standalone.action.copySql"));
+            e.getPresentation().setDescription(
+                MpSqlVisualizerBundle.message("standalone.action.copySql.description"));
+            e.getPresentation().setEnabled(previewPanel != null);
+        }
+
+        @Override
+        public @NotNull ActionUpdateThread getActionUpdateThread() {
+            return ActionUpdateThread.BGT;
+        }
+
+        @Override
+        public void actionPerformed(@NotNull AnActionEvent e) {
+            SqlPreviewPanel panel = previewPanel;
+            if (panel == null) {
+                setStatus(MpSqlVisualizerBundle.message("standalone.status.copy.noPreview"));
+                return;
+            }
+            SqlPreviewPanelSqlViewKt.copySql(panel, false);
+        }
+    }
+
+    /**
+     * 从文件加载（T-LoadFilePlacement D-2）：选一个 mapper XML → 替换输入区 → 直接解析预览。
+     *
+     * <p>为什么在工作台而不在弹窗：弹窗是「看结果」的通用展示层（18 个 gutter 图标、日志、历史
+     * 共 21 处入口），在里面换输入会静默改掉「这条 SQL 从哪来」的语义；工作台才有「取文本」这一层。</p>
+     *
+     * <p>线程（T-Perf33MergeAlign）：选文件在 EDT、读文本在后台、回填回 EDT；读前先按 {@code file.length}
+     * 粗筛超大文件（UTF-8 4 字节/字符），避免整份读进内存。</p>
+     *
+     * <p><b>{@code public}</b>：回归用例必须走真实动作路径（同 {@link OpenInDialogAction} 口径）。</p>
+     */
+    public class LoadFileAction extends AnAction {
+        @Override
+        public void update(@NotNull AnActionEvent e) {
+            e.getPresentation().setIcon(MpvsIcons.MapperXml);
+            e.getPresentation().setText(MpSqlVisualizerBundle.message("standalone.action.loadFile"));
+            e.getPresentation().setDescription(MpSqlVisualizerBundle.message("standalone.action.loadFile.description"));
+        }
+
+        @Override
+        public void actionPerformed(@NotNull AnActionEvent e) {
+            // 一、选文件（EDT）：FileChooser 是 UI 操作，测试缝可替换
+            VirtualFile file;
+            java.util.function.Supplier<VirtualFile> seam = fileChooserForTest;
+            if (seam != null) {
+                file = seam.get();
+            } else {
+                // parent 传本面板：选择器归属工具窗，不落到主窗口后面（T-PreviewInfoLayout 问题一）
+                file = MapperFileLoader.chooseFile(
+                    project,
+                    "standalone.action.loadFile.title",
+                    SqlStandalonePreviewPanel.this);
+            }
+            if (file == null) {
+                return;
+            }
+            // 二、读前粗筛（EDT，零成本）：UTF-8 单字符最多 4 字节，字节数 > 4×字符上限
+            //     ⇒ 字符数必超上限，直接拒绝——避免把极端大文件整份读进内存再被精确判据丢弃。
+            //     （精确判据仍是 applyLoadedFile 里的字符数检查，这里只是保守前置拦截。）
+            if (file.getLength() > StandaloneSqlSourceResolver.MAX_TEXT_LENGTH * 4L) {
+                setStatus(MpSqlVisualizerBundle.message("standalone.status.loadedFile.tooLong"));
+                return;
+            }
+            // 三、读文本（后台）：读权限 IO 不能压 EDT；代次守卫丢弃在途/过期的结果
+            long generation = ++loadFileGeneration;
+            ApplicationManager app = ApplicationManager.getApplication();
+            app.executeOnPooledThread(() -> {
+                String text = loadTextInvoker.apply(file);
+                String fileName = file.getName();
+                app.invokeLater(() -> {
+                    if (disposed || generation != loadFileGeneration || project.isDisposed()) {
+                        return;
+                    }
+                    if (text != null && !text.isBlank()) {
+                        applyLoadedFile(new MapperFileLoader.LoadedFile(fileName, text));
+                    }
+                }, ModalityState.nonModal());
+            });
+        }
+    }
+
+    /**
+     * 把选中的文件内容换进输入区并解析（P-1/P-3 口径：替换不弹确认，但状态行写明来源；
+     * 超长文件<b>不写入</b>，避免把编辑器撑爆）。
+     */
+    private void applyLoadedFile(MapperFileLoader.LoadedFile loaded) {
+        if (loaded.text().length() > StandaloneSqlSourceResolver.MAX_TEXT_LENGTH) {
+            setStatus(MpSqlVisualizerBundle.message("standalone.status.loadedFile.tooLong"));
+            return;
+        }
+        boolean replacedExisting = !inputEditor.getText().isBlank();
+        // 程序性写入走 setSql（抑制补全 autopopup）；文档监听会先把 loadedFileName 清掉，故在其后赋值
+        inputEditor.setSql(loaded.text());
+        inputHintLabel.setVisible(false);
+        loadedFileName = loaded.fileName();
+        setStatus(MpSqlVisualizerBundle.message(
+            replacedExisting ? "standalone.status.loadedFile.replaced" : "standalone.status.loadedFile",
+            loaded.fileName()));
+        resolveFromInput();
     }
 
     /** 格式化输入区 SQL（SqlFormatter 幂等；程序性写入不触发补全，对齐 SqlToJavaPanel.FormatAction）。 */
@@ -339,7 +570,6 @@ public class SqlStandalonePreviewPanel extends JPanel implements Disposable {
         }
         // T-IncludePlaceholder A 券：补齐的片段只在解析前拼入，用户输入保持原样
         String text = MissingSqlFragmentSupport.withFragments(rawInput, fragmentOverrides);
-        List<String> missing = MissingSqlFragmentSupport.missingRefids(rawInput);
         long generation = ++resolveGeneration;
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
             StandaloneSqlSourceResolver.Resolved resolved = resolveQuietly(text);
@@ -347,7 +577,7 @@ public class SqlStandalonePreviewPanel extends JPanel implements Disposable {
                 if (disposed || generation != resolveGeneration || project.isDisposed()) {
                     return;
                 }
-                applyResolved(resolved, openDialog, rawInput, missing);
+                applyResolved(resolved, openDialog, rawInput);
             }, ModalityState.nonModal());
         });
     }
@@ -362,19 +592,18 @@ public class SqlStandalonePreviewPanel extends JPanel implements Disposable {
         }
     }
 
+    /**
+     * 装配一次解析结果。
+     *
+     * <p>T-PreviewActionRow D-5：缺失片段事件<b>不再由这里算</b>——解析器已按原文把
+     * {@code missingFragmentIds} 挂进载荷，面板据此在结果区渲染补齐入口（工作台只负责注入「怎么补」）。
+     * 这样弹窗（同一面板）也能展示同一份事实，不必各自扫文本。</p>
+     */
     private void applyResolved(StandaloneSqlSourceResolver.Resolved resolved,
                                boolean openDialog,
                                String rawText) {
-        applyResolved(resolved, openDialog, rawText, List.of());
-    }
-
-    private void applyResolved(StandaloneSqlSourceResolver.Resolved resolved,
-                               boolean openDialog,
-                               String rawText,
-                               List<String> missingRefids) {
-        updateMissingFragmentHint(missingRefids);
         if (resolved == null) {
-            setStatus(MpSqlVisualizerBundle.message("standalone.status.unrecognized"));
+            setStatus(withOrigin(MpSqlVisualizerBundle.message("standalone.status.unrecognized")));
             if (openDialog) {
                 openDialogWith(rawTextResult(rawText), true);
             }
@@ -387,45 +616,38 @@ public class SqlStandalonePreviewPanel extends JPanel implements Disposable {
             : resolved.result();
         SqlPreviewPanelResultViewKt.showResult(ensurePreviewPanel(), result);
         previewHintLabel.setVisible(false);
-        setStatus(statusTextOf(resolved));
+        setStatus(withOrigin(statusTextOf(resolved)));
         if (openDialog) {
             openDialogWith(result);
         }
     }
 
-    /** T-IncludePlaceholder A 券：更新「缺失片段」提示行（无缺失即隐藏）。 */
-    private void updateMissingFragmentHint(List<String> missing) {
-        if (missing.isEmpty()) {
-            missingFragmentLabel.setVisible(false);
-            return;
+    /**
+     * 状态行挂上「输入来源」（T-LoadFilePlacement）：文件载入后识别结果会覆盖状态行，
+     * 不带上来源用户就分不清「这是文件里的内容还是我贴的」。
+     */
+    private String withOrigin(String text) {
+        String name = loadedFileName;
+        if (name == null) {
+            return text;
         }
-        missingFragmentLabel.setText(MpSqlVisualizerBundle.message(
-            "standalone.missingFragment.label",
-            String.join("、", missing)));
-        missingFragmentLabel.setVisible(true);
+        return text + " ｜ " + MpSqlVisualizerBundle.message("standalone.status.loadedFile", name);
     }
 
     /**
-     * T-IncludePlaceholder A 券：点提示行 → 让用户补齐首个缺失片段，补齐后立即重解析。
+     * T-PreviewActionRow D-6：补齐一个缺失片段后重解析。
      *
      * <p>为什么逐个补：一个片段可能引用另一个缺失片段，一次只问一个才不会让用户面对一个
      * 不知道从哪粘起的空框；补完重解析会重新算缺失集合，链路自然收敛。</p>
+     *
+     * <p>内容来源走 {@link #missingFragmentPrompt}（默认弹出框，测试可注入）——「记 overrides + 重解析」
+     * 仍是真实链路，与弹窗侧共用 {@link MissingFragmentFillFlow}。</p>
      */
-    private void promptMissingFragment() {
-        List<String> missing = MissingSqlFragmentSupport.missingRefids(inputEditor.getText());
-        if (missing.isEmpty()) {
+    private void fillMissingFragment(String refid) {
+        String content = missingFragmentPrompt.apply(refid);
+        if (!MissingFragmentFillFlow.record(refid, content, fragmentOverrides)) {
             return;
         }
-        String refid = missing.get(0);
-        MissingFragmentDialog dialog = new MissingFragmentDialog(project, refid);
-        if (!dialog.showAndGet()) {
-            return;
-        }
-        String content = dialog.content();
-        if (content == null || content.isBlank()) {
-            return;
-        }
-        fragmentOverrides.put(refid, content);
         resolveFromInput();
     }
 
@@ -443,9 +665,9 @@ public class SqlStandalonePreviewPanel extends JPanel implements Disposable {
         if (project.isDisposed()) {
             return;
         }
-        // master 具名实参 showResult(project, result, autoParseOnPaste = autoReparse) 的全参形态展开
-        //（sourceLocation/sourceContext 独立工作台链均空）
-        SqlPreviewService.showResult(project, result, null, null, autoReparse);
+        // T-PreviewActionRow D-7：把原文随窗带上——弹窗内看到 TODO 占位时才有东西可重解析补齐
+        //（其余入口无原文，不传 → 弹窗不挂补齐入口）
+        SqlPreviewService.showResult(project, result, null, null, autoReparse, inputEditor.getText());
     }
 
     /**
@@ -493,6 +715,8 @@ public class SqlStandalonePreviewPanel extends JPanel implements Disposable {
         SqlPreviewPanel panel = new SqlPreviewPanel(
             project,
             MpSqlVisualizerBundle.message("standalone.preview.emptyHint"));
+        // T-PreviewActionRow D-5：把「补齐」注入面板（面板只有渲染后 SQL，重解析要原文）
+        panel.setMissingFragmentFillHandler(this::fillMissingFragment);
         if (!previewPanelRegistered) {
             Disposer.register(this, panel);
             previewPanelRegistered = true;
@@ -502,13 +726,15 @@ public class SqlStandalonePreviewPanel extends JPanel implements Disposable {
         previewHolder.revalidate();
         previewHolder.repaint();
         previewPanel = panel;
+        refreshBottomActions();
         return panel;
     }
 
     private void clear() {
         resolveGeneration++;
+        loadFileGeneration++; // 丢弃在途的文件读取（清空后晚到的文本不得写回）
         fragmentOverrides.clear();
-        missingFragmentLabel.setVisible(false);
+        loadedFileName = null;
         inputEditor.setSql("");
         SqlPreviewPanel panel = previewPanel;
         if (panel != null) {
@@ -521,6 +747,7 @@ public class SqlStandalonePreviewPanel extends JPanel implements Disposable {
         }
         previewPanel = null;
         previewPanelRegistered = false;
+        refreshBottomActions();
         setStatus(" ");
     }
 
@@ -548,6 +775,58 @@ public class SqlStandalonePreviewPanel extends JPanel implements Disposable {
         inputEditor.setSql(text);
     }
 
+    /** 测试缝：输入区当前文本（T-LoadFilePlacement：断言「载入替换了输入」）。 */
+    public String inputTextForTest() {
+        return inputEditor.getText();
+    }
+
+    /** 测试缝：输入工具栏动作序列（简单类名）——钉住「从文件加载」真的挂在工具栏上。 */
+    public List<String> inputToolbarActionNamesForTest() {
+        List<String> names = new ArrayList<>();
+        for (AnAction action : inputActions) {
+            names.add(action.getClass().getSimpleName());
+        }
+        return names;
+    }
+
+    /** 测试缝：底部动作行动作序列（简单类名）——钉住「复制 SQL」等确实在底部那一排。 */
+    public List<String> bottomActionNamesForTest() {
+        List<String> names = new ArrayList<>();
+        for (AnAction action : bottomActions) {
+            names.add(action.getClass().getSimpleName());
+        }
+        return names;
+    }
+
+    /** 测试缝：底部按钮 enable（按动作简单类名；不存在返回 null）。 */
+    @Nullable
+    public Boolean bottomButtonEnabledForTest(String actionSimpleName) {
+        int index = -1;
+        for (int i = 0; i < bottomActions.size(); i++) {
+            if (bottomActions.get(i).getClass().getSimpleName().equals(actionSimpleName)) {
+                index = i;
+                break;
+            }
+        }
+        if (index < 0) {
+            return null;
+        }
+        return index < bottomButtons.size() ? bottomButtons.get(index).isEnabled() : null;
+    }
+
+    /** 测试缝：内嵌面板的缺失片段提示行组件（派发真实点击，覆盖「面板 → 工作台」回调链）。 */
+    @Nullable
+    public javax.swing.JLabel embeddedMissingFragmentLabelForTest() {
+        SqlPreviewPanel panel = previewPanel;
+        return panel != null ? panel.missingFragmentLabelForTest() : null;
+    }
+
+    /** 测试缝：内嵌面板实例（断言复制通知动作集合等面板态）。 */
+    @Nullable
+    public SqlPreviewPanel embeddedPanelForTest() {
+        return previewPanel;
+    }
+
     /** 测试缝：内嵌预览面板当前生效的空态提示（证工作台专用文案真的接上了）。 */
     public String embeddedPreviewHintForTest() {
         return ensurePreviewPanel().previewEmptyHintForTest();
@@ -570,6 +849,7 @@ public class SqlStandalonePreviewPanel extends JPanel implements Disposable {
         }
         disposed = true;
         resolveGeneration++;
+        loadFileGeneration++; // 丢弃在途的文件读取（释放后晚到的文本不得写回）
         // 显式释放子件（对齐 SqlToJavaPanel.dispose 的既有口径；guard 幂等防双释放）
         inputEditor.dispose();
         SqlPreviewPanel panel = previewPanel;
