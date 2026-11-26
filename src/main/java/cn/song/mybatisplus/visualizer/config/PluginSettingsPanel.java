@@ -965,15 +965,17 @@ public class PluginSettingsPanel implements Disposable {
     /**
      * T-AutoShowYield：自动展开的子开关——同侧栏已有面板时让位（父项关闭时禁用）。
      *
-     * <p>初始化体里回填子项可用性：{@code rebuild()}（语言切换）会重跑 {@code buildSections}，
-     * 子项 enable 状态若只在分区构建里设，重建后仍由父项现值决定——但父项勾选变化的联动监听器
-     * 挂在字段初始化处（见下），避免重建叠加回调（k2j 设置页监听器约定）。</p>
+     * <p>联动监听器（父项勾选 → 子项可用性）挂在字段初始化体里，**不挂 buildSections**：
+     * {@code rebuild()}（语言切换）会重跑 {@code buildSections}，挂在 addRow 处会随重建叠加回调
+     * （k2j 设置页监听器约定）。分区构建里的 {@code setEnabled} 仍保留——它只回填当前值，
+     * 不注册回调，重建幂等。</p>
      */
     public final JBCheckBox logAutoOpenYieldCheck = new JBCheckBox();
 
     {
         logAutoOpenCheck.addActionListener(e -> logAutoOpenYieldCheck.setEnabled(logAutoOpenCheck.isSelected()));
     }
+
     public final JBCheckBox logStopOnToolWindowCloseCheck = new JBCheckBox();
     public final JBCheckBox logTimestampCheck = new JBCheckBox();
     public final JBTextField logTimestampFormatField = new JBTextField(12);
