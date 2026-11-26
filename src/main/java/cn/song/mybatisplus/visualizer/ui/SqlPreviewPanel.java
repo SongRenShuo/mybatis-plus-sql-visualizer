@@ -296,6 +296,27 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     public int lastMetaBudget = -1;
 
     /**
+     * T-PreviewInfoLayout D-3：性能建议<b>独立整行</b>（topRow 正下方、横幅之上）。
+     *
+     * <p>为什么从 meta 第二行搬出来：原实现把 perf 渲染成 {@code metaLabel} 的 {@code <br>} 第二行，预算 = topRow 宽 −
+     * 工具栏理想宽 − 边距；工具栏常态 7 个按钮，工作台侧栏一窄就只能分到几十像素，结果被逐段丢尾，
+     * 用户看到的是「…集，建议添加 LIMIT」这种残句（2026-11-20 沙盒截图）。整行宿主不受工具栏挤压。</p>
+     */
+    public final JBLabel perfLabel = new JBLabel();
+
+    /** perf 行宿主（布局断言与宽度预算用）。构造期即建成，{@code applyPerfRow} 可在任何初始化路径安全调用。 */
+    public final JBPanel<JBPanel<?>> perfRow = new JBPanel<JBPanel<?>>(new BorderLayout());
+
+    {
+        // 实例初始化块（声明序在两字段之后）：对齐 master 侧 `JBLabel().apply { … }` /
+        // `JBPanel(BorderLayout()).apply { add(perfLabel) }`。
+        perfLabel.setBorder(JBUI.Borders.empty(0, 8, 2, 8));
+        perfLabel.setVisible(false);
+        perfRow.setOpaque(false);
+        perfRow.add(perfLabel, BorderLayout.CENTER);
+    }
+
+    /**
      * T-SourceJumpFunnel P6 修复：meta 行 tooltip 的<b>基线文本</b>（updateMeta 每次预览重建）。
      *
      * <p>行内提示态（参数导入空剪贴板）需要临时改写可见行与 tooltip，但 tooltip 是「悬停见完整调用链」
@@ -513,7 +534,13 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         // 受子组件 preferredSize 影响导致 editor 不 fill（实际高度≈preferred ~375，15 行 SQL
         // 被截断）；GridLayout 按可用空间均分强制填满，editor 高度自适应窗口大小，无需固定
         // minimumSize 兜底。首次塌缩兜底由 editorComponentRaw 的 minimumSize 承担。
-        setOpaque(false);
+        //
+        // D253 T-NoDataSourceGreenResultPanel：headless 探针实证——无数据源执行失败收口后本容器
+        // componentCount=0、editor=null，原 isOpaque=false 会透出父 split 用 UIUtil.getPanelBackground()
+        // 涂的底色（真机该键被主题解析成亮绿时暴露整块纯绿空白）。改自带不透明主题底色：不硬编码
+        // 颜色、跟随主题、且不影响有控制台时 embedConsole 的 removeAll+add 覆盖。
+        setOpaque(true);
+        setBackground(UIUtil.getPanelBackground());
     }};
 
     // M36.5：SQL 执行状态面板（主面板 SOUTH——仅在有状态/错误内容时可见，避免空白占位）
@@ -791,6 +818,116 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     public int xmlDollarSubstitutions = 0;
 
     /**
+     * T-PreviewActionRow D-5：缺失 {@code <sql id="…">} 片段的补齐入口（结果区一行可点链接）。
+     *
+     * <p>提示事实来自载荷（{@link PreviewResult#getMissingFragmentIds()}），
+     * 补齐动作由<b>持有原文的一方</b>注入（{@link #missingFragmentFillHandler}）——面板只有渲染后的 SQL，
+     * 自己重解析不出原本的 include。没有注入方时整行不显示（真实文件来源的 gutter/日志弹窗不该出现
+     * 一条点了没反应的链接）。</p>
+     */
+    public final JBLabel missingFragmentLabel = createMissingFragmentLabel();
+
+    /** 补齐回调（refid → 弹框收内容 → 调用方重解析回填）。赋值即按当前载荷刷新可见性。 */
+    @Nullable
+    private java.util.function.Consumer<String> missingFragmentFillHandler = null;
+
+    /** 当前提示行指向的 refid（点击时用它回调；多缺失时一次补一个，补完重解析自然收敛）。 */
+    @Nullable
+    private String missingFragmentRefid = null;
+
+    private JBLabel createMissingFragmentLabel() {
+        JBLabel label = new JBLabel(" ");
+        label.putClientProperty("html.disable", true);
+        label.setForeground(com.intellij.ui.JBColor.namedColor("Link.activeForeground", com.intellij.ui.JBColor.BLUE));
+        label.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
+        label.setBorder(JBUI.Borders.empty(2, 8, 2, 8));
+        label.setVisible(false);
+        label.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseClicked(java.awt.event.MouseEvent e) {
+                String refid = missingFragmentRefid;
+                if (refid == null) {
+                    return;
+                }
+                java.util.function.Consumer<String> handler = missingFragmentFillHandler;
+                if (handler != null) {
+                    handler.accept(refid);
+                }
+            }
+        });
+        return label;
+    }
+
+    /** 补齐回调（null = 无注入方，整行不显示）。赋值即按当前载荷刷新可见性。 */
+    public void setMissingFragmentFillHandler(@Nullable java.util.function.Consumer<String> handler) {
+        this.missingFragmentFillHandler = handler;
+        refreshMissingFragmentHint(current != null ? current.getMissingFragmentIds() : List.of());
+    }
+
+    /** 补齐回调现值（null = 未注入）。 */
+    @Nullable
+    public java.util.function.Consumer<String> getMissingFragmentFillHandler() {
+        return missingFragmentFillHandler;
+    }
+
+    /**
+     * 刷新缺失片段提示行（{@code updateMeta} 与 handler 赋值两处驱动）。
+     *
+     * <p>双条件才可见：产物确实带缺失 id，且有人能补（handler 非 null）。任一不满足即隐藏——
+     * 隐藏是常态，本行不占高度。</p>
+     */
+    public void refreshMissingFragmentHint(@NotNull List<String> ids) {
+        java.util.function.Consumer<String> handler = missingFragmentFillHandler;
+        String first = ids.isEmpty() ? null : ids.get(0);
+        if (first == null || handler == null) {
+            missingFragmentRefid = null;
+            missingFragmentLabel.setVisible(false);
+            return;
+        }
+        missingFragmentRefid = first;
+        missingFragmentLabel.setText(MpSqlVisualizerBundle.message(
+            "panel.missingFragment.label",
+            String.join("\u3001", ids)));
+        missingFragmentLabel.setVisible(true);
+    }
+
+    /** 测试访问器：提示行可见性（证「无 handler 不出现 / 有 handler 出现」）。 */
+    public boolean missingFragmentVisibleForTest() {
+        return missingFragmentLabel.isVisible();
+    }
+
+    /** 测试访问器：提示行文案。 */
+    public String missingFragmentTextForTest() {
+        return missingFragmentLabel.getText();
+    }
+
+    /** 测试访问器：提示行组件（用例派发真实 MouseEvent，覆盖监听器接线而不只是直接调 handler）。 */
+    public JBLabel missingFragmentLabelForTest() {
+        return missingFragmentLabel;
+    }
+
+    /** T-PreviewInfoLayout D-3：性能建议整行的可见文本（headless 未布局时为全文 HTML）。 */
+    public String perfLabelForTest() {
+        return perfLabel.getText();
+    }
+
+    /** T-PreviewInfoLayout D-3：性能建议整行是否可见（无建议即隐藏，不占高度）。 */
+    public boolean perfLabelVisibleForTest() {
+        return perfLabel.isVisible();
+    }
+
+    /** T-PreviewInfoLayout D-3：性能建议行 tooltip（恒全文，纯文本）。 */
+    @Nullable
+    public String perfLabelTooltipForTest() {
+        return perfLabel.getToolTipText();
+    }
+
+    /** T-PreviewInfoLayout D-3：性能建议行宿主（布局断言用）。 */
+    public JBPanel<JBPanel<?>> perfRowForTest() {
+        return perfRow;
+    }
+
+    /**
      * T-InjectionGate T-IG-02：本面板实例内已确认过 `${}` raw 段执行（会话级记忆）。
      *
      * <p>同一面板确认一次后不再重复弹（常用 `${orderBy}` 场景的确认疲劳缓解）；记忆随面板实例
@@ -991,9 +1128,14 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         // T-DevAcceptFix ①（20261006 验收）：绑定指示行迁出参数区——挂「更多」按钮（工具栏 EAST
         // 末位）正下方右对齐常驻薄行，与右侧内嵌控制台头部数据源显示相邻；init 一次构建常驻，
         // 不随参数区重建（常驻语义不再依赖参数区是否建行），refreshBindStateRow 单点刷新链不变。
+        JBPanel<JBPanel<?>> topBlock = new JBPanel<JBPanel<?>>(new BorderLayout());
+        topBlock.setOpaque(false);
+        topBlock.add(topRow, BorderLayout.NORTH);
+        // T-PreviewInfoLayout D-3：topRow 下方紧贴性能建议整行（不参与 meta 的宽度预算）
+        topBlock.add(perfRow, BorderLayout.CENTER);
         JBPanel<JBPanel<?>> northHost = new JBPanel<JBPanel<?>>(new BorderLayout());
         northHost.setOpaque(false);
-        northHost.add(topRow, BorderLayout.NORTH);
+        northHost.add(topBlock, BorderLayout.NORTH);
         northHost.add(SqlPreviewPanelParamPanelKt.buildBindStateRow(this), BorderLayout.CENTER);
         // T-DmlImpactProminence：降级横幅与影响行数结果横幅上下各占一行（并存不抢位）
         dmlImpactBanner.add(dmlImpactBannerLabel, BorderLayout.CENTER);
@@ -1001,6 +1143,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         bannerStack.setOpaque(false);
         bannerStack.add(degradationBanner, BorderLayout.NORTH);
         bannerStack.add(dmlImpactBanner, BorderLayout.CENTER);
+        // T-PreviewActionRow D-5：缺失片段补齐入口贴着 SQL 区（离 TODO 占位最近）
+        bannerStack.add(missingFragmentLabel, BorderLayout.SOUTH);
         northHost.add(bannerStack, BorderLayout.SOUTH);
         add(northHost, BorderLayout.NORTH);
         // T-PreviewTopOverlap F3：宽度预算截断跟随尺寸变化（首显 + 拉伸/缩窄；宽度未变短路）
@@ -1013,6 +1157,18 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             @Override
             public void componentShown(ComponentEvent e) {
                 SqlPreviewPanelResultViewKt.applyMetaTruncation(SqlPreviewPanel.this);
+            }
+        });
+        // T-PreviewInfoLayout D-3：perf 行整行重算（它有自己的宽度，不再受工具栏挤压）
+        perfRow.addComponentListener(new ComponentAdapter() {
+            @Override
+            public void componentResized(ComponentEvent e) {
+                SqlPreviewPanelResultViewKt.applyPerfRow(SqlPreviewPanel.this);
+            }
+
+            @Override
+            public void componentShown(ComponentEvent e) {
+                SqlPreviewPanelResultViewKt.applyPerfRow(SqlPreviewPanel.this);
             }
         });
 

@@ -755,6 +755,8 @@ public final class SqlPreviewPanelSqlViewKt {
         p.xmlErrors = List.of();
         p.xmlDollarSubstitutions = 0;
         p.currentWarning = null;
+        // T-PreviewActionRow D-5：缺失片段入口随清空隐藏（handler 保留——同一面板下次预览仍可补）
+        p.refreshMissingFragmentHint(List.of());
         if (p.errorCopyButton != null) p.errorCopyButton.setVisible(false);
         p.toggleSelectButton = null;
         p.batchToggleSelectButton = null;
@@ -776,6 +778,10 @@ public final class SqlPreviewPanelSqlViewKt {
         p.metaLineDigest = "";
         p.metaPerfSegments = List.of();
         p.lastMetaBudget = -1;
+        // T-PreviewInfoLayout D-3：性能建议整行随清空收起（下次 updateMeta 重建）
+        p.perfLabel.setText("");
+        p.perfLabel.setToolTipText(null);
+        p.perfLabel.setVisible(false);
         // T-SourceJumpFunnel P6：tooltip 基线同步复位（行内提示态据此拼接，不复用上一份预览的残留）
         p.metaTooltipBase = "";
         p.metaLabel.setToolTipText(null);

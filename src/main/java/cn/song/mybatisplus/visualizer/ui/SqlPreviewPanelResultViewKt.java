@@ -756,6 +756,8 @@ public final class SqlPreviewPanelResultViewKt {
                 ? mergePreviewWarnings(null, p.ibatisRenderWarnings)
                 : mergePreviewWarnings(result.getWarning(),
                         result.getXmlModel() != null ? p.xmlErrors : List.of());
+        // T-PreviewActionRow D-5：缺失片段补齐入口随本轮载荷刷新（无缺失 / 无注入方即隐藏，不占高度）
+        p.refreshMissingFragmentHint(result.getMissingFragmentIds());
         String warningLine = p.currentWarning == null ? "" : "   " + (p.currentWarningIsNote ? "ℹ " : "⚠ ") + p.currentWarning;
         // T-SourceJumpFunnel P2-2：调用栈快照并入 meta 提示行（截断展示；T-StackHoverUi 起
         // 完整链归悬停弹层）。
@@ -771,7 +773,10 @@ public final class SqlPreviewPanelResultViewKt {
         // 优先级倒挂）。
         // T-StackHoverUi：完整调用链不再进 tooltip（旧实现把截断摘要+全文重复拼进 tooltip，
         // 超长单行折成文本墙）——改由 stackHover 悬停弹层承接（调试器 Frames 风格）。
-        p.metaLineHead = meta + warningLine;
+        // T-PreviewInfoLayout D-2：meta 行<b>不再拼警告正文</b>——同一句 warning 已在黄色横幅里（含 tooltip、
+        // 点击看全文、「复制错误信息」），meta 再贴一份只会跟表名/判型依据抢那点可见宽度，还会被截成半句。
+        // 悬停仍要看得到完整原因：warningLine 单独补进 tooltip（见下 metaTooltipBase）。
+        p.metaLineHead = meta;
         p.metaLineDigest = stackInline;
         p.metaLineText = p.metaLineHead + p.metaLineDigest;
         p.metaPerfSegments = buildPerfSegments(p, result);
@@ -817,12 +822,19 @@ public final class SqlPreviewPanelResultViewKt {
         }
         // T-DollarInjectMark：`${}` 直替信息提示（最低优先——警示/降级挂起时让位，
         // 清除后下次 updateMeta 回位；✕ 关闭后会话级记忆不再弹）。只加元数据不改渲染文本。
-        if (p.currentWarning == null && result.getXmlModel() != null && p.xmlDollarSubstitutions > 0
-                && !SqlPreviewPanel.dollarMarkDismissedSession) {
+        // D252 T-DollarPlainSqlBanner：计数来源按形态互斥取值——XML 渲染链沿用面板渲染计数
+        // （xmlDollarSubstitutions，XML 引擎「字符串内同样计数」口径）；非 XML 形态（裸 SQL 直贴，
+        // 独立工作台/弹窗同一内嵌面板）读产物计数（dollarRawCount，string-aware 口径——字符串
+        // 字面量内的 ${} 是字面量不标记）。两链各自忠实各自引擎，不跨链统一。iBatis 链与
+        // Wrapper/JPA/日志链两计数恒 0 不挂（iBatis 可见性走 `$x$` 风险行，既有渠道）。
+        // 互斥取值而非「或」拼接：xmlDollarSubstitutions 是面板渲染态（仅 xmlModel != null 轮复位），
+        // 纯 SQL 结果读它会残留上一轮 XML 计数造成误挂。
+        int dollarBannerCount = result.getXmlModel() != null ? p.xmlDollarSubstitutions : result.getDollarRawCount();
+        if (p.currentWarning == null && dollarBannerCount > 0 && !SqlPreviewPanel.dollarMarkDismissedSession) {
             p.degradationBanner.show(
                     DegradationBanner.Kind.DOLLAR_INJECT,
                     MpSqlVisualizerBundle.message("panel.banner.dollarInject",
-                            SqlPreviewPanel.DOLLAR_TOKEN, p.xmlDollarSubstitutions));
+                            SqlPreviewPanel.DOLLAR_TOKEN, dollarBannerCount));
         } else {
             p.degradationBanner.clear(DegradationBanner.Kind.DOLLAR_INJECT);
         }
@@ -839,7 +851,9 @@ public final class SqlPreviewPanelResultViewKt {
      * perf 行丢尾段加省略号（HTML 标签外截断）；tooltip 恒全文。宽度未变短路防重算抖动。</p>
      */
     public static void applyMetaTruncation(@NotNull SqlPreviewPanel p) {
-        if (p.metaLineText.isEmpty() && p.metaPerfSegments.isEmpty()) return;
+        // T-PreviewInfoLayout D-3：性能建议有自己的整行，先刷新它（与 meta 预算互不牵连）
+        applyPerfRow(p);
+        if (p.metaLineText.isEmpty()) return;
         int width = p.topRow.getWidth();
         if (width <= 0) {
             // 未布局（showResult 先于首帧布局 / headless 测试）：先展示全文，布局后由 ComponentListener 按预算重截
@@ -853,24 +867,52 @@ public final class SqlPreviewPanelResultViewKt {
         p.lastMetaBudget = budget;
         FontMetrics metrics = p.metaLabel.getFontMetrics(p.metaLabel.getFont());
         ToIntFunction<String> widthOf = s -> metrics.stringWidth(s);
-        String line1 = SqlPreviewPanelTextKt.metaLineWithinBudget(
-                p.metaLineText, p.metaLineHead, p.metaLineDigest, widthOf, budget);
-        p.metaLabel.setText(p.metaPerfSegments.isEmpty()
-                ? line1
-                : "<html>" + line1 + "<br>" + perfLineHtml(p, budget, metrics) + "</html>");
+        p.metaLabel.setText(SqlPreviewPanelTextKt.metaLineWithinBudget(
+                p.metaLineText, p.metaLineHead, p.metaLineDigest, widthOf, budget));
     }
 
-    /** F3：全文展示文本（未布局/预算充裕时）——meta 行 + perf 行原着色 markup，与 T-SqlPerf 原渲染一致。 */
+    /**
+     * T-PreviewInfoLayout D-3：刷新性能建议整行。
+     *
+     * <p>宿主是 {@code northHost} 里 topRow 正下方的独立行，宽度＝面板宽（不再减去工具栏），所以同样的建议
+     * 不会再被截成「…集，建议添加 LIMIT」。预算按行自身宽度算，放不下时沿用 {@link #perfLineHtml} 的
+     * 「丢尾段 + …」策略；tooltip 恒全文。</p>
+     */
+    public static void applyPerfRow(@NotNull SqlPreviewPanel p) {
+        if (p.metaPerfSegments.isEmpty()) {
+            p.perfLabel.setVisible(false);
+            p.perfLabel.setText("");
+            p.perfLabel.setToolTipText(null);
+            return;
+        }
+        List<String> texts = new ArrayList<>();
+        for (SqlPreviewPanel.MetaPerfSegment seg : p.metaPerfSegments) texts.add(seg.text());
+        p.perfLabel.setVisible(true);
+        p.perfLabel.setToolTipText(String.join("；", texts));
+        int rowWidth = p.perfRow.getWidth();
+        if (rowWidth <= 0) {
+            // 未布局：先给全文（含原着色），布局后由 perfRow 的 ComponentListener 按预算重截
+            StringBuilder markup = new StringBuilder();
+            for (int i = 0; i < p.metaPerfSegments.size(); i++) {
+                SqlPreviewPanel.MetaPerfSegment it = p.metaPerfSegments.get(i);
+                if (i > 0) markup.append("；");
+                markup.append("<font color=\"").append(it.color()).append("\">").append(it.text()).append("</font>");
+            }
+            p.perfLabel.setText("<html>" + markup + "</html>");
+            return;
+        }
+        Insets rowInsets = p.perfRow.getInsets();
+        Insets labelInsets = p.perfLabel.getInsets();
+        int insets = rowInsets.left + rowInsets.right + labelInsets.left + labelInsets.right;
+        int budget = Math.max(rowWidth - insets, SqlPreviewPanel.MIN_META_BUDGET_PX);
+        p.perfLabel.setText("<html>"
+                + perfLineHtml(p, budget, p.perfLabel.getFontMetrics(p.perfLabel.getFont())) + "</html>");
+    }
+
+    /** F3：全文展示文本（未布局/预算充裕时）——meta 行单行；性能建议走 {@link #applyPerfRow}。 */
     @NotNull
     public static String fullDisplayText(@NotNull SqlPreviewPanel p) {
-        if (p.metaPerfSegments.isEmpty()) return p.metaLineText;
-        StringBuilder markup = new StringBuilder();
-        for (int i = 0; i < p.metaPerfSegments.size(); i++) {
-            SqlPreviewPanel.MetaPerfSegment it = p.metaPerfSegments.get(i);
-            if (i > 0) markup.append("；");
-            markup.append("<font color=\"").append(it.color()).append("\">").append(it.text()).append("</font>");
-        }
-        return "<html>" + p.metaLineText + "<br>   " + markup + "</html>";
+        return p.metaLineText;
     }
 
     /** F3：perf 行预算内重拼——逐段（含「；」分隔宽）按像素累计，放得下保留原着色；放不下丢尾段并加省略号。 */

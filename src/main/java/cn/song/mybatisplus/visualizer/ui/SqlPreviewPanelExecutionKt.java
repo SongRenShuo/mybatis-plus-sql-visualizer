@@ -1006,6 +1006,48 @@ public final class SqlPreviewPanelExecutionKt {
     }
 
     /**
+     * D253 T-NoDataSourceGreenResultPanel：无成因执行失败（无数据源等）收口后，恢复被确认框释放的
+     * 预览编辑器——headless 探针实证此时 {@code editorHolder.componentCount=0}、{@code editor=null}，结果区空白
+     * 会透出父容器主题底色（真机呈整块亮绿）。仅当「无内嵌控制台 + 编辑器已空 + 有最近结果」时重建，
+     * 展示口径与 renderSql 一致（compact 取 compactSql）。包 try/catch：重建失败只记日志，绝不覆盖
+     * 刚写入的真实错误（错误行在 SOUTH 细条，与 CENTER 编辑器分离）。
+     *
+     * @param forceSync 测试缝：true = 同步执行重建（测试跑在 EDT，invokeLater 回调在方法体内泵不到）；
+     *   生产恒 false 走正常 EDT 投递。
+     * @return 是否决定重建（供测试断言；生产忽略）。
+     */
+    public static boolean restoreResultAreaAfterExecFailure(@NotNull SqlPreviewPanel p, boolean forceSync) {
+        if (p.embeddedConsole != null || p.editor != null) return false;
+        String sqlToRestore = p.current != null
+                ? (p.compactMode ? p.current.getCompactSql() : p.current.getSql())
+                : null;
+        if (sqlToRestore == null || sqlToRestore.isEmpty()) return false;
+        Runnable rebuild = () -> {
+            if (!p.previewDisposed) {
+                try {
+                    SqlPreviewPanelSqlViewKt.showSql(p, sqlToRestore);
+                } catch (Throwable e) {
+                    if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(e)) throw (Error) e;
+                    com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel.class)
+                            .warn("[D253] rebuild preview editor after exec failure FAILED: "
+                                    + e.getClass().getSimpleName() + ": " + e.getMessage());
+                }
+            }
+        };
+        if (forceSync) {
+            rebuild.run();
+        } else {
+            com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater(rebuild);
+        }
+        return true;
+    }
+
+    /** 1 参形态（master 默认参展开：forceSync=false，生产形态）。 */
+    public static boolean restoreResultAreaAfterExecFailure(@NotNull SqlPreviewPanel p) {
+        return restoreResultAreaAfterExecFailure(p, false);
+    }
+
+    /**
      * T-ExecPsiGate 13.10 / F9：临时 SQL 文件失败的<b>富呈现</b>——红字 + 蓝色可点入口。
      *
      * <p>三种成因在报错上长得一模一样（都是 {@code findFile} 返回 null），按
@@ -1022,6 +1064,14 @@ public final class SqlPreviewPanelExecutionKt {
         Project proj = p.project;
         if (cause == null || proj == null) {
             p.resultPanel.showError(shown);
+            // D253 T-NoDataSourceGreenResultPanel：无数据源等「无 hint 成因」执行失败时，确认框期间的
+            // removeNotify→releaseEditor 已把编辑器置空（headless 探针实证 editorHolder.componentCount=0、
+            // editor=null），失败链又无重渲染——结果区空白，透出父容器主题底色（真机呈整块亮绿）。
+            // M1 已让 editorHolder 自带不透明主题底色挡住透出；这里补回被释放的预览编辑器，让失败时
+            // 格式化 SQL 仍在（与用户截图「失败前有 SQL、失败后空白」对齐）。只在确实空置且有最近结果时
+            // 重建，包 try/catch 保证重建失败也不覆盖刚写入的真实错误；错误态在 SOUTH 细条，与 CENTER
+            // 编辑器分离，重建不会抹掉红条。
+            restoreResultAreaAfterExecFailure(p);
             return;
         }
         String settingsLabel = null;
@@ -1849,7 +1899,10 @@ public final class SqlPreviewPanelExecutionKt {
                         proj,
                         explainSql,
                         dialectGateRequest.renderedDialectName(),
-                        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel.class));
+                        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel.class),
+                        // T-PerfSweep33 券03：与预览主链预热对齐——cache-only 判等（PerfSweep31 券03a）
+                        // 在 EXPLAIN 低频路径同样生效，同内容不再绕过零写盘形态
+                        true);
             } catch (Throwable e) {
                 if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(e)) throw (Error) e;
                 com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel.class)
