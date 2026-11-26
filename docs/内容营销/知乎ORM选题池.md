@@ -14,6 +14,7 @@
 | [以后 Spring Data JPA 和 mybatis 哪个会更流行？](https://www.zhihu.com/question/317183937) | 2026-11-26 答（131 答） |
 | [为什么 90% 的开发者放弃使用 Hibernate，而选择 MyBatis？](https://www.zhihu.com/question/532452772) | 2026-11-26 答（144 答） |
 | [spring-data-jpa 和 mybatis 可以整合在一起使用有什么优缺点？](https://www.zhihu.com/question/53706909) | 2026-11-26 答（38 答，`answer/2109281997411575015`） |
+| [Java 世界出现了新的 ORM 框架，你了解过吗？](https://www.zhihu.com/question/434004626) | 2026-11-26 答（6 答，`answer/2109296509728585710`） |
 
 ## 二、值得答（按性价比排序）
 
@@ -24,7 +25,7 @@
 | 问题 | 实测数据 | 建议角度 | 优先级 |
 | --- | --- | --- | --- |
 | [spring-data-jpa 和 mybatis 可以整合在一起使用有什么优缺点？](https://www.zhihu.com/question/53706909) | **182 关注 / 28.3 万浏览 / 37 答** | 全池流量最高（是第二名的 28 倍），但**不是低竞争**——37 个回答里高赞都集中在 2017-2019 的选型争论。空档在「两者并存之后的运维成本」，现有回答没人写 | ~~高~~ **已答（2026-11-26）** |
-| [Java 世界出现了新的 ORM 框架，你了解过吗？](https://www.zhihu.com/question/434004626) | 9 关注 / 1.0 万浏览 / 5 答 | 横评 xbatis / easy-query / MyBatis-Dynamic-SQL 三家表达方式，落到「SQL 能不能在写的时候看见」 | 中 |
+| [Java 世界出现了新的 ORM 框架，你了解过吗？](https://www.zhihu.com/question/434004626) | 9 关注 / 1.0 万浏览 / 5 答 | 横评 xbatis / easy-query / MyBatis-Dynamic-SQL 三家表达方式，落到「SQL 能不能在写的时候看见」 | ~~中~~ **已答（2026-11-26）** |
 | [2026 java 框架哪个好用？](https://www.zhihu.com/question/2038220884696097885) | 6 关注 / 546 浏览 / 4 答 | 选型题吃搜索流量，但年份新、存量小；可作为「2026」关键词的占位 | 中低 |
 | [推荐 java 最好的用 orm 框架，来说一说你心中最好的那个！？](https://www.zhihu.com/question/2108970389091127685) | 3 关注 / 182 浏览 / 2 答 | 流量小、已有 2 答。给判断标准（SQL 归谁管、出错时能不能看见）而不是排名 | 低 |
 | [谁知道 Java 中 xbatis 这个 ORM 框架，怎么样？](https://www.zhihu.com/question/1985659298865505153) | 1 关注 / 375 浏览 / 1 答 | 我们确实适配了 xbatis，是少数能答的；但已有 1 答（答主就是那位「东哥」），且流量极小 | 低（先不做） |
