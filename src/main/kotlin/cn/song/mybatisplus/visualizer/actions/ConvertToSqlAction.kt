@@ -27,6 +27,7 @@ import cn.song.mybatisplus.visualizer.ui.gutter.PagesXmlGutterLineMarkerProvider
 import cn.song.mybatisplus.visualizer.ui.gutter.StringSqlMethodGutterLineMarkerProvider
 import cn.song.mybatisplus.visualizer.ui.gutter.XmlInlineSqlGutterLineMarkerProvider
 import cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProvider
+import cn.song.mybatisplus.visualizer.ui.nav.MapperNavigationTargets
 import cn.song.mybatisplus.visualizer.xml.XmlInlineSqlDetector
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
@@ -187,7 +188,8 @@ class ConvertToSqlAction : AnAction() {
             if (result != null) {
                 // 统一展示入口（M10-03）：按显示方式（F-16）弹窗 / 工具窗口 / 两者
                 SqlPreviewService.showResult(project, result, sourceLocation, wrapperContext.get())
-            } else if (!tryIbatisCallFallback(project, element, sourceLocation)
+            } else if (!tryMapperXmlMethodFallback(project, element, sourceLocation)
+                && !tryIbatisCallFallback(project, element, sourceLocation)
                 && !tryIbatisMethodFallback(project, element, sourceLocation)
                 && !tryHqlFallback(service, project, element, sourceLocation)
                 && !tryNamedQueryFallback(service, project, element, sourceLocation)
@@ -201,6 +203,52 @@ class ConvertToSqlAction : AnAction() {
                 )
             }
             // 任一 tryXxxFallback 返回 true 时已在内部触发预览 + showResult，无需额外操作
+        }
+    }
+
+    /**
+     * Mapper XML 绑定兜底（T-MapperMethodSqlPreview，2026-11-26）：光标在 Mapper **接口方法**上
+     * （方法名、参数、返回类型任意位置）→ 该方法在同 namespace XML 中的语句预览。
+     *
+     * 与方法行预览图标同源：定位走 [MapperNavigationTargets.statementTagsFor]（接口判定 + 同名语句，
+     * 含 `databaseId` 变体），渲染走 [XmlSqlGutterLineMarkerProvider.previewStatementTag]（与 XML
+     * 语句行点击、gutter 图标点击逐字节一致）。单条直接预览；多方言变体弹选择器；无 XML 语句
+     * 返回 false 继续回落（注解候选 / 通用未找到），不出错源提示。
+     *
+     * 排在 fallback 链首位：iBatis / JDBC / HQL 等家族的判据都看方法体或调用形态，对无 body 的
+     * Mapper 接口方法本来就不命中，顺序不改变它们的行为；MyBatis XML 绑定语义最直接。
+     */
+    private fun tryMapperXmlMethodFallback(project: Project, element: PsiElement, sourceLocation: String?): Boolean {
+        val method = MapperNavigationTargets.nearestMapperMethod(element) ?: return false
+        val tags = MapperNavigationTargets.statementTagsFor(method)
+        if (tags.isEmpty()) return false
+        if (tags.size == 1) {
+            previewXmlStatementTag(project, tags[0], sourceLocation)
+            return true
+        }
+        val rows = tags.map { tag ->
+            val databaseId = tag.getAttributeValue("databaseId")
+            val line = tag.containingFile.viewProvider.document
+                ?.getLineNumber(tag.textRange.startOffset)?.plus(1) ?: 0
+            SqlSelectionDialog.Row.of(
+                buildString {
+                    append(tag.name)
+                    if (!databaseId.isNullOrBlank()) append(" [").append(databaseId).append(']')
+                    append("（XML 第 ").append(line).append(" 行）")
+                },
+                tag.text,
+            )
+        }
+        SqlSelectionDialog(project, tags, rows) { selected ->
+            previewXmlStatementTag(project, selected, sourceLocation)
+        }.show()
+        return true
+    }
+
+    /** 渲染一条 Mapper XML 语句（复用 XML 语句行 / 方法行预览图标同一条预览链）。 */
+    private fun previewXmlStatementTag(project: Project, tag: XmlTag, sourceLocation: String?) {
+        XmlSqlGutterLineMarkerProvider.previewStatementTag(project, sourceLocation) {
+            (tag.containingFile as? XmlFile)?.let { file -> file to tag }
         }
     }
 

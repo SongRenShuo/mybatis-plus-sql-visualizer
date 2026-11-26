@@ -276,3 +276,10 @@ bundle 中英各加两键（`MpSqlVisualizerBundle.properties` / `_zh.properties
 
 - 沙盒 GUI 目视验收（一行两枚图标的左右顺序、点击预览面板内容、让位开只留预览）未执行——当前平台缓存被占用、未启动 `runIde`；P-1/P-2 由单测钉住（同一 element 收集到 2 枚、预览在 `result[0]`），真机渲染待验收。
 - 多语句（`databaseId` 变体）选择器与 MP 内置 CRUD 预览仍按 §二 非目标搁置。
+
+### 9.6 补漏（2026-11-26，master）：预览快捷键接入
+
+- 用户报障：「测试有问题，预览快捷键没支持」——`Alt+Shift+Q`（`ConvertToSqlAction`）停在 Mapper 接口方法上会落到「未找到可转换的 Wrapper」，只有 gutter 图标能预览。
+- 修：fallback 链首位新增 `tryMapperXmlMethodFallback` —— `MapperNavigationTargets.nearestMapperMethod` → `statementTagsFor`（同名 XML 语句，含 `databaseId` 变体）→ `XmlSqlGutterLineMarkerProvider.previewStatementTag`；单条直接预览，多方言变体弹 `SqlSelectionDialog`，无 XML 语句才回落原有链（注解候选 / 通用未找到），不出错源提示。
+- 测试：`ConvertToSqlActionTest` 新增 2 条（数据面渲染 + 链序结构守卫），定向 7 类 **110/0**；反向摘掉链上调用 → 恰 1 红（结构守卫），还原后 15/0。
+- 测试环境：master 上测试一度无法启动——平台 transform `9.7.0/transforms/cfd9113040487d86d63…` 是半成品，且被用户 IDEA（GUI launcher，PID 4036）持有，Gradle 重建时删除失败（`Unable to delete directory`）。改用独立 Gradle home `F:/gradle-home-pv`（junction 共享 `modules-2`，平台重新解压）绕开；旧 transform 需用户关闭项目/重启 IDE 后让 Gradle 重建一次才能彻底恢复（否则默认 home 下 `:test` 仍不可用）。

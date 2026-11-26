@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+### Added
+- **Mapper 接口方法行补上预览快捷键（T-MapperMethodSqlPreview）**：光标停在 Mapper 接口方法名/参数/返回类型上按 `Alt+Shift+Q`（右键菜单同一入口）即可直接预览该方法绑定的 XML 语句——此前只能点行号旁的预览图标，快捷键会落到「未找到可转换的 Wrapper」。走与图标点击、XML 语句行点击同一条渲染链（参数表、`<include>`、`${}` 注入一致）；同名多方言（`databaseId`）变体弹选择器；没有 XML 语句的方法（含 MP 内置 CRUD）仍回落原有链，不出错源提示。
+
 ## [2026.11.26-beta.2] - 2026-11-26
 
 > 范围＝`2026.11.26-beta.1` 之后到本版发行提交的增量（今日第二轮内测：beta.1 全部内容一并纳入累计口径，beta.1 发行版保留共存）。区间内 2 个用户可感 `src/main` 任务面：T-MapperMethodSqlPreview（`12f3232b8`）、T-EpAttachBeforeCapture（`ad4f5994b`，tag 之后落码、此前误落进 beta.1 段，本版归位）；`ad4f5994b` 之后的 engine-jar / agent 旁路 / 测试与文档提交为 sidecar 基础设施或用户不可见改动。逐条根因与真机读数见 `docs/发行说明/20261126-1118-Mapper方法行预览图标与双应用捕获修复-内测说明.md`

@@ -2,9 +2,11 @@ package cn.song.mybatisplus.visualizer.actions
 
 import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlLocator
 import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlPreviewService
+import cn.song.mybatisplus.visualizer.ui.XmlPreviewService
 import cn.song.mybatisplus.visualizer.ui.gutter.IbatisCallTargets
 import cn.song.mybatisplus.visualizer.ui.gutter.IbatisStatementPreview
 import cn.song.mybatisplus.visualizer.ui.nav.IbatisXmlStatementTargets
+import cn.song.mybatisplus.visualizer.ui.nav.MapperNavigationTargets
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.util.PsiTreeUtil
@@ -369,5 +371,50 @@ class ConvertToSqlActionTest : BasePlatformTestCase() {
         )
         assertTrue("调用行 iBatis 回落必须先于 JdbcTemplate", ibatisCall < jdbc)
         assertTrue("方法级 iBatis 回落同样先于 JdbcTemplate", ibatisMethod < jdbc)
+    }
+
+    // ---------- T-MapperMethodSqlPreview：Mapper 接口方法行预览快捷键（2026-11-26） ----------
+
+    /**
+     * 用户报障（2026-11-26）：「mapper.java 方法处的预览快捷键没支持」——`Alt+Shift+Q` 停在
+     * 接口方法名上原本落到「未找到可转换的 Wrapper」。本用例钉住新回落的数据面：
+     * 接口方法 → 同名 XML 语句 → 渲染出 SQL（`tryMapperXmlMethodFallback` 内部即这两步）。
+     */
+    fun testMapper接口方法_快捷键回落命中XML语句并渲染SQL() {
+        myFixture.addFileToProject(
+            "mapper/UserMapper.xml",
+            """<mapper namespace="com.demo.UserMapper"><select id="selectById">SELECT ID, NAME FROM T_USER WHERE ID = #{id}</select></mapper>""",
+        )
+        val iface = myFixture.addFileToProject(
+            "com/demo/UserMapper.java",
+            """
+            package com.demo;
+            public interface UserMapper {
+                Object selectById(Long id);
+            }
+            """.trimIndent(),
+        )
+        val methodName = PsiTreeUtil.findChildrenOfType(iface, com.intellij.psi.PsiIdentifier::class.java)
+            .first { it.text == "selectById" }
+        val method = MapperNavigationTargets.nearestMapperMethod(methodName)
+        assertNotNull("光标停在方法名上应能定位到 Mapper 接口方法", method)
+        val tags = MapperNavigationTargets.statementTagsFor(method!!)
+        assertEquals("应命中同名 XML 语句", 1, tags.size)
+        val xmlFile = tags[0].containingFile as com.intellij.psi.xml.XmlFile
+        val preview = XmlPreviewService.preview(xmlFile.text, tags[0].getAttributeValue("id"), project)
+        assertTrue("快捷键回落应渲染出该语句 SQL：${preview.sql}", preview.sql.contains("FROM T_USER"))
+    }
+
+    /** 结构守卫：Mapper XML 回落必须排在 iBatis 两档之前（无 body 的接口方法先按 XML 绑定认领）。 */
+    fun testMapperXml回落排在iBatis之前() {
+        val source = java.io.File(
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/actions/ConvertToSqlAction.kt",
+        ).readText()
+        val mapper = source.indexOf("!tryMapperXmlMethodFallback(")
+        val ibatisCall = source.indexOf("!tryIbatisCallFallback(")
+        assertTrue(
+            "Mapper XML 回落必须出现在链里且先于 iBatis（mapper=$mapper iBatis=$ibatisCall）",
+            mapper > 0 && ibatisCall > 0 && mapper < ibatisCall,
+        )
     }
 }
