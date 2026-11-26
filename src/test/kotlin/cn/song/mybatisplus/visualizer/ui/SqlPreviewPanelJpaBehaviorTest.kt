@@ -67,9 +67,17 @@ class SqlPreviewPanelJpaBehaviorTest : BasePlatformTestCase() {
 
         SqlPreviewPanelResultViewKt.showResult(p, result)
 
-        // 验证警告标签显示
+        // T-PreviewInfoLayout D-2：警告正文从 meta 可见行移到横幅（与 meta 里那份重复），
+        // 断言随之改为「meta 不含正文、警告仍在横幅与 currentWarning」——契约有意变更，非回归。
         val metaText = p.metaLabelForTest()
-        assertTrue("元信息应显示警告: $metaText", metaText.contains("WARNING") || metaText.contains("全表"))
+        assertFalse("meta 行不应再承载警告正文: $metaText", metaText.contains("WARNING"))
+        val warning = p.currentWarning.orEmpty()
+        assertTrue("警告仍须记录在 currentWarning: $warning", warning.contains("WARNING") || warning.contains("全表"))
+        assertEquals(
+            "警告应由横幅承载",
+            DegradationBanner.Kind.RENDER_WARNING,
+            p.degradationBannerForTest().kindForTest(),
+        )
     }
 
     /** 面板初始化时应正确显示 JPQL 预览结果 */

@@ -70,9 +70,20 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
     private fun layoutAt(panel: SqlPreviewPanel, width: Int, height: Int = 420) {
         panel.setSize(width, height)
         panel.doLayout()
-        // T-PreviewUx-Pack #2：topRow 外包 northHost（诚实降级横幅宿主）——布局链多一层，手动逐层 doLayout
-        panel.topRowForTest().parent?.doLayout()
+        // T-PreviewUx-Pack #2 / T-PreviewInfoLayout D-3：topRow 与 perfRow 现在挂在多层 northHost 里
+        // （topRow+perfRow 的包装层 → northHost → 面板），必须**自外向内**逐层 doLayout，
+        // 否则上层尺寸仍为 0，下游 label 宽度恒 0、截断分支走不到。
+        //
+        // k2j 互操作：Java 侧 perfRowForTest() 返回 JBPanel<JBPanel<?>>——parent 上溯按通用
+        // JComponent 走，不写死 JBPanel 类型参数。
+        val chain = generateSequence<javax.swing.JComponent>(
+            panel.perfRowForTest(),
+        ) { it.parent as? javax.swing.JComponent }
+            .toList()
+            .asReversed()
+        chain.forEach { it.doLayout() }
         panel.topRowForTest().doLayout()
+        panel.perfRowForTest().doLayout()
         panel.applyMetaTruncationForTest()
         waitForEdt()
     }
@@ -116,12 +127,18 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
     fun test窄宽截断生效_性能建议行被省略() {
         val panel = newPanel()
         try {
-            layoutAt(panel, 640)
-            val text = panel.metaLabelForTest()
-            assertTrue("窄宽下应走 HTML 两行渲染", text.startsWith("<html>"))
-            // 预算约 640-工具栏(~330)-32 边距 ≈ 270px，长 perf 行必然放不下 → 丢尾段加省略号
-            assertTrue("放不下的 perf 行应加省略号", text.contains("\u2026"))
-            assertFalse("截断后不得再含完整 perf 文案", text.contains(fullPerfText()))
+            // T-PreviewInfoLayout D-3：perf 行现在拿**整行宽**（不再减工具栏），640 宽下这句建议本来就放得下；
+            // 要验截断必须真的窄到放不下——取 220px（首段也撑不下 → 首段尾部省略）。
+            layoutAt(panel, 220)
+            // meta 行恢复单行（不再承载 perf）
+            val meta = panel.metaLabelForTest()
+            assertFalse("meta 行不应再是 HTML 两行：$meta", meta.startsWith("<html>"))
+            assertFalse("meta 行不应再含 perf 文案：$meta", meta.contains(fullPerfText()))
+            val perf = panel.perfLabelForTest()
+            assertTrue("perf 行应可见", panel.perfLabelVisibleForTest())
+            assertTrue("perf 行应走 HTML 着色渲染：$perf", perf.startsWith("<html>"))
+            assertTrue("整行仍放不下时保留省略号：$perf", perf.contains("\u2026"))
+            assertFalse("截断后不得再含完整 perf 文案", perf.contains(fullPerfText()))
         } finally {
             SqlPreviewPanelSqlViewKt.clear(panel)
             panel.dispose()
@@ -133,9 +150,9 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
         try {
             layoutAt(panel, 640)
             layoutAt(panel, 1600)
-            val text = panel.metaLabelForTest()
-            assertTrue("宽幅应还原全文 perf 文案", text.contains(fullPerfText()))
-            assertFalse("宽幅不应残留省略号", text.contains("\u2026"))
+            val perf = panel.perfLabelForTest()
+            assertTrue("宽幅应还原全文 perf 文案：$perf", perf.contains(fullPerfText()))
+            assertFalse("宽幅不应残留省略号", perf.contains("\u2026"))
         } finally {
             SqlPreviewPanelSqlViewKt.clear(panel)
             panel.dispose()

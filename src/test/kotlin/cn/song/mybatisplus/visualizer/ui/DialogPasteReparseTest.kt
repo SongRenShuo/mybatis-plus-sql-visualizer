@@ -1,7 +1,9 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.standalone.StandaloneSqlSourceResolver
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import com.intellij.util.ui.UIUtil
 
 /**
  * 「先开弹窗、后贴内容」重识别测试（T-DialogPasteReparse）。
@@ -41,8 +43,38 @@ class DialogPasteReparseTest : BasePlatformTestCase() {
         </select>
     """.trimIndent()
 
+    /**
+     * T-PerfSweep33 券01：识别链挪池线程后，用例注入同步派发确定性驱动同一条链
+     * （生产形态＝池线程计算 + invokeLater 回 EDT）。
+     *
+     * K2J 互操作：`resolveOffEdtDispatcher` 是 Java 嵌套接口 `ResolveOffEdtDispatcher`。
+     */
     private fun newDialog(autoParse: Boolean): SqlPreviewDialog =
-        SqlPreviewDialog(project, StandaloneSqlSourceResolver.emptyPreviewResult(), null, null, autoParse)
+        SqlPreviewDialog(project, StandaloneSqlSourceResolver.emptyPreviewResult(), null, null, autoParse).apply {
+            resolveOffEdtDispatcher = SqlPreviewDialog.ResolveOffEdtDispatcher { source, onDone ->
+                onDone.accept(source.get()?.let { runCatching { StandaloneSqlSourceResolver.resolve(it) }.getOrNull() })
+            }
+        }
+
+    /**
+     * 识别挪池线程后回 EDT 应用 → 断言面板结果必须**有界轮询泵 EDT**（对齐仓内既有
+     * `awaitDialog`/`awaitStatus` 写法），不能瞬时直读。
+     */
+    private fun awaitCurrent(
+        dialog: SqlPreviewDialog,
+        timeoutMs: Long = 5_000,
+        predicate: (PreviewResult?) -> Boolean = { true },
+    ): PreviewResult? {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        var last: PreviewResult? = null
+        while (System.currentTimeMillis() < deadline) {
+            UIUtil.dispatchAllInvocationEvents()
+            last = dialog.panelForTest()?.current
+            if (last != null && predicate(last)) return last
+            Thread.sleep(10)
+        }
+        return last
+    }
 
     private fun closeDialog(dialog: SqlPreviewDialog) {
         runCatching { dialog.panelForTest()?.let { SqlPreviewPanelSqlViewKt.clear(it) } }
@@ -57,12 +89,12 @@ class DialogPasteReparseTest : BasePlatformTestCase() {
 
             dialog.draftTextProvider = { ibatisFragment }
             dialog.reparseDraftFromEditor()
+            assertFalse("命中一次后必须交还手动（否则会与后续编辑打架）", dialog.pasteReparseArmedForTest())
 
-            val current = dialog.panelForTest()!!.current
+            val current = awaitCurrent(dialog) { it?.getIbatisParamModel() != null }
             assertNotNull("重识别后面板应有结果", current)
             assertNotNull("iBatis 片段应产出条件/参数模型", current!!.getIbatisParamModel())
             assertEquals("两个条件行", 2, current.getIbatisParamModel()!!.getConditionRows().size)
-            assertFalse("命中一次后必须交还手动（否则会与后续编辑打架）", dialog.pasteReparseArmedForTest())
         } finally {
             closeDialog(dialog)
         }
@@ -74,7 +106,7 @@ class DialogPasteReparseTest : BasePlatformTestCase() {
         try {
             dialog.draftTextProvider = { ibatisFragment }
             dialog.reparseDraftFromEditor()
-            val first = dialog.panelForTest()!!.current
+            val first = awaitCurrent(dialog) { it?.getIbatisParamModel() != null }
             assertNotNull(first)
 
             dialog.draftTextProvider = { "SELECT 1 FROM DUAL" }
@@ -94,6 +126,39 @@ class DialogPasteReparseTest : BasePlatformTestCase() {
             dialog.draftTextProvider = { ibatisFragment }
             dialog.reparseDraftFromEditor()
             assertNull("未待命时重识别应无操作", dialog.panelForTest()!!.current?.getIbatisParamModel())
+        } finally {
+            closeDialog(dialog)
+        }
+    }
+
+    /**
+     * T-PerfSweep33 券01：识别后台化后两个请求可交错——先发先算的旧产物迟到时必须被代次守卫
+     * 丢弃，只应用最后一次请求（贴入停手与手动操作竞态）。
+     */
+    fun test迟到产物不回填_代次守卫保最后一次() {
+        val dialog = newDialog(autoParse = true)
+        try {
+            assertTrue("前置：待命态应已进入", dialog.pasteReparseArmedForTest())
+            val callbacks = ArrayList<java.util.function.Consumer<StandaloneSqlSourceResolver.Resolved>>()
+            // 手动派发缝：两次请求都排队不投递，由用例控制回放顺序（先旧后新）
+            dialog.resolveOffEdtDispatcher =
+                SqlPreviewDialog.ResolveOffEdtDispatcher { _, onDone -> callbacks.add(onDone) }
+
+            dialog.draftTextProvider = { ibatisFragment }
+            dialog.reparseDraftFromEditor() // 请求 A（代次 1，产物＝iBatis 识别）
+            // 请求 B（代次 2）：A 排队未回填，待命态未退出——第二次「贴入停手」照常进入派发
+            dialog.draftTextProvider = { "SELECT 1 FROM DUAL" }
+            dialog.reparseDraftFromEditor()
+            assertEquals("两次请求都应进入后台派发", 2, callbacks.size)
+
+            // 反序投递：先回 A 的旧产物 → 代次不匹配必须丢弃（若守卫失效，iBatis 模型会回填）
+            callbacks[0].accept(StandaloneSqlSourceResolver.resolve(ibatisFragment))
+            assertNull("迟到旧产物不得回填（代次守卫）", dialog.panelForTest()!!.current?.getIbatisParamModel())
+
+            // 再回 B 的新产物 → 应用并交还手动
+            callbacks[1].accept(StandaloneSqlSourceResolver.resolve("SELECT 1 FROM DUAL"))
+            assertNotNull("最新请求的产物应回填", dialog.panelForTest()!!.current)
+            assertFalse("应用后应停轮询交还手动", dialog.pasteReparseArmedForTest())
         } finally {
             closeDialog(dialog)
         }
