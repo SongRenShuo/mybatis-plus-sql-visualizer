@@ -92,26 +92,32 @@ public class MapperJavaToXmlLineMarkerProvider implements LineMarkerProvider {
                         gutterState.getMapperNavYieldToCodeHelper(),
                         MyBatisCompetitorGate.isPeerPluginActive());
         for (PsiElement element : elements) {
-            List<LineMarkerInfo<PsiElement>> markers = createMarker(element, yieldNavigation);
-            if (markers != null) result.addAll(markers);
+            // T-MapperClassJump（2026-11-25 用户反馈「mapper.java 少一个类跳转图标」）：
+            // Mapper 接口**类名** → 对应 XML 根标签。对齐竞品：MPJ view.A 的 UClass 分支、
+            // MyBatisX 的 PsiClassAbstractElementFilter 都在接口声明行出这一枚；我方此前只锚方法名。
+            if (element.getParent() instanceof PsiClass) {
+                PsiClass owner = (PsiClass) element.getParent();
+                if (owner.getNameIdentifier() == element) {
+                    // 类名不是语句，没有可预览的 SQL；类跳转属「跳转」，随让位一并让掉。
+                    if (yieldNavigation) continue;
+                    LineMarkerInfo<PsiElement> classMarker = createClassMarker((PsiIdentifier) element, owner);
+                    if (classMarker != null) result.add(classMarker);
+                    continue;
+                }
+            }
+            LineMarkerInfo<PsiElement> marker = createMarker(element, yieldNavigation);
+            if (marker != null) result.add(marker);
         }
     }
 
+    /**
+     * 方法名锚点 → 跳转箭头（单枚）。{@code yieldNavigation} 为第三道门结论
+     * （T-MapperNavCoexistYield / T-MapperPreviewOrder：跳转让位时本类不产出；预览由
+     * {@link MapperMethodPreviewLineMarkerProvider} 照出）。
+     */
     @Nullable
-    private static List<LineMarkerInfo<PsiElement>> createMarker(@NotNull PsiElement element, boolean yieldNavigation) {
+    private static LineMarkerInfo<PsiElement> createMarker(@NotNull PsiElement element, boolean yieldNavigation) {
         if (!(element instanceof PsiIdentifier)) return null;
-        // T-MapperClassJump（2026-11-25 用户反馈「mapper.java 少一个类跳转图标」）：
-        // Mapper 接口**类名** → 对应 XML 根标签。对齐竞品：MPJ view.A 的 UClass 分支、
-        // MyBatisX 的 PsiClassAbstractElementFilter 都在接口声明行出这一枚；我方此前只锚方法名。
-        if (element.getParent() instanceof PsiClass) {
-            PsiClass owner = (PsiClass) element.getParent();
-            if (owner.getNameIdentifier() == element) {
-                // 类名不是语句，没有可预览的 SQL；类跳转属「跳转」，随让位一并让掉。
-                if (yieldNavigation) return null;
-                LineMarkerInfo<PsiElement> classMarker = createClassMarker((PsiIdentifier) element, owner);
-                return classMarker != null ? List.of(classMarker) : null;
-            }
-        }
         PsiMethod method = element.getParent() instanceof PsiMethod ? (PsiMethod) element.getParent() : null;
         if (method == null) return null;
         if (method.getNameIdentifier() != element) return null;
@@ -132,18 +138,18 @@ public class MapperJavaToXmlLineMarkerProvider implements LineMarkerProvider {
         String key = MapperXmlToJavaLineMarkerProvider.cacheKey(project, namespace, method.getName());
         // ① dumb 窗乐观产出（不查索引、不入缓存）
         if (MapperXmlToJavaLineMarkerProvider.isDumbProvider.apply(project)) {
-            return List.of(buildMethodMarker(element));
+            return buildMethodMarker(element);
         }
         // ② 确定存在入共享正缓存 / ③ Unknown 保留缓存命中 / ④ Absent 收回缓存并摘图标
         MapperXmlLocator.Lookup lookup =
                 MapperXmlLocator.locateOrUnknown(project, namespace + "." + method.getName());
         if (lookup instanceof MapperXmlLocator.Found) {
             MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add(key);
-            return List.of(buildMethodMarker(element));
+            return buildMethodMarker(element);
         }
         if (lookup instanceof MapperXmlLocator.Unknown) {
             return MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains(key)
-                    ? List.of(buildMethodMarker(element)) : null;
+                    ? buildMethodMarker(element) : null;
         }
         // Absent：确定不存在 → 收回正缓存、摘图标
         MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.remove(key);
