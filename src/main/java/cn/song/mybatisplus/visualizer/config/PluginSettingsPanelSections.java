@@ -210,7 +210,14 @@ public final class PluginSettingsPanelSections {
                 self.logAutoCaptureCheck.setText(MpSqlVisualizerBundle.message("settings.log.autoCapture"));
                 addRow(p, g, "", self.logAutoCaptureCheck);
                 self.logAutoOpenCheck.setText(MpSqlVisualizerBundle.message("settings.log.autoOpen"));
+                self.logAutoOpenCheck.setToolTipText(MpSqlVisualizerBundle.message("settings.log.autoOpen.tip"));
                 addRow(p, g, "", self.logAutoOpenCheck);
+                // T-AutoShowYield：自动展开的子开关（父项关闭时禁用）——同侧栏已有面板时让位，不顶掉用户正在用的那块
+                // 联动监听器挂在 PluginSettingsPanel 字段初始化处（rebuild 重跑本方法会叠加回调，k2j 约定）
+                self.logAutoOpenYieldCheck.setText(MpSqlVisualizerBundle.message("settings.log.autoOpenYield"));
+                self.logAutoOpenYieldCheck.setToolTipText(MpSqlVisualizerBundle.message("settings.log.autoOpenYield.tip"));
+                self.logAutoOpenYieldCheck.setEnabled(self.logAutoOpenCheck.isSelected());
+                addRow(p, g, "", self.logAutoOpenYieldCheck);
                 self.logStopOnToolWindowCloseCheck.setText(MpSqlVisualizerBundle.message("settings.log.stopOnToolWindowClose"));
                 addRow(p, g, "", self.logStopOnToolWindowCloseCheck);
                 self.logTimestampCheck.setText(MpSqlVisualizerBundle.message("settings.log.timestamp"));
@@ -435,7 +442,7 @@ public final class PluginSettingsPanelSections {
                 addRow(p, g, "", self.gutterGroupJdbcCheck);
                 addRow(p, g, "", self.gutterGroupInlineFallbackCheck);
                 addRow(p, g, "", self.gutterGroupOtherCheck);
-                // T-MapperNavCoexistYield：共存让位开关（默认勾选＝MyBatisCodeHelperPro 启用时让出跳转图标）
+                // T-MapperNavCoexistYield：共存让位开关（默认勾选＝同类插件启用时让出 **XML 语句行与 Mapper 接口方法行**的跳转图标）
                 self.mapperNavYieldCheck.setText(MpSqlVisualizerBundle.message("settings.mapperNavYield"));
                 self.mapperNavYieldCheck.setToolTipText(MpSqlVisualizerBundle.message("settings.mapperNavYield.tip"));
                 addRow(p, g, "", self.mapperNavYieldCheck);

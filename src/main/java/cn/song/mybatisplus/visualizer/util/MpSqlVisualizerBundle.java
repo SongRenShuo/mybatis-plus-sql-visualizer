@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.util;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.PropertyKey;
 
 import java.nio.charset.StandardCharsets;
@@ -73,6 +74,29 @@ public final class MpSqlVisualizerBundle {
             pattern = ResourceBundle.getBundle(BUNDLE_NAME, currentLocale(), loader(), UTF8_CONTROL).getString(key);
         } catch (Throwable e) {
             pattern = key;
+        }
+        if (params == null || params.length == 0) return pattern;
+        try {
+            return MessageFormat.format(pattern, params);
+        } catch (Throwable e) {
+            return pattern;
+        }
+    }
+
+    /**
+     * T-McpToolDisplayDesc：缺键返回 <b>null</b>（不回落 key 名）——调用方自带回落语义（如
+     * {@code McpToolsetSupport.displayDescription} 缺键回落工具名/空串）时用本方法；
+     * {@link #message} 的「缺键返回 key 本身」兜底会把键名字符串漏进 UI。
+     *
+     * <p>语言选择与 UTF-8 读取链与 {@link #message} 完全一致（currentLocale / UTF8_CONTROL）。</p>
+     */
+    @Nullable
+    public static String messageOrNull(@NotNull @PropertyKey(resourceBundle = BUNDLE_NAME) String key, Object... params) {
+        String pattern;
+        try {
+            pattern = ResourceBundle.getBundle(BUNDLE_NAME, currentLocale(), loader(), UTF8_CONTROL).getString(key);
+        } catch (Throwable e) {
+            return null;
         }
         if (params == null || params.length == 0) return pattern;
         try {

@@ -20,6 +20,7 @@ import com.intellij.openapi.actionSystem.ActionManager;
 import com.intellij.openapi.actionSystem.AnAction;
 import com.intellij.openapi.actionSystem.KeyboardShortcut;
 import com.intellij.openapi.actionSystem.Shortcut;
+import com.intellij.codeInsight.daemon.DaemonCodeAnalyzer;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.Disposable;
@@ -737,7 +738,7 @@ public class PluginSettingsPanel implements Disposable {
     public final JBCheckBox gutterGroupJdbcCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.jdbc"));
     public final JBCheckBox gutterGroupInlineFallbackCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.inlineFallback"));
     public final JBCheckBox gutterGroupOtherCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.other"));
-    /** T-MapperNavCoexistYield：MyBatisCodeHelperPro 启用时让出 Mapper 双向跳转图标（默认勾选＝让位）。 */
+    /** T-MapperNavCoexistYield：同类插件启用时让出 **XML 语句行与 Mapper 接口方法行**的跳转图标（默认勾选）。 */
     public final JBCheckBox mapperNavYieldCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.mapperNavYield"));
 
     /**
@@ -960,6 +961,19 @@ public class PluginSettingsPanel implements Disposable {
     public final JBCheckBox logMixedPrefixCheck = new JBCheckBox();
     public final JBCheckBox logAutoCaptureCheck = new JBCheckBox();
     public final JBCheckBox logAutoOpenCheck = new JBCheckBox();
+
+    /**
+     * T-AutoShowYield：自动展开的子开关——同侧栏已有面板时让位（父项关闭时禁用）。
+     *
+     * <p>初始化体里回填子项可用性：{@code rebuild()}（语言切换）会重跑 {@code buildSections}，
+     * 子项 enable 状态若只在分区构建里设，重建后仍由父项现值决定——但父项勾选变化的联动监听器
+     * 挂在字段初始化处（见下），避免重建叠加回调（k2j 设置页监听器约定）。</p>
+     */
+    public final JBCheckBox logAutoOpenYieldCheck = new JBCheckBox();
+
+    {
+        logAutoOpenCheck.addActionListener(e -> logAutoOpenYieldCheck.setEnabled(logAutoOpenCheck.isSelected()));
+    }
     public final JBCheckBox logStopOnToolWindowCloseCheck = new JBCheckBox();
     public final JBCheckBox logTimestampCheck = new JBCheckBox();
     public final JBTextField logTimestampFormatField = new JBTextField(12);
@@ -1672,6 +1686,7 @@ public class PluginSettingsPanel implements Disposable {
             || logMixedPrefixCheck.isSelected() != s.getLogMixedPrefix()
             || logAutoCaptureCheck.isSelected() != s.getLogAutoCaptureOnStart()
             || logAutoOpenCheck.isSelected() != s.getLogAutoOpenOnCapture()
+            || logAutoOpenYieldCheck.isSelected() != s.getLogAutoOpenYield()
             || logStopOnToolWindowCloseCheck.isSelected() != s.getLogStopOnToolWindowClose()
             || logTimestampCheck.isSelected() != s.getLogTimestampEnabled()
             || !logTimestampFormatField.getText().trim().equals(s.getLogTimestampFormat())
@@ -1748,12 +1763,34 @@ public class PluginSettingsPanel implements Disposable {
     }
 
     /**
+     * T-MapperNavYieldBothSides：让位开关变化后立即重算已打开文件的 gutter。
+     *
+     * <p>此前 daemon 不会因设置变更自动重跑，用户要重开文件才看到图标变化（2026-11-25 真机反馈）。</p>
+     */
+    @SuppressWarnings("DEPRECATION")
+    private void refreshGutterLineMarkers() {
+        ApplicationManager.getApplication().invokeLater(() -> {
+            for (Project proj : ProjectManager.getInstance().getOpenProjects()) {
+                if (!proj.isDisposed()) {
+                    try {
+                        DaemonCodeAnalyzer.getInstance(proj).restart();
+                    } catch (Throwable ignored) {
+                        // runCatching 等价：单个项目重算失败不影响其余项目
+                    }
+                }
+            }
+        }, ModalityState.any());
+    }
+
+    /**
      * 将表单值写回配置（Settings 点击 OK/Apply 时调用）；快捷键变化时写入 Keymap。
      *
      * @return 界面语言是否发生变化（true 时调用方应 {@link #rebuild()} 刷新设置页文案）
      */
     public boolean apply() {
         PluginSettings.State s = settings.getState();
+        // T-MapperNavYieldBothSides：记录让位开关旧值，写回后若变化则触发 gutter 重算
+        boolean yieldBefore = s.getMapperNavYieldToCodeHelper();
         // M19.1：语言变更判定包含「待应用」标记——写穿后（combo 与 state 已一致）仍报告一次变更，
         // 触发调用方 rebuild；消费后清除标记（后续 apply 幂等）
         Object lang = languageCombo.getSelectedItem();
@@ -1828,6 +1865,7 @@ public class PluginSettingsPanel implements Disposable {
             s.setLogMixedPrefix(logMixedPrefixCheck.isSelected());
             s.setLogAutoCaptureOnStart(logAutoCaptureCheck.isSelected());
             s.setLogAutoOpenOnCapture(logAutoOpenCheck.isSelected());
+            s.setLogAutoOpenYield(logAutoOpenYieldCheck.isSelected());
             s.setLogStopOnToolWindowClose(logStopOnToolWindowCloseCheck.isSelected());
             s.setLogTimestampEnabled(logTimestampCheck.isSelected());
             s.setLogTimestampFormat(logTimestampFormatField.getText().trim());
@@ -1913,6 +1951,8 @@ public class PluginSettingsPanel implements Disposable {
             s.setGutterGroupInlineFallback(gutterGroupInlineFallbackCheck.isSelected());
             s.setGutterGroupOther(gutterGroupOtherCheck.isSelected());
             s.setMapperNavYieldToCodeHelper(mapperNavYieldCheck.isSelected());
+            // T-MapperNavYieldBothSides：让位开关变化 → 立即重算已打开文件的 gutter（免重开文件）
+            if (yieldBefore != s.getMapperNavYieldToCodeHelper()) refreshGutterLineMarkers();
             s.setXmlInlineSqlEnabled(xmlInlineSqlCheck.isSelected());
             // T-PagesHql：maintainPage 源语言档写回（随 UI 分区，读写判定同归属）
             s.setPagesXmlSourceMode(selectedPagesSourceValue() != null
@@ -2070,6 +2110,8 @@ public class PluginSettingsPanel implements Disposable {
             logMixedPrefixCheck.setSelected(s.getLogMixedPrefix());
             logAutoCaptureCheck.setSelected(s.getLogAutoCaptureOnStart());
             logAutoOpenCheck.setSelected(s.getLogAutoOpenOnCapture());
+            logAutoOpenYieldCheck.setSelected(s.getLogAutoOpenYield());
+            logAutoOpenYieldCheck.setEnabled(s.getLogAutoOpenOnCapture());
             logStopOnToolWindowCloseCheck.setSelected(s.getLogStopOnToolWindowClose());
             logTimestampCheck.setSelected(s.getLogTimestampEnabled());
             logTimestampFormatField.setText(s.getLogTimestampFormat());

@@ -2,6 +2,7 @@
 package cn.song.mybatisplus.visualizer.mcp;
 
 import cn.song.mybatisplus.visualizer.util.FatalErrors;
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import com.intellij.openapi.project.DumbService;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.project.ProjectManager;
@@ -121,14 +122,26 @@ public abstract class McpToolsetSupport {
         return getClass().getSimpleName();
     }
 
-    /** 263 新增：工具集描述（外部清单/设置页展示用）。无独立文案，给空串不参与渲染。 */
+    /**
+     * 263 新增：工具集描述（外部清单/设置页展示用）。按插件语言读 bundle（T-McpToolDisplayDesc，
+     * 20261121 计划 §三.2）；缺键给空串（维持「不参与渲染」的既有语义）。
+     */
     public String displayDescription() {
-        return "";
+        String text = MpSqlVisualizerBundle.messageOrNull(toolDescKey(toolName));
+        return text != null ? text : "";
     }
 
-    /** 263 新增重载：带兜底文案的描述——透传平台给的 fallback，不自造文案。 */
+    /**
+     * 263 新增重载：带兜底文案的描述。T-McpToolDisplayDesc（20261121 计划 §二）：平台把
+     * <b>工具名</b>当 fallback 传进来（ToolsetReflection_utilKt 字节码实证），此前透传导致
+     * 设置页「公开的工具」灰字＝工具名（getPresentableDescription 取 displayDescription
+     * 非空即返，不回落 @McpDescription 长文）。现按插件语言读 bundle 一行简述（与插件
+     * 设置页门控区同一组键、中英双语跟随插件语言），键缺失才回落 fallback——与外部
+     * agent 的英文长文（@McpDescription）受众分离。
+     */
     public String displayDescription(String fallback) {
-        return fallback;
+        String text = MpSqlVisualizerBundle.messageOrNull(toolDescKey(toolName));
+        return text != null ? text : fallback;
     }
 
     // ------------------------------------------------------------------
@@ -210,6 +223,20 @@ public abstract class McpToolsetSupport {
      * （无执行面、参数面未立项）的审计行因此逐字节不变；执行类工具显式传真实摘要。
      */
     private static final String LEGACY_ARGS_SUMMARY = "ok";
+
+    /**
+     * T-McpToolDisplayDesc：工具简述 bundle 键派生（<b>单一事实来源</b>）——
+     * {@code settings.mcp.tool.desc.<尾段>}，尾段＝工具名去 {@code sqlv_} 前缀去下划线
+     * （与 {@link McpConfigurable} 的既有派生规则一致；11 键双语两份 properties 齐备）。
+     * 键派生提取到这里，防两处内联漂移（守卫族教训：前缀表字面量提成常量）。
+     *
+     * <p>移植注记：master 的 companion 里为 {@code internal fun}（模块可见，消费方跨包
+     * {@code config.McpConfigurable}）——Java 侧落 {@code public static}（KOTLIN_TO_JAVA_RULES §0.1）。</p>
+     */
+    public static String toolDescKey(String toolName) {
+        String tail = toolName.startsWith("sqlv_") ? toolName.substring("sqlv_".length()) : toolName;
+        return "settings.mcp.tool.desc." + tail.replace("_", "");
+    }
 
     /** 审计上下文旁路（T-McpDynamicToolset 零跨挂起点引用结构，见 {@link #audit} 头注）：key=token。 */
     public static final ConcurrentHashMap<Long, AuditContext> AUDIT_CTX = new ConcurrentHashMap<>();

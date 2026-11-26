@@ -212,9 +212,13 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         private boolean gutterGroupInlineFallback = true;
 
         /**
-         * T-MapperNavCoexistYield（默认开＝让位）：MyBatisCodeHelperPro 处于启用状态时，本插件的
-         * Mapper 双向跳转 gutter 图标（XML 语句行 ↔ Mapper 接口方法行）不显示，避免与对方的跳转
-         * 箭头叠在同一行。关闭后即使对方在位也强制显示本插件图标。
+         * T-MapperNavCoexistYield（默认开＝让位）：同类 MyBatis 导航插件启用时，本插件在
+         * <b>XML 语句行与 Mapper 接口方法行</b>的跳转图标都不显示，避免与对方的跳转箭头叠在同一处。
+         * 关闭后两侧都强制显示。
+         *
+         * <p>2026-11-25 用户拍板：让位覆盖两侧。能力前提（反编译）：XML 侧三家同类插件都画；
+         * Java 侧 MyBatisX/MyBatisPlus 会画，MPJ（UAST 注册）在当前平台不产出——只装 MPJ 时
+         * Java 方法行让位后会变空，该观感用户已确认接受。</p>
          *
          * <p>只影响 Mapper 双向跳转这一件事；SQL 预览等其余 gutter 与对方不撞车，不受此开关影响。
          * 竞品探测见 {@code cn.song.mybatisplus.visualizer.ui.gutter.MyBatisCompetitorGate}。</p>
@@ -305,6 +309,15 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         private boolean logStopOnToolWindowClose = false;
         /** 发现 SQL 时自动展开日志工具窗口（M37.3 默认开——竞品「每次手动开面板」是普遍抱怨；60s 防抖，show 不抢焦点）。 */
         private boolean logAutoOpenOnCapture = true;
+
+        /**
+         * 自动展开时让位给同侧栏正在使用的工具窗口（T-AutoShowYield，默认开）。
+         *
+         * <p>新 UI 同一侧栏同一时刻只显示一块面板，{@code show()} 会把当前显示的那块顶掉——用户正在用
+         * API 调试 / HTTP Client / Database 时被抢走是纯损失。开启时同侧已有面板就不展开；
+         * 关闭则恢复旧行为（无论侧栏当前显示什么都展开）。</p>
+         */
+        private boolean logAutoOpenYield = true;
         private boolean logTimestampEnabled = true;
         private String logTimestampFormat = DEFAULT_LOG_TIMESTAMP_FORMAT;
         /** 时间戳显示模式：log=日志时间（默认），capture=捕获时间。 */
@@ -819,6 +832,9 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public boolean getLogAutoOpenOnCapture() { return logAutoOpenOnCapture; }
         public void setLogAutoOpenOnCapture(boolean logAutoOpenOnCapture) { this.logAutoOpenOnCapture = logAutoOpenOnCapture; }
 
+        public boolean getLogAutoOpenYield() { return logAutoOpenYield; }
+        public void setLogAutoOpenYield(boolean logAutoOpenYield) { this.logAutoOpenYield = logAutoOpenYield; }
+
         public boolean getLogTimestampEnabled() { return logTimestampEnabled; }
         public void setLogTimestampEnabled(boolean logTimestampEnabled) { this.logTimestampEnabled = logTimestampEnabled; }
 
@@ -1078,6 +1094,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.logAutoCaptureSuppressed = logAutoCaptureSuppressed;
             c.logStopOnToolWindowClose = logStopOnToolWindowClose;
             c.logAutoOpenOnCapture = logAutoOpenOnCapture;
+            c.logAutoOpenYield = logAutoOpenYield;
             c.logTimestampEnabled = logTimestampEnabled;
             c.logTimestampFormat = logTimestampFormat;
             c.logTimestampSource = logTimestampSource;
@@ -1178,6 +1195,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && logAutoCaptureSuppressed == that.logAutoCaptureSuppressed
                     && logStopOnToolWindowClose == that.logStopOnToolWindowClose
                     && logAutoOpenOnCapture == that.logAutoOpenOnCapture
+                    && logAutoOpenYield == that.logAutoOpenYield
                     && logTimestampEnabled == that.logTimestampEnabled
                     && logFormatSql == that.logFormatSql
                     && literalParamRecovery == that.literalParamRecovery
@@ -1284,7 +1302,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     autoCheckUpdate, ignoredUpdateVersions, reverseWrapperFormat, embeddedColumnNaming, reverseManualEntitySelection,
                     libraryEntitySweepEnabled, sqlListPreviewHintSeen,
                     logSqlPrefix, logParamPrefix, logMixedPrefix, logAutoCaptureOnStart, logAutoCaptureSuppressed,
-                    logStopOnToolWindowClose, logAutoOpenOnCapture, logTimestampEnabled, logTimestampFormat, logTimestampSource,
+                    logStopOnToolWindowClose, logAutoOpenOnCapture, logAutoOpenYield, logTimestampEnabled, logTimestampFormat, logTimestampSource,
                     logFormatSql, literalParamRecovery, logFilterKeywords, logDedupeWindowMs, logMaxParseLength, logMaxCount,
                     logAutoSaveEnabled, logAutoSavePath, logAutoSaveFileNamePattern, logAutoSaveMaxFiles, logTimePrefix, slowQueryThresholdMs, showDurationInLogList,
                     showMethodInLogList,

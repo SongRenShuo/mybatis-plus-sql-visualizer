@@ -67,7 +67,7 @@ public final class UpdateSource {
      * 值与仓内发行页 {@code src/main/resources/html/marketplace-custom-page.html} 的 Marketplace 链接
      * 同源（此前无 Kotlin 常量，V114② 半数证伪——本常量为首个可复用落点）。
      */
-    public static final String MARKETPLACE_URL = "https://plugins.jetbrains.com/plugin/33633-sql-visualizer";
+    public static final String MARKETPLACE_URL = "https://plugins.jetbrains.com/plugin/33633-mybatis-sql-visualizer";
 
     /** 插件安装目录名（2026-08-20 修复）：zip 顶层目录名（= 插件安装时解压出的目录名）。 */
     public static final String INSTALL_DIR_NAME = "mybatis-plus-sql-visualizer";

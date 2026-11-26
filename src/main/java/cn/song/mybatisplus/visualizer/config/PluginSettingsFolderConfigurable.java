@@ -225,8 +225,46 @@ public class PluginSettingsFolderConfigurable implements Configurable {
         settings.select(target).doWhenDone(() -> {
             if (focusHint != null) {
                 focusTarget(target, focusHint);
+            } else {
+                // T-SqlLogSettingsJumpAnchor：只切页时把落点复位到页顶——平台按 configurable 缓存
+                // 页面组件与滚动位置，不复位会沿用上次停的位置（从日志面板点齿轮常落在页中间）。
+                scrollTargetToTop(target);
             }
         });
+    }
+
+    /**
+     * 切页后把目标页复位到页顶（T-SqlLogSettingsJumpAnchor）。
+     *
+     * <p>为什么需要：平台 {@code ConfigurableCardPanel} 按 configurable 缓存页面组件，并在未实现
+     * {@code Configurable.NoScroll} 时外包一层 {@code JScrollPane}；缓存命中沿用上次的滚动位置。
+     * 齿轮入口 {@code openSqlLogSettingsFocused(project, null)} 只切页不做任何定位，于是 SQL 日志页
+     * 这种多分组长页会停在中间。</p>
+     *
+     * <p>双 {@code invokeLater} 与 {@link #focusTarget} 同拍：等设置对话框完成装配与显示。复位失败静默
+     * （不影响导航本身），滚动容器由 {@code scrollRectToVisible} 沿祖先链自行查找。</p>
+     */
+    private void scrollTargetToTop(Configurable target) {
+        SwingUtilities.invokeLater(() -> SwingUtilities.invokeLater(() -> {
+            try {
+                JComponent root = target.createComponent();
+                if (root == null) return;
+                scrollToTop(root);
+            } catch (Throwable ignored) {
+                // 忽略复位失败，不影响导航
+            }
+        }));
+    }
+
+    /**
+     * 把组件所在滚动容器复位到页顶（internal 测试缝；{@code scrollRectToVisible} 沿祖先链找到
+     * 外包的 viewport）。
+     *
+     * <p>移植注记：master 侧为 {@code internal fun}（KOTLIN_TO_JAVA_RULES §0.1：internal → public）。</p>
+     */
+    public void scrollToTop(JComponent component) {
+        component.scrollRectToVisible(new java.awt.Rectangle(0, 0, 1, 1));
+        component.revalidate();
     }
 
     /**
@@ -719,7 +757,9 @@ public class PluginSettingsFolderConfigurable implements Configurable {
         fields.add(new SearchableField(msg("settings.log.paramPrefix"), msg("settings.log.paramPrefix.tip"), "settings.section.sqlLog", l));
         fields.add(new SearchableField(msg("settings.log.mixedPrefix"), msg("settings.log.mixedPrefix.tip"), "settings.section.sqlLog", l));
         fields.add(new SearchableField(msg("settings.log.autoCapture"), "", "settings.section.sqlLog", l));
-        fields.add(new SearchableField(msg("settings.log.autoOpen"), "", "settings.section.sqlLog", l));
+        fields.add(new SearchableField(msg("settings.log.autoOpen"), msg("settings.log.autoOpen.tip"), "settings.section.sqlLog", l));
+        // T-AutoShowYield：自动展开的子开关（同侧栏有面板时让位）
+        fields.add(new SearchableField(msg("settings.log.autoOpenYield"), msg("settings.log.autoOpenYield.tip"), "settings.section.sqlLog", l));
         fields.add(new SearchableField(msg("settings.log.stopOnToolWindowClose"), "", "settings.section.sqlLog", l));
         fields.add(new SearchableField(msg("settings.log.timestamp"), "", "settings.section.sqlLog", l));
         fields.add(new SearchableField(msg("settings.log.timestampFormat"), msg("settings.log.timestampFormat.tip"), "settings.section.sqlLog", l));
@@ -757,7 +797,7 @@ public class PluginSettingsFolderConfigurable implements Configurable {
         // T-PreviewExecWriteDefer：控制台准备档（三档）——新增设置行必须同步登记到搜索索引
         fields.add(new SearchableField(msg("settings.consolePrep"), msg("settings.consolePrep.tip"),
                 "settings.section.ui", u));
-        // T-MapperNavCoexistYield：共存让位开关（界面节，默认开）
+        // T-MapperNavCoexistYield：共存让位开关（界面节，默认开；XML 与 Mapper 两侧都让）
         fields.add(new SearchableField(msg("settings.mapperNavYield"), msg("settings.mapperNavYield.tip"), "settings.section.ui", u));
         // O-72 T-XmlInlineSql：通用 XML 内嵌 SQL 检测开关（界面节）
         fields.add(new SearchableField(msg("settings.xmlInlineSql"), msg("settings.xmlInlineSql.tip"), "settings.section.ui", u));
