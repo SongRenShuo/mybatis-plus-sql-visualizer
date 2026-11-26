@@ -187,6 +187,7 @@ public final class UastMetaLanguage extends MetaLanguage {
 - 图标先不换（S1 暂缓，`mapperMethod.svg` / `mapperStatement.svg` 维持原样）。
 - 设置项不拆：保持单一 `mapperNavYieldToCodeHelper`。
 - 由插件自动处理：Java 侧恒不让位、XML 侧继续让位；实现为内部固定，不新增子开关（等价 D-1 的 B 案，但对用户只暴露一个开关）。
+- ⚠ **2026-11-25 该结论被真机推翻**：`a009cf207` + `ddd37a5be` 改为「**两侧都让位、只保留预览图标**」，依据用户真机口径「勾选让位后两枚同款图标应两侧一起让」。现 master 行为＝XML 与 Java 跳转箭头都让位、预览保留；`settings.mapperNavYield` 文案与 `MapperNavigationGutterGateTest` 期望已同步。**册内下文凡写「Java 侧恒不让位」处均以此条为准**。
 
 ### 11.2 变更清单
 
@@ -243,5 +244,9 @@ public final class UastMetaLanguage extends MetaLanguage {
 | Java `cn.song.custcenter.mapper.CustInfoMapper` 第 14 行 `selectTopCustomers` | **2 枚同款红色 MyBatis 图标**；hover 左枚 tooltip＝「跳转到 Mapper XML 语句」 | 我方 1 枚 + MPJ 1 枚；让位开 + 竞品在位时 **Java 侧不再让位** ✅ |
 | 同名 XML 第 5 行 `<select id="selectTopCustomers">` | 1 枚青色 MyBatis 图标（MPJ 的 `view.I`）＋我方预览（紫色 Q），**无我方跳转图标** | XML 侧让位生效 ✅ |
 | Java 第 11 行 interface 声明 | 1 枚（MPJ 的 `UClass` 分支） | 我方无该锚，符合预期 |
+
+### 12.1 后续回填（2026-11-26）
+
+- 2026-11-26 文档订正：册内「Java 侧恒不让位」结论已于 2026-11-25 被真机推翻并改码（`a009cf207`/`ddd37a5be`），本册保留原文作决策链留痕，实际行为以 §八/§十一 的推翻注记为准。
 
 结论：修复在「真实 IDE + 真实 MPJ 插件」形态下行为与设计一致。口径说明：沙盒是 243（`IU-243.28141.41`），用户日常 263 的行为结论仍以 §3.2 反编译 + 用户截图为据；本表是 GUI 实测（证据分级：真机 GUI 实测，非单测推断）。
