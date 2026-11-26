@@ -165,14 +165,7 @@ class ConvertToSqlAction : AnAction() {
         // T-M25-03：光标在 MyBatis SQL 注解内 → 注解预览（@Select/@Update/Provider 族）
         val annotation = PsiTreeUtil.getParentOfType(element, PsiAnnotation::class.java, false)
         if (annotation != null && AnnotationSqlPreviewService.isSqlAnnotation(annotation)) {
-            val contextRef = java.util.concurrent.atomic.AtomicReference<cn.song.mybatisplus.visualizer.context.PreviewSourceContext?>()
-            SqlPreviewService.previewAsync(project, {
-                val context = AnnotationSqlPreviewService.resolveSourceContext(annotation, project)
-                contextRef.set(context)
-                AnnotationSqlPreviewService.preview(annotation, project, context)
-            }) { result ->
-                SqlPreviewService.showResult(project, result, sourceLocation, contextRef.get())
-            }
+            previewSqlAnnotation(project, annotation, sourceLocation)
             return
         }
 
@@ -189,6 +182,7 @@ class ConvertToSqlAction : AnAction() {
                 // 统一展示入口（M10-03）：按显示方式（F-16）弹窗 / 工具窗口 / 两者
                 SqlPreviewService.showResult(project, result, sourceLocation, wrapperContext.get())
             } else if (!tryMapperXmlMethodFallback(project, element, sourceLocation)
+                && !tryMapperAnnotationMethodFallback(project, element, sourceLocation)
                 && !tryIbatisCallFallback(project, element, sourceLocation)
                 && !tryIbatisMethodFallback(project, element, sourceLocation)
                 && !tryHqlFallback(service, project, element, sourceLocation)
@@ -249,6 +243,45 @@ class ConvertToSqlAction : AnAction() {
     private fun previewXmlStatementTag(project: Project, tag: XmlTag, sourceLocation: String?) {
         XmlSqlGutterLineMarkerProvider.previewStatementTag(project, sourceLocation) {
             (tag.containingFile as? XmlFile)?.let { file -> file to tag }
+        }
+    }
+
+    /**
+     * Mapper 注解绑定兜底（T-MapperPreviewDedupAndAnnotationShortcut，2026-11-26 用户报障）：
+     * 光标停在带 SQL 注解的方法声明处（方法名 / 参数 / 返回类型 / 方法 JavaDoc）→ 直接预览
+     * **该方法自己的**注解 SQL。
+     *
+     * 此前只有「光标落在 `PsiAnnotation` 内」才直预览；停在方法行（注解在上一行）会一路回落到
+     * 文件级候选列表 [showAnnotationCandidates]，用户被迫从全文件注解里挑一条。判据纯 PSI：
+     * `PsiMethod.modifierList.annotations` 里首个 `isSqlAnnotation` 命中的注解；光标在方法外
+     * （类体空白 / import / 字段）仍返回 false，保留列表兜底语义。
+     */
+    private fun tryMapperAnnotationMethodFallback(project: Project, element: PsiElement, sourceLocation: String?): Boolean {
+        val annotation = sqlAnnotationForMethod(element) ?: return false
+        previewSqlAnnotation(project, annotation, sourceLocation)
+        return true
+    }
+
+    /**
+     * 光标所在方法上的首个 SQL 注解（无方法 / 无注解返回 null）。
+     * `internal` 供测试直调（不含任何 UI 副作用）；判定与快捷键回落共用同一份。
+     */
+    internal fun sqlAnnotationForMethod(element: PsiElement): PsiAnnotation? {
+        val method = PsiTreeUtil.getParentOfType(element, PsiMethod::class.java, false) ?: return null
+        return method.modifierList.annotations.firstOrNull {
+            AnnotationSqlPreviewService.isSqlAnnotation(it)
+        }
+    }
+
+    /** SQL 注解预览（注解内光标与方法声明处两处共用，渲染链一份）。 */
+    private fun previewSqlAnnotation(project: Project, annotation: PsiAnnotation, sourceLocation: String?) {
+        val contextRef = java.util.concurrent.atomic.AtomicReference<cn.song.mybatisplus.visualizer.context.PreviewSourceContext?>()
+        SqlPreviewService.previewAsync(project, {
+            val context = AnnotationSqlPreviewService.resolveSourceContext(annotation, project)
+            contextRef.set(context)
+            AnnotationSqlPreviewService.preview(annotation, project, context)
+        }) { result ->
+            SqlPreviewService.showResult(project, result, sourceLocation, contextRef.get())
         }
     }
 

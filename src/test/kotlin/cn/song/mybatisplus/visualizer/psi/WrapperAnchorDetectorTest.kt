@@ -438,6 +438,67 @@ class WrapperAnchorDetectorTest : BasePlatformTestCase() {
         )
     }
 
+    // ---------- T-MapperPreviewDedup（2026-11-26）：无 body 方法的参数不是链起点 ----------
+
+    fun testInterfaceMethodWrapperParameterIsNotAnchor() {
+        // `Wrapper` 基类型的判定走 resolve + superChain 分类（`looksLikeWrapperName` 前门），
+        // 所以夹具必须让这个 FQN 可解析——否则 detectWrapperTypeDeep 落空，用例会变成空绿。
+        myFixture.addFileToProject(
+            "com/baomidou/mybatisplus/core/conditions/Wrapper.java",
+            "package com.baomidou.mybatisplus.core.conditions; public interface Wrapper<T> {}",
+        )
+        configure(
+            """
+            import com.baomidou.mybatisplus.core.conditions.Wrapper;
+            import org.apache.ibatis.annotations.Param;
+
+            public interface DemoMapper {
+                java.util.List<Object> selectByEw(@Param("ew") Wrapper<Object> ew);
+            }
+            """,
+        )
+        val param = PsiTreeUtil.findChildOfType(myFixture.file, PsiParameter::class.java)!!
+        assertNull(
+            "Mapper 接口（无 body）的 Wrapper 参数不是链起点——预览归方法行图标",
+            WrapperAnchorDetector.anchorElement(param.nameIdentifier),
+        )
+    }
+
+    fun testAbstractMethodWrapperParameterIsNotAnchor() {
+        configure(
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+            public abstract class Demo {
+                public abstract void del(LambdaQueryWrapper<Object> wrapper);
+            }
+            """,
+        )
+        val param = PsiTreeUtil.findChildOfType(myFixture.file, PsiParameter::class.java)!!
+        assertNull(
+            "抽象方法（无 body）的参数同样不是链起点",
+            WrapperAnchorDetector.anchorElement(param.nameIdentifier),
+        )
+    }
+
+    fun testDefaultMethodWrapperParameterAnchors() {
+        configure(
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+            public interface DemoMapper {
+                default void del(LambdaQueryWrapper<Object> wrapper) {
+                    wrapper.eq(Object::toString, "x");
+                }
+            }
+            """,
+        )
+        val param = PsiTreeUtil.findChildOfType(myFixture.file, PsiParameter::class.java)!!
+        assertSame(
+            "接口 default 方法有 body，参数仍可能是链源——照旧锚定",
+            param.nameIdentifier,
+            WrapperAnchorDetector.anchorElement(param.nameIdentifier),
+        )
+    }
+
     fun testBatchOperationCallAnchors() {
         // 批量操作调用（`service.updateBatchById(list)`）→ 方法名应是锚点
         configure(

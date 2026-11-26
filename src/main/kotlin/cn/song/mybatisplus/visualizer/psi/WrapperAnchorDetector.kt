@@ -7,6 +7,7 @@ import com.intellij.psi.PsiExpression
 import com.intellij.psi.PsiIdentifier
 import com.intellij.psi.PsiKeyword
 import com.intellij.psi.PsiLambdaExpression
+import com.intellij.psi.PsiMethod
 import com.intellij.psi.PsiMethodCallExpression
 import com.intellij.psi.PsiNewExpression
 import com.intellij.psi.PsiParameter
@@ -91,6 +92,15 @@ object WrapperAnchorDetector {
             // LambdaQueryWrapper）不标锚点——嵌套条件 lambda 参数不是独立 wrapper 变量（方法参数
             // `void del(LambdaQueryWrapper<X> w)` 父链是 PsiMethod，不受影响）。O(1) 语法级（parent 链）。
             if (variable is PsiParameter && (variable.parent?.parent) is PsiLambdaExpression) return null
+            // T-MapperPreviewDedup（2026-11-26 用户报障）：抽象/接口方法（无 body）的参数**不是链起点**。
+            // Mapper 接口里的 `@Param("ew") Wrapper<Order> ew` 只是 `${ew.customSqlSegment}` 占位符，
+            // 参数名上再出一枚 Wrapper 预览图标会与方法行的 SQL 预览图标同款同行（用户看到「图标重复」）。
+            // 有 body 的方法（实现类 / 接口 default 方法）参数仍可能是方法体内的链源，照旧锚定。
+            // O(1) 语法级（parent 链），零 resolve。
+            if (variable is PsiParameter) {
+                val owner = variable.parent?.parent as? PsiMethod
+                if (owner != null && owner.body == null) return null
+            }
             if (WrapperLocator.detectWrapperTypeDeep(variable.type) != null) return element
             // 降级：变量用抽象基类型声明（`Wrapper<X> w = new LambdaQueryWrapper<X>()...`），
             // 初始化表达式链首是具体 wrapper 构造 / Wrappers 工厂 → 仍应标变量声明。

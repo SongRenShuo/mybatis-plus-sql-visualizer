@@ -417,4 +417,91 @@ class ConvertToSqlActionTest : BasePlatformTestCase() {
             mapper > 0 && ibatisCall > 0 && mapper < ibatisCall,
         )
     }
+
+    // ---------- T-MapperPreviewDedupAndAnnotationShortcut：注解方法按方法定位（2026-11-26） ----------
+
+    /**
+     * 用户报障：「注解 sql 用快捷键预览，弹了列表，没预览选中的 sql」。
+     * 光标停在方法声明行（注解在上一行）时，快捷键必须定位到**该方法自己的** SQL 注解。
+     */
+    fun test注解方法声明行_定位到该方法注解() {
+        val file = myFixture.configureByText(
+            "UserMapper.java",
+            """
+            package com.demo;
+            import org.apache.ibatis.annotations.Update;
+            public interface UserMapper {
+                @Update("CREATE TABLE IF NOT EXISTS t_demo (id INT)")
+                int createDemoTable();
+            }
+            """.trimIndent(),
+        )
+        val methodName = PsiTreeUtil.findChildrenOfType(file, com.intellij.psi.PsiIdentifier::class.java)
+            .first { it.text == "createDemoTable" }
+        val annotation = ConvertToSqlAction().sqlAnnotationForMethod(methodName)
+        assertNotNull("光标在方法名上应定位到该方法的 @Update", annotation)
+        assertTrue(
+            "应定位到 Update 注解：${annotation!!.text}",
+            annotation.text.contains("Update"),
+        )
+    }
+
+    fun test方法JavaDoc区_同样定位到方法注解() {
+        val file = myFixture.configureByText(
+            "UserMapper.java",
+            """
+            package com.demo;
+            import org.apache.ibatis.annotations.Select;
+            public interface UserMapper {
+                /** 说明 */
+                @Select("SELECT 1 FROM dual")
+                int ping();
+            }
+            """.trimIndent(),
+        )
+        val doc = PsiTreeUtil.findChildrenOfType(file, com.intellij.psi.PsiComment::class.java)
+            .first { it.text.startsWith("/**") }
+        val token = PsiTreeUtil.getDeepestFirst(doc)
+        val annotation = ConvertToSqlAction().sqlAnnotationForMethod(token)
+        assertNotNull("光标在方法 JavaDoc 里也应定位到方法注解", annotation)
+        assertTrue("应定位到 Select 注解：${annotation!!.text}", annotation.text.contains("Select"))
+    }
+
+    fun test类体空白处_不定位方法注解() {
+        val file = myFixture.configureByText(
+            "UserMapper.java",
+            """
+            package com.demo;
+            import org.apache.ibatis.annotations.Select;
+            public interface UserMapper {
+                @Select("SELECT 1 FROM dual")
+                int ping();
+
+            }
+            """.trimIndent(),
+        )
+        val cls = PsiTreeUtil.findChildOfType(file, com.intellij.psi.PsiClass::class.java)!!
+        val rbrace = PsiTreeUtil.findChildrenOfType(cls, com.intellij.psi.PsiJavaToken::class.java)
+            .last { it.text == "}" }
+        assertNull(
+            "光标在类体空白处不应定位到方法注解（保留文件级列表兜底）",
+            ConvertToSqlAction().sqlAnnotationForMethod(rbrace),
+        )
+    }
+
+    /** 链序守卫：XML 绑定 → 注解绑定 → iBatis 等家族（注解档在 XML 之后、iBatis 之前）。 */
+    fun testMapper注解档排在XML与iBatis之间() {
+        val source = java.io.File(
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/actions/ConvertToSqlAction.kt",
+        ).readText()
+        val xml = source.indexOf("!tryMapperXmlMethodFallback(")
+        val anno = source.indexOf("!tryMapperAnnotationMethodFallback(")
+        val ibatis = source.indexOf("!tryIbatisCallFallback(")
+        assertTrue(
+            "三档都必须出现在链里（xml=$xml anno=$anno iBatis=$ibatis）",
+            xml > 0 && anno > 0 && ibatis > 0,
+        )
+        assertTrue("XML 档必须先于注解档", xml < anno)
+        assertTrue("注解档必须先于 iBatis", anno < ibatis)
+    }
 }
