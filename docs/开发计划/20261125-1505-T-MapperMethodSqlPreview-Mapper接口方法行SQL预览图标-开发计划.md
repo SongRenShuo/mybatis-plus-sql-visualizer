@@ -246,6 +246,33 @@ bundle 中英各加两键（`MpSqlVisualizerBundle.properties` / `_zh.properties
 
 ---
 
-## 九、实施记录
+## 九、实施记录（2026-11-25，分支 `mapper-method-preview`，工作树 `.worktrees/t-mapper-method-preview`；**未合并主分支**）
 
-（实施后回填：分支/工作树、提交哈希、定向读数、反向读数、沙盒证据。）
+### 9.1 落地
+
+- master `577f16648`：本计划立项提交。
+- 分支 `12f3232b8`：S1~S5 生产改动 + 基线更新 + 文档登记（11 files，+263/−55）。
+  - `MapperNavigationLineMarkerProviders.kt`：`createMarker` 保留名字与 `MapperXmlLocator.locateOrUnknown` / 五段式形态（`MapperXmlSlowResolveFailGuardTest` 扫描面零改动），返回值改 `List<LineMarkerInfo<*>>?`；新增 `buildMethodMarkers`（预览在前、跳转在后）、`buildMethodPreviewMarker`、`MapperMethodPreviewNavigationHandler`（`PsiSnapshot` 校验 + dumb `runWhenSmart`）；让位门改为 `yieldNavigation`，只作用于跳转箭头与类名图标。
+  - `XmlSqlGutterLineMarkerProvider.kt`：抽 `internal fun previewStatementTag(project, sourceLocation, resolve)`，XML 侧 handler 改为调用（`[open-perf]` 分段日志与 `sourceContext` 回调逐字保留）。
+  - bundle 中英新增 `gutter.mapperMethodPreview.tooltip` / `.accessible.name`；图标复用 `/icons/sqlGutter.svg`，不新增资源、不改 `plugin.xml`、不加设置项。
+
+### 9.2 定向读数
+
+- 6 类 **95/0**：`MapperNavigationLineMarkerProvidersTest` 31、`IbatisNavigationLineMarkerProvidersTest` 34、`MapperNavigationGutterGateTest` 15、`MapperNavCoexistUastReproTest` 6、`BundleParityGuardTest` 5、`MapperXmlSlowResolveFailGuardTest` 4。
+- 新增 6 条预览用例：双枚且预览在左、无 XML 零枚、dumb 乐观、类名行零预览、组闸同灭、方法名过滤器（既有基线用例同步改造）。
+
+### 9.3 反向验证（两轮，逐面恰红）
+
+- 轮 1（摘掉 `buildMethodMarkers` 里的预览 `add`）：**86 tests / 11 红**——双枚用例、dumb 乐观、让位开与让位关的预览断言、Coexist 三处、Ibatis 一处；跳转相关保持绿。
+- 轮 2（让位门改回整段 `return`）：**55 tests / 3 红**——恰为让位开的三处预览断言（GutterGate / Coexist / Ibatis）。
+- 还原后复跑 6 类 **95/0**，`git diff` 空（反向改动全部撤销）。
+
+### 9.4 环境与 API 坑（本轮新增）
+
+- 平台 transform `…/9.7.0/transforms/cfd9113040487d86d63d9022472046cb` 是半成品（`lib` 只有 `app.jar` / `app-client.jar`），`:test` 在平台路径校验阶段报「com.intellij core plugin not found」。占用者是用户 IDE 的 Kotlin daemon（PID 27684，Restart Manager 点名），删/改名均 Permission denied；最终用 `modules-2/files-2.1/idea/ideaIU/2024.3.7.1/…/ideaIU-2024.3.7.1-win.zip` **`unzip -n` 就地补齐**（2268 files，跳过被占的两个 jar）后恢复。
+- 243 的 `LineMarkerInfo` 没有 `getTooltip()`，tooltip 属性名是 **`getLineMarkerTooltip()`**（javap 实证）。首次批量把 `.tooltip` 换成 `.lineMarkerTooltip` 时连带改坏了 bundle key 字符串（`gutter.mapperMethodPreview.lineMarkerTooltip`），过滤判定恒 false → 16 红；二次修正后全绿。
+
+### 9.5 未做
+
+- 沙盒 GUI 目视验收（一行两枚图标的左右顺序、点击预览面板内容、让位开只留预览）未执行——当前平台缓存被占用、未启动 `runIde`；P-1/P-2 由单测钉住（同一 element 收集到 2 枚、预览在 `result[0]`），真机渲染待验收。
+- 多语句（`databaseId` 变体）选择器与 MP 内置 CRUD 预览仍按 §二 非目标搁置。

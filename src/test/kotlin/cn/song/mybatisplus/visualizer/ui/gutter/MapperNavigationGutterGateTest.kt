@@ -2,6 +2,8 @@ package cn.song.mybatisplus.visualizer.ui.gutter
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.log.MapperXmlLocator
+import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.codeInsight.daemon.LineMarkerInfo
 import com.intellij.codeInsight.daemon.LineMarkerProvider
 import com.intellij.psi.PsiIdentifier
@@ -138,11 +140,13 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
         assertEquals("service 类方法声明不应产生标记", 0, markers.size)
     }
 
-    fun test接口方法_恰一标记且定位命中() {
+    fun test接口方法_出预览与跳转两枚且定位命中() {
         addMapperXmlForInterface()
         myFixture.configureByText("UserMapper.java", javaFixture)
         val markers = collectMarkers(MapperJavaToXmlLineMarkerProvider(), methodNameLeaves())
-        assertEquals("UserMapper.selectById 声明行应恰 1 标记", 1, markers.size)
+        assertEquals("UserMapper.selectById 声明行应恰 2 枚（预览 + 跳转）", 2, markers.size)
+        assertEquals("其中一枚跳转箭头", 1, markers.count { it.icon === MpvsIcons.MapperMethod })
+        assertEquals("其中一枚 SQL 预览图标", 1, markers.count { it.lineMarkerTooltip == previewTooltip })
         assertTrue("接口方法应触达 locate（正缓存入账）",
             MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys
                 .contains(MapperXmlToJavaLineMarkerProvider.cacheKey(project, "com.demo.mapper.UserMapper", "selectById")))
@@ -186,22 +190,29 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
         return tag.name == "mapper" && tag.parentTag == null
     }
 
-    /** Java 侧基线：接口方法声明行恰 1 个跳转图标（与 test接口方法_恰一标记且定位命中 同夹具）。 */
-    private fun javaSideMarkerCount(): Int {
+    /** Java 侧基线（T-MapperMethodSqlPreview）：方法行两枚——跳转箭头 + SQL 预览。 */
+    private fun javaSideCounts(): Pair<Int, Int> {
         addMapperXmlForInterface()
         myFixture.configureByText("UserMapper.java", javaFixture)
-        return collectMarkers(MapperJavaToXmlLineMarkerProvider(), methodNameLeaves()).size
+        val ms = collectMarkers(MapperJavaToXmlLineMarkerProvider(), methodNameLeaves())
+        return ms.count { it.icon === MpvsIcons.MapperMethod } to ms.count { it.lineMarkerTooltip == previewTooltip }
     }
+
+    private val previewTooltip: String
+        get() = MpSqlVisualizerBundle.message("gutter.mapperMethodPreview.tooltip")
 
     fun test竞品在位且让位开_XML侧零图标() {
         MyBatisCompetitorGate.probe = { true }
         assertEquals("竞品在位 + 让位开：XML 侧应让位（0 图标）", 0, xmlSideMarkerCount())
     }
 
-    fun test竞品在位且让位开_Java侧零图标() {
+    fun test竞品在位且让位开_Java侧只让跳转预览保留() {
         MyBatisCompetitorGate.probe = { true }
-        // 2026-11-25 用户拍板：让位覆盖 XML 与 Mapper 两侧。
-        assertEquals("竞品在位 + 让位开：Java 侧应让位（0 图标）", 0, javaSideMarkerCount())
+        // 2026-11-25 拍板：让位覆盖 XML 与 Mapper 两侧的**跳转**；方法行预览图标是我方独有能力，
+        // 三家竞品的 Java 侧 provider 反编译均为跳转箭头，让位开着预览照出。
+        val (navigation, preview) = javaSideCounts()
+        assertEquals("竞品在位 + 让位开：跳转箭头应让位（0 枚）", 0, navigation)
+        assertEquals("让位只让跳转：方法行预览图标保留 1 枚", 1, preview)
     }
 
     fun test竞品在位但让位关_XML侧与基线一致() {
@@ -214,7 +225,9 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
     fun test竞品在位但让位关_Java侧与基线一致() {
         withYieldDisabled {
             MyBatisCompetitorGate.probe = { true }
-            assertEquals("让位关：Java 侧强制保留本插件图标", 1, javaSideMarkerCount())
+            val (navigation, preview) = javaSideCounts()
+            assertEquals("让位关：Java 侧强制保留跳转箭头", 1, navigation)
+            assertEquals("让位关：预览图标同在", 1, preview)
         }
     }
 
@@ -225,7 +238,9 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
 
     fun test竞品不在位_Java侧基线不变() {
         MyBatisCompetitorGate.probe = { false }
-        assertEquals("不在位：Java 侧基线 1", 1, javaSideMarkerCount())
+        val (navigation, preview) = javaSideCounts()
+        assertEquals("不在位：跳转基线 1", 1, navigation)
+        assertEquals("不在位：预览基线 1", 1, preview)
     }
 
     // ---------- T-MapperNavNamespaceJump：根标签跳类图标同受 XML 侧让位门 ----------

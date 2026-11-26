@@ -3,11 +3,13 @@ package cn.song.mybatisplus.visualizer.ui.gutter
 import cn.song.mybatisplus.visualizer.log.MapperXmlLocator
 import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
 import cn.song.mybatisplus.visualizer.ui.ref.MybatisXmlTargets
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.codeInsight.daemon.LineMarkerInfo
 import com.intellij.codeInsight.daemon.LineMarkerProvider
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
+import com.intellij.psi.PsiIdentifier
 import com.intellij.psi.PsiMethod
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.XmlTag
@@ -53,21 +55,30 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         myFixture.addFileToProject("mapper/UserMapper.xml", "<mapper namespace=\"$namespace\">\n$body\n</mapper>")
 
     /**
+     * 收集 marker（未过滤全量）。T-MapperMethodSqlPreview 起方法行有「预览 + 跳转」两枚，
+     * 基线用例只关心跳转——[markers] 默认过滤预览，[allMarkers] 供双图标用例断言。
+     */
+    private fun allMarkers(provider: LineMarkerProvider, file: PsiFile): List<LineMarkerInfo<*>> {
+        val elements = PsiTreeUtil.collectElements(file) { it.firstChild == null }.toMutableList()
+        val result = mutableListOf<LineMarkerInfo<*>>()
+        provider.collectSlowLineMarkers(elements, result)
+        return result
+    }
+
+    /**
      * 收集 marker。T-MapperNavNamespaceJump 起 XML 侧多了一枚「根标签 → 接口类」图标，
      * 既有用例均以语句图标为基线——默认把它过滤掉（[includeRoot] 显式打开供新用例断言）。
+     * T-MapperClassJump / T-MapperMethodSqlPreview 的类名图标与方法行预览图标同理默认排除。
      */
     private fun markers(
         provider: LineMarkerProvider,
         file: PsiFile,
         includeRoot: Boolean = false,
     ): List<LineMarkerInfo<*>> {
-        val elements = PsiTreeUtil.collectElements(file) { it.firstChild == null }.toMutableList()
-        val result = mutableListOf<LineMarkerInfo<*>>()
-        provider.collectSlowLineMarkers(elements, result)
-        // T-MapperClassJump：接口类名新增一枚跳 XML 图标——语句/方法基线用例默认排除它，
-        // 类名用例用 collectFor(指定 leaf) 单独断言。
-        val withoutClass = result.filterNot(::isMapperClassMarker)
-        return if (includeRoot) withoutClass else withoutClass.filterNot(::isRootMapperMarker)
+        val withoutClassAndPreview = allMarkers(provider, file)
+            .filterNot(::isMapperClassMarker)
+            .filterNot(::isMethodPreviewMarker)
+        return if (includeRoot) withoutClassAndPreview else withoutClassAndPreview.filterNot(::isRootMapperMarker)
     }
 
     private fun isMapperClassMarker(info: LineMarkerInfo<*>): Boolean {
@@ -75,6 +86,10 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         val owner = id.parent as? com.intellij.psi.PsiClass ?: return false
         return owner.nameIdentifier === id
     }
+
+    /** T-MapperMethodSqlPreview：方法行 SQL 预览图标（tooltip 是唯一稳定判据——锚点与跳转同 element）。 */
+    private fun isMethodPreviewMarker(info: LineMarkerInfo<*>): Boolean =
+        info.lineMarkerTooltip == MpSqlVisualizerBundle.message("gutter.mapperMethodPreview.tooltip")
 
     private fun isRootMapperMarker(info: LineMarkerInfo<*>): Boolean {
         val token = info.element as? XmlToken ?: return false
@@ -401,5 +416,63 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
     fun test接口类名_无XML不出图标() {
         val java = addMapper()
         assertEmpty("接口没有对应 XML 时类名不出死图标", collectFor(javaProvider, listOf(classNameIdentifier(java))))
+    }
+
+    // ---------- T-MapperMethodSqlPreview：方法行 SQL 预览图标（2026-11-25 用户需求） ----------
+
+    private fun methodNameLeaves(file: PsiFile): List<PsiIdentifier> =
+        PsiTreeUtil.collectElementsOfType(file, PsiIdentifier::class.java)
+            .filter { it.parent is PsiMethod && (it.parent as PsiMethod).nameIdentifier === it }
+
+    private val previewTooltip: String
+        get() = MpSqlVisualizerBundle.message("gutter.mapperMethodPreview.tooltip")
+
+    fun testJavaMethodRowHasPreviewAndNavigationMarkers() {
+        val java = addMapper()
+        addXml("  <select id=\"count\">SELECT 1</select>")
+        val all = collectFor(javaProvider, methodNameLeaves(java).filter { it.text == "count" })
+        assertEquals("count 方法行应恰 2 枚（预览 + 跳转）", 2, all.size)
+        assertEquals("预览图标在前（与 XML 语句行阅读顺序一致）", previewTooltip, all[0].lineMarkerTooltip)
+        assertSame("跳转图标保持既有样式", MpvsIcons.MapperMethod, all[1].icon)
+        assertEquals("跳转 tooltip 不变", MpSqlVisualizerBundle.message("gutter.mapperMethod.tooltip"), all[1].lineMarkerTooltip)
+    }
+
+    fun testJavaMethodPreviewMarkerAbsentWithoutXml() {
+        val java = addMapper()
+        assertEmpty("无 XML 语句的方法行不得出预览图标（不出点了必空的入口）", collectFor(javaProvider, methodNameLeaves(java)))
+    }
+
+    fun testJavaMethodPreviewMarkerFollowsDumbOptimisticBranch() {
+        val original = MapperXmlToJavaLineMarkerProvider.isDumbProvider
+        MapperXmlToJavaLineMarkerProvider.isDumbProvider = { true }
+        try {
+            val java = addMapper()
+            val ms = collectFor(javaProvider, methodNameLeaves(java).filter { it.text == "count" })
+            assertEquals("dumb 窗乐观产出：预览 + 跳转 2 枚（与跳转同口径）", 2, ms.size)
+            assertEquals("预览图标沿用 F1-b 乐观分支", previewTooltip, ms[0].lineMarkerTooltip)
+        } finally {
+            MapperXmlToJavaLineMarkerProvider.isDumbProvider = original
+        }
+    }
+
+    fun testJavaClassRowHasNoPreviewMarker() {
+        val java = addMapper()
+        addXml("<select id=\"count\">select 1</select>")
+        val ms = collectFor(javaProvider, listOf(classNameIdentifier(java)))
+        assertEquals("类名行只出类跳转一枚，不带预览（类名不是语句）", 1, ms.size)
+        assertSame(MpvsIcons.MapperMethod, ms.single().icon)
+    }
+
+    fun testJavaMethodPreviewMarkerFilteredByMapperXmlGroup() {
+        val settings = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
+        val before = settings.state
+        try {
+            settings.loadState(before.copy(showGutterIcon = true, gutterGroupMapperXml = false))
+            val java = addMapper()
+            addXml("<select id=\"count\">SELECT 1</select>")
+            assertEmpty("mapperXml 组关闭时预览与跳转同灭", collectFor(javaProvider, methodNameLeaves(java)))
+        } finally {
+            settings.loadState(before)
+        }
     }
 }

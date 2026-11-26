@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.ui.gutter
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.codeInsight.daemon.LineMarkerInfo
 import com.intellij.codeInsight.daemon.LineMarkerProvider
 import com.intellij.codeInsight.daemon.LineMarkerProviders
@@ -208,6 +209,10 @@ class MapperNavCoexistUastReproTest : BasePlatformTestCase() {
     private fun ownIconCount(markers: List<LineMarkerInfo<*>>): Int =
         markers.count { it.getIcon() === MpvsIcons.MapperMethod }
 
+    /** T-MapperMethodSqlPreview：方法行 SQL 预览图标（锚点与跳转箭头同 element，只能按 tooltip 区分）。 */
+    private fun previewIconCount(markers: List<LineMarkerInfo<*>>): Int =
+        markers.count { it.lineMarkerTooltip == MpSqlVisualizerBundle.message("gutter.mapperMethodPreview.tooltip") }
+
     private fun peerIconCount(markers: List<LineMarkerInfo<*>>): Int =
         markers.count { it.getIcon() === PEER_ICON }
 
@@ -243,7 +248,8 @@ class MapperNavCoexistUastReproTest : BasePlatformTestCase() {
             peer.interfaceMethodLeafVisits > beforeLeaf,
         )
         assertEquals("模拟同类插件在该方法行应恰出 1 枚 marker", 1, peerIconCount(markers))
-        assertEquals("该行应共 2 枚 marker（我方 1 + 模拟同类插件 1）", 2, markers.size)
+        assertEquals("T-MapperMethodSqlPreview：我方方法行应有 1 枚预览图标", 1, previewIconCount(markers))
+        assertEquals("该行应共 3 枚 marker（我方预览 1 + 我方箭头 1 + 模拟同类插件 1）", 3, markers.size)
     }
 
     /** 真实 daemon 高亮管线（非手工分发）是否也会把 Java 元素喂给 UAST provider。 */
@@ -258,27 +264,29 @@ class MapperNavCoexistUastReproTest : BasePlatformTestCase() {
 
     // ---------- ② 让位开/关的枚数复现 ----------
 
-    fun test竞品在位且让位关方法行共2枚图标() {
+fun test竞品在位且让位关方法行共3枚图标() {
         withYieldSwitch(false) {
             armPeer(true)
             configureJavaFixture()
             val markers = collectMethodLineMarkers(myFixture.file, JavaLanguage.INSTANCE)
-            assertEquals("让位关：我方应保留图标", 1, ownIconCount(markers))
+            assertEquals("让位关：我方应保留跳转箭头", 1, ownIconCount(markers))
             assertEquals("让位关：模拟同类插件也应出图标", 1, peerIconCount(markers))
-            assertEquals("让位关：方法行应共 2 枚跳转图标（用户报障的 2 枚）", 2, markers.size)
+            assertEquals("让位关：我方预览图标同在", 1, previewIconCount(markers))
+            assertEquals("让位关：方法行应共 3 枚（预览 + 我方箭头 + 对方箭头）", 3, markers.size)
         }
     }
 
-    fun test竞品在位且让位开方法行仍2枚图标() {
+    fun test竞品在位且让位开方法行只剩预览与对方箭头() {
         withYieldSwitch(true) {
             armPeer(true)
             configureJavaFixture()
             val markers = collectMethodLineMarkers(myFixture.file, JavaLanguage.INSTANCE)
-            // T-MapperNavYieldJavaSideKeep：Java 侧不再让位（对方同款图标 + 让位后无法分辨，
-            // 见 MapperJavaToXmlLineMarkerProvider KDoc）。历史行为（让位开=1 枚）已被本用例取代。
-            assertEquals("让位开：Java 侧应让位（0 枚）", 0, ownIconCount(markers))
-            assertEquals("让位开：同类插件仍出图标", 1, peerIconCount(markers))
-            assertEquals("让位开：方法行只剩 1 枚（对方）", 1, markers.size)
+            // T-MapperMethodSqlPreview（2026-11-25）：让位只让**跳转**，方法行预览图标保留——
+            // 该行不再是空的（此前只装 MPJ 时让位后 Java 行 0 枚）。
+            assertEquals("让位开：跳转箭头应让位（0 枚）", 0, ownIconCount(markers))
+            assertEquals("让位开：同类插件仍出箭头", 1, peerIconCount(markers))
+            assertEquals("让位开：我方预览图标保留 1 枚", 1, previewIconCount(markers))
+            assertEquals("让位开：方法行共 2 枚（我方预览 + 对方箭头）", 2, markers.size)
         }
     }
 
@@ -289,8 +297,9 @@ class MapperNavCoexistUastReproTest : BasePlatformTestCase() {
             configureJavaFixture()
             val markers = collectMethodLineMarkers(myFixture.file, JavaLanguage.INSTANCE)
             assertEquals("竞品不在位：我方不得让位", 1, ownIconCount(markers))
+            assertEquals("我方预览图标同在", 1, previewIconCount(markers))
             assertEquals("对照侧仍模拟出 1 枚同类插件 marker（证明门不读 marker）", 1, peerIconCount(markers))
-            assertEquals("共 2 枚：门判的是插件启停而非运行期 marker 存在性", 2, markers.size)
+            assertEquals("共 3 枚：门判的是插件启停而非运行期 marker 存在性", 3, markers.size)
         }
     }
 

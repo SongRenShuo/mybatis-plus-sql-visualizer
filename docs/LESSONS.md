@@ -1273,6 +1273,36 @@ CI run 45562438538 的 test(4)：第 1/2 次真竞态（1m02 / 49s），第 3 �
 
 **Seen 1× (2026-11-25)**
 
+### L105 批量替换 API 属性名会连坐字符串常量里的同名后缀——改完先 grep 键名再跑测试
+
+**规则**：用「全量替换 `.foo` → `.bar`」修 API 属性名时，替换面会覆盖 `"a.b.foo"` 这类**字符串字面量**。
+凡是替换目标后缀同时出现在 bundle key / 配置键 / 消息 ID 里，替换后必须 `grep` 一遍「键名 + 新后缀」，
+确认没有把数据键改成不存在的名字。否则表现为「过滤/查找恒 miss」的一整片假红，看着像业务逻辑坏了。
+
+**证据**：`T-MapperMethodSqlPreview`（`12f3232b8`）把测试里的 `LineMarkerInfo.tooltip` 换成
+`lineMarkerTooltip`（243 的访问器实叫 `getLineMarkerTooltip()`），连坐把
+`MpSqlVisualizerBundle.message("gutter.mapperMethodPreview.tooltip")` 改成 `.lineMarkerTooltip`——
+键不存在返回键名本身，预览 marker 过滤恒 false，6 个方法各算两枚 → **16 红**；二次修正键名后 95/0。
+（对齐轮注：本支原编 L102，与 master 侧 L102 撞号，2026-11-26 合流时改编 L105）
+
+**Seen 1× (2026-11-25)**
+
+### L106 平台 transform 只剩 app.jar 且被 IDE daemon 持有时，用平台 zip `unzip -n` 就地补齐，别硬删
+
+**规则**：`:test` 报「IDE by path … 找不到 com.intellij core plugin」时先看
+`~/.gradle/caches/*/transforms/<hash>/transformed/ideaIU-*/lib` 的 jar 数——若只剩 `app.jar` /
+`app-client.jar`，是 transform 半成品（并发构建被中断）。此时 `rm -rf` 与 `mv` 都可能被「用户映射
+打开的文件」拒绝（Restart Manager 点名常见为**用户 IDE 的 Kotlin daemon**，不能杀）。正路是用
+`modules-2/files-2.1/idea/ideaIU/<ver>/<sha>/ideaIU-<ver>-win.zip` 对 transform 目录执行
+`unzip -n`（不覆盖已存在的两个被占 jar），补齐其余 2200+ 文件即可，无需重下平台包。
+
+**证据**：`T-MapperMethodSqlPreview` 实施轮（2026-11-25）：`9.7.0/transforms/cfd9113040487d86d63…`
+只有 2 个 jar，PID 27684（IDE 2026.3 的 kotlin daemon）持有；删/改名均 Permission denied；
+`unzip -n` 补齐 2268 files 后 `:test` 正常跑出 95/0。
+（对齐轮注：本支原编 L103，与 master 侧 L103 撞号，2026-11-26 合流时改编 L106）
+
+**Seen 1× (2026-11-25)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |

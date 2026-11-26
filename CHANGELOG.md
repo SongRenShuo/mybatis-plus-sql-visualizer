@@ -2,6 +2,11 @@
 
 # SQL Visualizer Changelog
 
+## [Unreleased]
+
+### Added
+- **Mapper 接口方法行也能直接预览 SQL（T-MapperMethodSqlPreview，`12f3232b8`）**：方法名行新增预览图标，点击弹出该方法对应语句的动态 SQL 预览，装配与渲染和 XML 语句行点击完全一致（参数表、`<include>`、`${}` 注入同一条链）；该方法行因此有两枚图标——左预览、右既有跳转箭头。开启同类插件共存让位时只让跳转、预览保留（三家竞品 Java 侧都只有跳转箭头，无预览能力），只装 MyBatisCodeHelperPro 时开让位该行不再为空。不加新设置项，随「MyBatis mapper XML」组开关与总闸。
+
 ## [2026.11.26-beta.1] - 2026-11-25
 
 > 范围＝`2026.11.25` 正式版（`452692060`）之后到本版发行提交的增量，3 个用户可感 `src/main` 任务面：T-ServiceJoinWrapperPreview（D256，`736b6a272` 合流）、T-AutoShowYield（`12b84ae03`）、T-SqlLogSettingsJumpAnchor（`52322da26`）；其余 `fbe0ce7aa` / `dd402368c` 等为 CI / 计划 / 索引 / 记忆精简类提交。基号 `2026.11.25` 今日已被正式版占用，按版本号规范换次日基号起 beta.1。逐条根因、真机读数与反向验证见 `docs/发行说明/20261125-1630-自动开窗让位与设置落点及自研Wrapper预览-内测说明.md` 与 `docs/开发计划/` 对应计划文档
