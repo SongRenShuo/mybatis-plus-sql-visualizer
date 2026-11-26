@@ -25,7 +25,7 @@ import java.io.File
  * 自证（防空绿）：合成样本（入口直调 resolve / 前热缺 cacheOnly）必须被抓出，干净样本必须放行。
  *
  * k2j 移植注：本守卫读 k2j 的 **Java** 生产源（master 读 Kotlin）——
- *  - 路径改 `src/main/java/.../*.java`；
+ *  - 路径改 `src/main/java/...` 下的 `.java` 文件（原写 `.kt`）；
  *  - 券01 锚点改 Java 声明形态 `private void resolveOffEdt(`；
  *  - 券03 的具名实参 `cacheOnly = true` 在 Java 侧是位置实参，判定改为「配平实参恰 5 个且尾参为 true」
  *    （5 参重载＝cacheOnly 尾参），同时接受 master 具名形态（合成样本）。

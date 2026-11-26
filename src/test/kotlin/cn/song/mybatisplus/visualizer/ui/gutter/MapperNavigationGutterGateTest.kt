@@ -2,6 +2,8 @@ package cn.song.mybatisplus.visualizer.ui.gutter
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.log.MapperXmlLocator
+import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.codeInsight.daemon.LineMarkerInfo
 import com.intellij.codeInsight.daemon.LineMarkerProvider
 import com.intellij.psi.PsiIdentifier
@@ -138,11 +140,16 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
         assertEquals("service 类方法声明不应产生标记", 0, markers.size)
     }
 
-    fun test接口方法_恰一标记且定位命中() {
+    fun test接口方法_出预览与跳转两枚且定位命中() {
         addMapperXmlForInterface()
         myFixture.configureByText("UserMapper.java", javaFixture)
-        val markers = collectMarkers(MapperJavaToXmlLineMarkerProvider(), methodNameLeaves())
-        assertEquals("UserMapper.selectById 声明行应恰 1 标记", 1, markers.size)
+        val leaves = methodNameLeaves()
+        // T-MapperPreviewOrder：预览与跳转拆成两个 provider（预览注册在前），各收集一次。
+        val nav = collectMarkers(MapperJavaToXmlLineMarkerProvider(), leaves)
+        val preview = collectMarkers(MapperMethodPreviewLineMarkerProvider(), leaves)
+        assertEquals("UserMapper.selectById 声明行合计应恰 2 枚（预览 + 跳转）", 2, nav.size + preview.size)
+        assertEquals("其中一枚跳转箭头", 1, nav.count { it.icon === MpvsIcons.MapperMethod })
+        assertEquals("其中一枚 SQL 预览图标", 1, preview.count { it.lineMarkerTooltip == previewTooltip })
         // 正缓存入账断言（车道B 生产波次已落 F1 MyBatis 侧正缓存缝；键带 project.locationHash 前缀）
         assertTrue("接口方法应触达 locate（正缓存入账）",
             MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys
@@ -180,24 +187,43 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
         val leaves = PsiTreeUtil.collectElements(xml) { it.firstChild == null }.toMutableList()
         val result = mutableListOf<LineMarkerInfo<*>>()
         MapperXmlToJavaLineMarkerProvider().collectSlowLineMarkers(leaves, result)
-        return result.size
+        // T-MapperNavNamespaceJump：XML 侧新增「根标签 → 接口类」图标；语句基线用例只数语句图标。
+        return result.count { !isRootMapperMarker(it) }
     }
 
-    /** Java 侧基线：接口方法声明行恰 1 个跳转图标（与 test接口方法_恰一标记且定位命中 同夹具）。 */
-    private fun javaSideMarkerCount(): Int {
+    private fun isRootMapperMarker(info: LineMarkerInfo<*>): Boolean {
+        val token = info.element as? com.intellij.psi.xml.XmlToken ?: return false
+        val tag = token.parent as? com.intellij.psi.xml.XmlTag ?: return false
+        return tag.name == "mapper" && tag.parentTag == null
+    }
+
+    /** Java 侧基线（T-MapperPreviewOrder）：跳转与预览分属两个 provider，各收集一次。 */
+    private fun javaSideCounts(): Pair<Int, Int> {
         addMapperXmlForInterface()
         myFixture.configureByText("UserMapper.java", javaFixture)
-        return collectMarkers(MapperJavaToXmlLineMarkerProvider(), methodNameLeaves()).size
+        val leaves = methodNameLeaves()
+        val nav = collectMarkers(MapperJavaToXmlLineMarkerProvider(), leaves)
+            .count { it.icon === MpvsIcons.MapperMethod }
+        val preview = collectMarkers(MapperMethodPreviewLineMarkerProvider(), leaves)
+            .count { it.lineMarkerTooltip == previewTooltip }
+        return nav to preview
     }
+
+    private val previewTooltip: String
+        get() = MpSqlVisualizerBundle.message("gutter.mapperMethodPreview.tooltip")
 
     fun test竞品在位且让位开_XML侧零图标() {
         MyBatisCompetitorGate.probe = { true }
         assertEquals("竞品在位 + 让位开：XML 侧应让位（0 图标）", 0, xmlSideMarkerCount())
     }
 
-    fun test竞品在位且让位开_Java侧零图标() {
+    fun test竞品在位且让位开_Java侧只让跳转预览保留() {
         MyBatisCompetitorGate.probe = { true }
-        assertEquals("竞品在位 + 让位开：Java 侧应让位（0 图标）", 0, javaSideMarkerCount())
+        // 2026-11-25 拍板：让位覆盖 XML 与 Mapper 两侧的**跳转**；方法行预览图标是我方独有能力，
+        // 三家竞品的 Java 侧 provider 反编译均为跳转箭头，让位开着预览照出。
+        val (navigation, preview) = javaSideCounts()
+        assertEquals("竞品在位 + 让位开：跳转箭头应让位（0 枚）", 0, navigation)
+        assertEquals("让位只让跳转：方法行预览图标保留 1 枚", 1, preview)
     }
 
     fun test竞品在位但让位关_XML侧与基线一致() {
@@ -210,7 +236,9 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
     fun test竞品在位但让位关_Java侧与基线一致() {
         withYieldDisabled {
             MyBatisCompetitorGate.probe = { true }
-            assertEquals("让位关：Java 侧强制保留本插件图标", 1, javaSideMarkerCount())
+            val (navigation, preview) = javaSideCounts()
+            assertEquals("让位关：Java 侧强制保留跳转箭头", 1, navigation)
+            assertEquals("让位关：预览图标同在", 1, preview)
         }
     }
 
@@ -221,7 +249,56 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
 
     fun test竞品不在位_Java侧基线不变() {
         MyBatisCompetitorGate.probe = { false }
-        assertEquals("不在位：Java 侧基线 1", 1, javaSideMarkerCount())
+        val (navigation, preview) = javaSideCounts()
+        assertEquals("不在位：跳转基线 1", 1, navigation)
+        assertEquals("不在位：预览基线 1", 1, preview)
+    }
+
+    // ---------- T-MapperNavNamespaceJump：根标签跳类图标同受 XML 侧让位门 ----------
+
+    /** 只放 `<mapper namespace>`（无语句），断言根标签那枚跳类图标的枚数。 */
+    private fun rootTagMarkerCount(): Int {
+        myFixture.addFileToProject("com/demo/mapper/UserMapper.java", javaFixture)
+        val xml = myFixture.addFileToProject(
+            "mapping/UserMapper.xml",
+            "<mapper namespace=\"com.demo.mapper.UserMapper\"/>",
+        )
+        val leaves = PsiTreeUtil.collectElements(xml) { it.firstChild == null }.toMutableList()
+        val result = mutableListOf<LineMarkerInfo<*>>()
+        MapperXmlToJavaLineMarkerProvider().collectSlowLineMarkers(leaves, result)
+        return result.size
+    }
+
+    fun test竞品在位且让位开_根标签跳类图标也让位() {
+        MyBatisCompetitorGate.probe = { true }
+        assertEquals("竞品在位 + 让位开：根标签跳类图标也应让位（0 枚）", 0, rootTagMarkerCount())
+    }
+
+    fun test竞品不在位_根标签跳类图标保留() {
+        MyBatisCompetitorGate.probe = { false }
+        assertEquals("竞品不在位：根标签跳类图标基线 1", 1, rootTagMarkerCount())
+    }
+
+    // ---------- T-MapperClassJump：接口类名图标同受 Java 侧让位门 ----------
+
+    private fun classNameMarkerCount(): Int {
+        addMapperXmlForInterface()
+        myFixture.configureByText("UserMapper.java", javaFixture)
+        val cls = PsiTreeUtil.findChildOfType(myFixture.file, com.intellij.psi.PsiClass::class.java)!!
+        val nameIdentifier = cls.nameIdentifier!!
+        val result = mutableListOf<LineMarkerInfo<*>>()
+        MapperJavaToXmlLineMarkerProvider().collectSlowLineMarkers(mutableListOf(nameIdentifier), result)
+        return result.size
+    }
+
+    fun test竞品在位且让位开_类名图标也让位() {
+        MyBatisCompetitorGate.probe = { true }
+        assertEquals("竞品在位 + 让位开：接口类名图标也应让位（0 枚）", 0, classNameMarkerCount())
+    }
+
+    fun test竞品不在位_类名图标保留() {
+        MyBatisCompetitorGate.probe = { false }
+        assertEquals("竞品不在位：接口类名图标基线 1", 1, classNameMarkerCount())
     }
 
     /** 临时关闭让位开关执行 [block]（结束后恢复原 State）。 */

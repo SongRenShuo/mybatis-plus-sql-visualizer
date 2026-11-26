@@ -107,4 +107,24 @@ class MapperNavCoexistGateTest {
             MyBatisCompetitorGate.PEER_PLUGIN_ID_PREFIXES.any { localMeasured.startsWith(it) },
         )
     }
+
+    /** T-MapperNavNamespaceJump：登记面扩到 MyBatisX / MyBatisPlus（反编译 plugin.xml 实证 id）。 */
+    @Test
+    fun testP1_前缀候选覆盖MyBatisX与MyBatisPlus() {
+        val measured = listOf(
+            "com.baomidou.plugin.idea.mybatisx",
+            "com.baomidou.plugin.idea.mybatisPlus",
+        )
+        for (id in measured) {
+            assertTrue(
+                "前缀候选必须覆盖 $id",
+                MyBatisCompetitorGate.PEER_PLUGIN_ID_PREFIXES.any { id.startsWith(it) },
+            )
+        }
+        val unrelated = "com.baomidou.other.plugin"
+        assertTrue(
+            "无关前缀不得误命中（$unrelated）",
+            MyBatisCompetitorGate.PEER_PLUGIN_ID_PREFIXES.none { unrelated.startsWith(it) },
+        )
+    }
 }

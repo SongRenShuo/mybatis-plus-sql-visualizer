@@ -111,11 +111,35 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         """.trimIndent(),
     )
 
-    private fun markers(provider: LineMarkerProvider, file: PsiFile): List<LineMarkerInfo<*>> {
+    private fun allMarkers(provider: LineMarkerProvider, file: PsiFile): List<LineMarkerInfo<*>> {
         val elements = PsiTreeUtil.collectElements(file) { it.firstChild == null }.toMutableList()
         val result = mutableListOf<LineMarkerInfo<*>>()
         provider.collectSlowLineMarkers(elements, result)
         return result
+    }
+
+    private fun markers(provider: LineMarkerProvider, file: PsiFile): List<LineMarkerInfo<*>> =
+        allMarkers(provider, file)
+            // T-MapperClassJump：接口类名新增一枚跳 XML 图标——本类语句/方法基线统一排除它。
+            .filterNot(::isMapperClassMarker)
+            // T-MapperMethodSqlPreview：方法行新增一枚 SQL 预览图标——基线用例只数跳转。
+            .filterNot(::isMethodPreviewMarker)
+
+    /** T-MapperMethodSqlPreview：方法行预览图标（锚点与跳转同 element，按 tooltip 区分）。 */
+    private fun isMethodPreviewMarker(info: LineMarkerInfo<*>): Boolean =
+        info.lineMarkerTooltip == cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("gutter.mapperMethodPreview.tooltip")
+
+    private fun isMapperClassMarker(info: LineMarkerInfo<*>): Boolean {
+        val id = info.element as? com.intellij.psi.PsiIdentifier ?: return false
+        val owner = id.parent as? com.intellij.psi.PsiClass ?: return false
+        return owner.nameIdentifier === id
+    }
+
+    /** T-MapperNavNamespaceJump 起 XML 侧多一枚「根标签 → 接口类」图标；语句基线断言需排除它。 */
+    private fun isRootMapperMarker(info: LineMarkerInfo<*>): Boolean {
+        val token = info.element as? com.intellij.psi.xml.XmlToken ?: return false
+        val tag = token.parent as? com.intellij.psi.xml.XmlTag ?: return false
+        return tag.name == "mapper" && tag.parentTag == null
     }
 
     /** xml 文件里标签名为 [name] 且父级是 XmlTag 的首个名字 token（语句标签的起始名在前）。 */
@@ -562,17 +586,23 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
             markers(javaToXml, dao).map { it.element!!.textRange.startOffset }
                 .contains(firstArgCallName(dao, "queryForObject", "user.selectById")!!.textRange.startOffset),
         )
-        // 对照半边：MyBatis 那对在竞品在位时仍让位（行为零变化，不是夹具坏了）
-        assertEmpty(markers(mybatisXmlToJava, mapper))
-        assertEmpty(markers(mybatisJavaToXml, iface))
+        // 对照半边：MyBatis 的**跳转箭头**在竞品在位时让位（2026-11-25 两侧让位口径）；
+        // T-MapperMethodSqlPreview 起方法行预览图标不参与让位，该行仍有我方 1 枚预览。
+        assertEmpty("MyBatis XML 侧跳转箭头应让位", markers(mybatisXmlToJava, mapper))
+        assertEmpty("MyBatis Java 侧跳转箭头应让位", markers(mybatisJavaToXml, iface))
+        assertEquals(
+            "让位只让跳转：MyBatis 方法行预览图标仍产出",
+            1,
+            allMarkers(MapperMethodPreviewLineMarkerProvider(), iface).count(::isMethodPreviewMarker),
+        )
 
         // 对照：竞品不在位时 MyBatis 那对恢复产出——证明让位门本身在起作用
         MyBatisCompetitorGate.resetForTest()
         MyBatisCompetitorGate.probe = { false }
         assertEquals(
-            "竞品不在位时 MyBatis XML→Java 应恢复产出（让位门对照基线）",
+            "竞品不在位时 MyBatis XML→Java 应恢复产出（让位门对照基线；排除根标签图标）",
             1,
-            markers(mybatisXmlToJava, mapper).size,
+            markers(mybatisXmlToJava, mapper).count { !isRootMapperMarker(it) },
         )
         assertEquals(
             "竞品不在位时 MyBatis Java→XML 应恢复产出（让位门对照基线）",

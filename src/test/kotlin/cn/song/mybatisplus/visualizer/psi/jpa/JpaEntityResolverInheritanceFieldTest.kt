@@ -1,4 +1,4 @@
-package cn.song.mybatisplus.visualizer.psi
+package cn.song.mybatisplus.visualizer.psi.jpa
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import com.intellij.psi.PsiClass

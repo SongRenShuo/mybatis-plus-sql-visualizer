@@ -139,7 +139,10 @@ class DialogPasteReparseTest : BasePlatformTestCase() {
         val dialog = newDialog(autoParse = true)
         try {
             assertTrue("前置：待命态应已进入", dialog.pasteReparseArmedForTest())
-            val callbacks = ArrayList<java.util.function.Consumer<StandaloneSqlSourceResolver.Resolved>>()
+            // 产物类型必须是**可空** `Resolved`（master 同形：`resolve()` 返回 `Resolved?`，
+            // 识别不了时落 null 由代次守卫丢弃）。写成非空 `Consumer<Resolved>` 会让
+            // `accept(resolve(...))` 在 Kotlin 侧报 `Resolved? vs Resolved` 类型不匹配。
+            val callbacks = ArrayList<java.util.function.Consumer<StandaloneSqlSourceResolver.Resolved?>>()
             // 手动派发缝：两次请求都排队不投递，由用例控制回放顺序（先旧后新）
             dialog.resolveOffEdtDispatcher =
                 SqlPreviewDialog.ResolveOffEdtDispatcher { _, onDone -> callbacks.add(onDone) }
