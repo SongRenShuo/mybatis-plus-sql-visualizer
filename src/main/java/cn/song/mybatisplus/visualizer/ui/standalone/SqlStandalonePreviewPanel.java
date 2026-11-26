@@ -24,6 +24,7 @@ import com.intellij.openapi.actionSystem.DataContext;
 import com.intellij.openapi.actionSystem.DefaultActionGroup;
 import com.intellij.openapi.actionSystem.KeyboardShortcut;
 import com.intellij.openapi.actionSystem.Shortcut;
+import com.intellij.openapi.application.Application;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.editor.event.DocumentEvent;
@@ -441,7 +442,7 @@ public class SqlStandalonePreviewPanel extends JPanel implements Disposable {
             }
             // 三、读文本（后台）：读权限 IO 不能压 EDT；代次守卫丢弃在途/过期的结果
             long generation = ++loadFileGeneration;
-            ApplicationManager app = ApplicationManager.getApplication();
+            Application app = ApplicationManager.getApplication();
             app.executeOnPooledThread(() -> {
                 String text = loadTextInvoker.apply(file);
                 String fileName = file.getName();

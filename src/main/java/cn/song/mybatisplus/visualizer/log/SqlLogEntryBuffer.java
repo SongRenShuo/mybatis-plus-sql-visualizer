@@ -44,6 +44,12 @@ public class SqlLogEntryBuffer {
     /** T-PerfSweep F3：去重丢弃计数键上限——超限淘汰最旧（见 dedupeCounts 字段注释）。 */
     private static final int MAX_DEDUPE_COUNT_KEYS = 4096;
 
+    /** T-PerfSweep33 券02：窗口嫌疑戳单键队列上限（丢最旧保最近段；见 windowStamps 字段注释）。 */
+    private static final int WINDOW_STAMP_MAX_PER_KEY = 64;
+
+    /** T-PerfSweep33 券02：窗口嫌疑戳键数上限——超限整体清空、下一窗重建（见 windowStamps 字段注释）。 */
+    private static final int WINDOW_STAMP_MAX_KEYS = 1024;
+
     /** 归因诊断限频窗（10s）：缺源码入队与跨通道融合两条诊断共用。 */
     private static final long ATTRIB_DIAG_INTERVAL_NANOS = 10_000_000_000L;
 
@@ -126,6 +132,9 @@ public class SqlLogEntryBuffer {
      *      structureKey 直接取条目自己的惰性缓存（同实例一次，随条目淘汰回收）；</li>
      *  <li><b>逐条出队不做摘戳</b>：头部淘汰/融合换实例留下的陈旧戳靠窗龄自愈（窗 60s 上限），
      *      「刚被淘汰的条目让键多嫌疑 ≤ 一个窗」为如实登记的近似；clear 全量复位；</li>
+     *  <li><b>双帽兜底（T-PerfSweep33 券02）</b>：单键戳队列 {@link #WINDOW_STAMP_MAX_PER_KEY} 上限（丢最旧
+     *      保最近段——窗口判定本就只看窗内，只降不升）+ 键数 {@link #WINDOW_STAMP_MAX_KEYS} 上限（超限
+     *      整体清空、下一窗重建）。面板长期不打开时不再随捕获速率无界累积（性能分析第十期 §4.2）；</li>
      *  <li>读取见 {@link #windowSuspectKeys}（修剪 + 同线程分桶 + 阈值判定，null 线程单桶参与——
      *      控制台回落通道条目无线程名，按会话级同窗计数回落口径）。</li>
      * </ul>
@@ -1347,8 +1356,19 @@ public class SqlLogEntryBuffer {
      * 代价仅是同 dedupeKey 的多实例各算一次（收益本来也只有几 µs/条）。</p>
      */
     private void markWindowStampLocked(LogSqlEntry entry) {
-        windowStamps.computeIfAbsent(entry.structureKey(), k -> new java.util.ArrayDeque<>())
-                .addLast(new WindowStamp(entry.timestamp(), entry.threadName()));
+        // T-PerfSweep33 券02：双帽兜底——戳只在「读取时修剪 / clear」清、淘汰不摘戳（窗龄自愈近似），
+        // 面板长期不打开时捕获速率 × 无读时段曾单调累积（性能分析第十期 §4.2）。键数超帽整体清空
+        // （当窗嫌疑判定一次精度损失，下一窗重建）；单键超帽丢最旧保最近段——窗口判定本就只看窗内，
+        // 只降不升，保守方向。
+        if (windowStamps.size() >= WINDOW_STAMP_MAX_KEYS) {
+            windowStamps.clear();
+        }
+        java.util.ArrayDeque<WindowStamp> queue =
+                windowStamps.computeIfAbsent(entry.structureKey(), k -> new java.util.ArrayDeque<>());
+        while (queue.size() >= WINDOW_STAMP_MAX_PER_KEY) {
+            queue.removeFirst();
+        }
+        queue.addLast(new WindowStamp(entry.timestamp(), entry.threadName()));
     }
 
     /**
@@ -1392,6 +1412,17 @@ public class SqlLogEntryBuffer {
                 if (suspect) out.add(e.getKey());
             }
             return out;
+        }
+    }
+
+    /** T-PerfSweep33 券02 测试访问器（双帽兜底）：{键数, 戳总数}（Kotlin {@code Pair<Int, Int>} 的 Java 等价返回）。 */
+    kotlin.Pair<Integer, Integer> windowStampShapeForTest() {
+        synchronized (entries) {
+            int total = 0;
+            for (java.util.ArrayDeque<WindowStamp> q : windowStamps.values()) {
+                total += q.size();
+            }
+            return new kotlin.Pair<>(windowStamps.size(), total);
         }
     }
 

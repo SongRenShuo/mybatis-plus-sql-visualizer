@@ -40,6 +40,52 @@ public final class SqlCaptureGate {
     public static volatile boolean epActive = false;
 
     /**
+     * T-MultiModuleConsoleYield（2026-11-21）：当前持有<b>健康 agent 会话</b>的目标进程 pid 集
+     * （{@code AgentManager.updateOnline} 与 {@code paused} 同点同步）。
+     *
+     * <p>让位判定的行级归属依据：控制台行前缀自带目标进程 PID（Spring Boot 标准日志格式第三段），
+     * 与 agent 会话的 pid 同源（HELLO 帧）。行可归属且 pid 不在集内 = 这行来自<b>没挂 agent</b> 的
+     * 另一模块/进程 → 桥照常解析（此前全局让位会把这类行纯丢掉）；无法归属 → 保持既有全局让位
+     * （宁丢勿重，不改未证形态）。写侧只在 updateOnline（clear + 重灌），读侧逐行查询无锁。</p>
+     */
+    public static final java.util.Set<Long> liveSessionPids = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** Spring Boot 标准日志行的 PID 提取（日期 + 时间两段前缀形态）。 */
+    private static final java.util.regex.Pattern PID_WITH_DATE =
+            java.util.regex.Pattern.compile("^\\s*\\S+\\s+\\S+\\s+[A-Z]+\\s+(\\d+)\\s+---");
+
+    /** 单段时间前缀形态（无日期，如 {@code 14:41:06.810 INFO 52324 --- ...}）。 */
+    private static final java.util.regex.Pattern PID_PLAIN =
+            java.util.regex.Pattern.compile("^\\s*\\S+\\s+[A-Z]+\\s+(\\d+)\\s+---");
+
+    /**
+     * 从控制台行前缀提取目标进程 pid（Spring Boot 标准格式：{@code … 级别 PID --- […]}）。
+     * 两种形态：日期+时间两段 / 仅时间一段；级别须全大写字母、PID 须为数字且紧跟 {@code  --- }。
+     * 非该形态（无法归属进程）返回 null——调用方保持既有全局让位。
+     */
+    public static Long logLinePid(String line) {
+        if (line == null) {
+            return null;
+        }
+        if (line.length() > 400) {
+            return null; // 归属只看前缀，超长行（拼接 SQL 主体）直接不提
+        }
+        java.util.regex.Matcher m = PID_WITH_DATE.matcher(line);
+        if (!m.find()) {
+            m = PID_PLAIN.matcher(line);
+            if (!m.find()) {
+                return null;
+            }
+        }
+        // Kotlin: m.groupValues[1].toLongOrNull()
+        try {
+            return Long.parseLong(m.group(1));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
      * T-CaptureCatchAll 券02：桥的**有效**封停态——{@code paused} 且活性回落未解封。
      *
      * <p>逐行热路径只读两个 volatile（{@code paused} + {@code CaptureActivityFallback.isActive()}），无锁。

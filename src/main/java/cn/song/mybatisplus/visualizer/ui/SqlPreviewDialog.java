@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.ui.standalone.StandaloneSqlSourceResolver;
 import cn.song.mybatisplus.visualizer.ui.standalone.StandaloneWarningText;
 import cn.song.mybatisplus.visualizer.util.FatalErrors;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
+import com.intellij.openapi.application.Application;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.project.Project;
@@ -348,7 +349,7 @@ public class SqlPreviewDialog extends DialogWrapper {
             seam.dispatch(textSource, resolved -> deliverResolved(generation, resolved, applyOnEdt));
             return;
         }
-        ApplicationManager app = ApplicationManager.getApplication();
+        Application app = ApplicationManager.getApplication();
         app.executeOnPooledThread(() -> {
             String text;
             try {

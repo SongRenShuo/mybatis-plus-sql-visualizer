@@ -59,7 +59,15 @@ public final class SqlLogConsoleBridgeKt {
         // 仍有 SQL 行」时自动解封（白名单漏驱动的双哑场景）。解封态下本函数直接走正常解析；让位态下
         // 嗅探产出的条目若恰是解封触发点，直接采用该条目（不重复喂解析器、不丢这一行）。
         if (SqlCaptureGate.paused.get()) {
-            if (!CaptureActivityFallback.isActive()) {
+            // T-MultiModuleConsoleYield（2026-11-21）：让位做**行级进程归属**——行前缀自带目标进程
+            // PID（Spring Boot 标准格式）。行可归属且该 pid **有**健康 agent 会话 = 这行的 SQL agent
+            // 已经在采（防双报）→ 既有让位；行可归属但 pid **无**会话 = 这行来自没挂 agent 的
+            // 另一模块/进程，桥照常解析（此前全局让位会把这类行纯丢掉：两模块只挂一个 agent 时，
+            // 另一模块的 MyBatis 日志全进「让位丢弃」）。行不可归属 → 保持既有全局让位（宁丢勿重）。
+            // 【反向验证实验摘除点】补丁摘掉归属分支（恢复无条件让位）→「pid ∉ 会话集」用例必红。
+            Long linePid = SqlCaptureGate.logLinePid(line);
+            boolean suppressThisLine = linePid == null || SqlCaptureGate.liveSessionPids.contains(linePid);
+            if (suppressThisLine && !CaptureActivityFallback.isActive()) {
                 List<LogSqlEntry> sniffed = sniffLogTimestamp(line, ctx);
                 if (CaptureActivityFallback.onConsoleLine(!sniffed.isEmpty(), CaptureActivityFallback.now())) {
                     return finishEntries(sniffed, line, ctx, timePrefix);
