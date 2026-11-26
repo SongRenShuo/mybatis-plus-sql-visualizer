@@ -10,6 +10,7 @@ import com.intellij.psi.xml.XmlTag;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import java.util.ArrayList;
 import java.util.List;
+import javax.swing.Action;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
