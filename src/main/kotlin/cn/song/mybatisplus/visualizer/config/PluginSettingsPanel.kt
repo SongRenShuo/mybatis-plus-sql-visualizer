@@ -1391,11 +1391,13 @@ class PluginSettingsPanel @JvmOverloads constructor(
                     val analyzer = DaemonCodeAnalyzer.getInstance(proj)
                     val psiManager = com.intellij.psi.PsiManager.getInstance(proj)
                     com.intellij.openapi.fileEditor.FileEditorManager.getInstance(proj).openFiles.forEach { vf ->
-                        val psi = psiManager.findFile(vf)
-                        if (psi != null) {
-                            @Suppress("DEPRECATION")
-                            analyzer.restart(psi)
+                        // `PsiManager.findFile` 需要读动作（仓内既有惯例见 ChooseDataSourceTakeover
+                        // 与 DataSourceSelector 的同款调用，均包 ReadAction.compute）。裸调靠 EDT
+                        // 恰好持读权限侥幸通过——平台一旦加断言就是新的非法访问源。
+                        val psi = com.intellij.openapi.application.ReadAction.compute<com.intellij.psi.PsiFile?, Throwable> {
+                            psiManager.findFile(vf)
                         }
+                        if (psi != null) analyzer.restart(psi)
                     }
                 }
             }
