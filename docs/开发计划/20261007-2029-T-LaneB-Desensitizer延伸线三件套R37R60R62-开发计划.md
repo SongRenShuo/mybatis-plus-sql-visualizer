@@ -19,7 +19,7 @@
 ### V114（R62 前提）回执——三条全部成立
 
 1. **失败路径现状**：`UpdateApi.fetchManifest`（UpdateApi.kt:24-33）`runCatching` 把**一切异常吞成 null**（网络不通与 HTTP 404 同归），`PluginUpdateRunner.check` 映射为 `Failure("network unavailable")`——内部英文串经 `settings.update.checkFailed` 直出设置页；启动检查静默。三态不可判：404/网络/清单损坏混为一谈。
-2. **兜底链接常量**：Gitee＝`UpdateSource.GITEE_RELEASES_URL`（UpdateSource.kt:36，UpdateSection/StartupUpdateCheck 已复用）；**Marketplace 无 Kotlin 常量**——`https://plugins.jetbrains.com/plugin/33633-sql-visualizer` 仅存在于 `src/main/resources/html/marketplace-custom-page.html:455` 静态页。V114② 原文「about 页已有 Gitee/Marketplace 链接可复用」半数证伪：需在 UpdateSource 新增 `MARKETPLACE_URL` 常量（取 html 页同值）。
+2. **兜底链接常量**：Gitee＝`UpdateSource.GITEE_RELEASES_URL`（UpdateSource.kt:36，UpdateSection/StartupUpdateCheck 已复用）；**Marketplace 无 Kotlin 常量**——`https://plugins.jetbrains.com/plugin/33633-mybatis-sql-visualizer` 仅存在于 `src/main/resources/html/marketplace-custom-page.html:455` 静态页。V114② 原文「about 页已有 Gitee/Marketplace 链接可复用」半数证伪：需在 UpdateSource 新增 `MARKETPLACE_URL` 常量（取 html 页同值）。
 3. **HTTP 状态码可得性**：`UpdateApi.fetchManifest` 已设 `throwStatusCodeException(true)`，非 2xx 抛 `com.intellij.util.io.HttpRequests$HttpStatusException`；javap 实证 243 基线（ideaIU-2024.3.7.1 app-client.jar）声明 `public int getStatusCode()`。**三态判别链路可用，无需降级。**
 
 ### V51（R37 前提）回执——四项全部核实
