@@ -139,13 +139,31 @@ public final class StandaloneSqlSourceResolver {
         }
         String decoded = decodeXmlEntitiesIfEscaped(input);
         if (STATEMENT_TAG_REGEX.matcher(decoded).find()) {
-            return resolveAsXml(input, decoded);
+            Resolved xmlResolved = resolveAsXml(input, decoded);
+            return xmlResolved != null ? withMissingFragments(xmlResolved, decoded) : null;
         }
         // 非 SQL 的 XML（pom 片段等）：以 `<` 开头但检测门未命中 → 不硬塞纯 SQL 解析（A-7 降级）
         if (input.startsWith("<") || decoded.startsWith("<")) {
             return null;
         }
-        return resolveAsPlainSql(input);
+        return withMissingFragments(resolveAsPlainSql(input), decoded);
+    }
+
+    /**
+     * T-PreviewActionRow D-4：把「引用但未定义」的片段 id 挂到产物上，供面板给补齐入口。
+     *
+     * <p>用 {@code decoded} 而不是原文：粘贴的是网页复制的转义形态（{@code &lt;include refid=…&gt;}）时，
+     * 只有解码后才是真 XML，正则才看得见 include；普通文本两者相同，无额外代价。
+     * 无缺失时不 copy（载荷零变化）。</p>
+     */
+    private static Resolved withMissingFragments(Resolved resolved, String decoded) {
+        List<String> missing = MissingSqlFragmentSupport.missingRefids(decoded);
+        if (missing.isEmpty()) {
+            return resolved;
+        }
+        return new Resolved(resolved.result().withMissingFragmentIds(missing), resolved.kind(),
+            resolved.statementId(), resolved.statementCount(), resolved.paramCount(),
+            resolved.flavor(), resolved.failure());
     }
 
     /**
@@ -513,13 +531,17 @@ public final class StandaloneSqlSourceResolver {
             sources.add(name);
         }
         placeholderSql.append(input, prev, input.length());
-        // `${}` raw 段识别（string-aware，与 `?` 同口径——字符串字面量里的 `${}` 是字面量不是占位）
-        boolean dollarRaw = hasDollarRawSegment(input);
+        // `${}` raw 段计数（string-aware，与 `?` 同口径——字符串字面量里的 `${}` 是字面量不是占位）。
+        // T-DollarPlainSqlBanner D252：计数随产物走（横幅据 `dollarRawCount` 显示站点数），
+        // `hasDollarRawSegments` 由计数派生——转义 `\${` 不计入后两处口径天然一致（原 Boolean
+        // 独立扫描不识别转义，与 MyBatis TokenParser「紧邻反斜杠＝转义」口径存在偏差，本处一并修正）。
+        int dollarRawCount = countDollarRawSegments(input);
         String sql = placeholderSql.toString();
         PreviewResult payload = withPerfCheck(new PreviewResult(
             sql, sql, sources, ParameterReplacer.buildParamTable(sources), null, null,
             null, List.of(), Map.of(), null, null, List.of(), List.of(), null, null,
-            Map.of(), null, null, null, null, null, null, dollarRaw));
+            Map.of(), null, null, null, null, null, null, dollarRawCount > 0)
+            .withDollarRawCount(dollarRawCount));
         return new Resolved(payload, Kind.PLAIN_SQL, events.size());
     }
 
@@ -570,9 +592,15 @@ public final class StandaloneSqlSourceResolver {
         return tokens;
     }
 
-    /** {@code ${}} raw 段检测（string-aware，口径与 {@link #scanBracedParams} 一致）。 */
-    private static boolean hasDollarRawSegment(String text) {
+    /**
+     * {@code ${}} raw 段计数（string-aware，口径与 {@link #scanBracedParams} 一致）：单引号字符串（{@code ''} 转义）、
+     * {@code --} 行注释、块注释内的 {@code ${}} 是字面量文本不计数；{@code \${}} 转义形态不计数——MyBatis
+     * {@code org.apache.ibatis.parsing.GenericTokenParser} 同口径「紧邻反斜杠＝转义原样输出」，不参与直替。
+     * {@link PreviewResult#getDollarRawCount()} 与闸门信号（{@code hasDollarRawSegments}）共用本计数。
+     */
+    private static int countDollarRawSegments(String text) {
         boolean inString = false;
+        int count = 0;
         int i = 0;
         while (i < text.length()) {
             char c = text.charAt(i);
@@ -598,12 +626,15 @@ public final class StandaloneSqlSourceResolver {
                     }
                     i++;
                 } else if (c == '$' && i + 1 < text.length() && text.charAt(i + 1) == '{') {
-                    return true;
+                    if (i == 0 || text.charAt(i - 1) != '\\') {
+                        count++;
+                    }
+                    i++; // `${` 两个字符一起跳过
                 }
             }
             i++;
         }
-        return false;
+        return count;
     }
 
     private record BracedToken(int start, int endExclusive, String name) {

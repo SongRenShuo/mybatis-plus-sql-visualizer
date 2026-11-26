@@ -1,15 +1,12 @@
 // T-SyncK2JMaster180 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/standalone/MissingFragmentDialog.kt 移植
 package cn.song.mybatisplus.visualizer.ui.standalone;
 
-import cn.song.mybatisplus.visualizer.util.FatalErrors;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
-import com.intellij.openapi.application.ReadAction;
-import com.intellij.openapi.fileChooser.FileChooser;
-import com.intellij.openapi.fileChooser.FileChooserDescriptor;
-import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory;
+import com.intellij.openapi.application.Application;
+import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.DialogWrapper;
-import com.intellij.openapi.vfs.VfsUtilCore;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBScrollPane;
@@ -84,28 +81,36 @@ public class MissingFragmentDialog extends DialogWrapper {
         return body;
     }
 
-    /** 选文件 → 抽出本 refid 的 {@code <sql>} 内容（找不到则整段带入）。 */
+    /**
+     * 选文件 → 抽出本 refid 的 {@code <sql>} 内容（找不到则整段带入）。
+     *
+     * <p>线程（T-Perf33MergeAlign）：选文件在 EDT、读文本在后台、回填回 EDT——大文件在 EDT 读会卡弹框；
+     * {@code isDisposed} 守卫丢弃用户已关框后晚到的读取结果。</p>
+     */
     private void pickFromFile() {
-        FileChooserDescriptor descriptor = FileChooserDescriptorFactory
-            .createSingleFileDescriptor("xml")
-            .withTitle(MpSqlVisualizerBundle.message("standalone.missingFragment.fromFile.title"));
-        VirtualFile file = FileChooser.chooseFile(descriptor, project, null);
+        // T-PreviewInfoLayout 问题一：本框是模态框，选择器必须挂在它自己的窗口上——
+        // parent 传 null 时选择器解析不到 owner，会被压在模态框后面/不显示（点了没反应）。
+        VirtualFile file = MapperFileLoader.chooseFile(
+            project,
+            "standalone.missingFragment.fromFile.title",
+            getWindow() != null ? getWindow() : getContentPane());
         if (file == null) {
             return;
         }
-        String text;
-        try {
-            // 243 编译目标：ReadAction.compute(ThrowableComputable) 仅此重载
-            text = ReadAction.compute(() -> VfsUtilCore.loadText(file));
-        } catch (Throwable t) {
-            if (FatalErrors.isFatal(t)) throw (Error) t;
-            text = null;
-        }
-        if (text == null || text.isBlank()) {
-            return;
-        }
-        String fragment = MissingSqlFragmentSupport.extractFragment(text, refid);
-        area.setText(fragment != null ? fragment : text);
+        Application app = ApplicationManager.getApplication();
+        app.executeOnPooledThread(() -> {
+            String text = MapperFileLoader.loadText(file);
+            if (text == null) {
+                return;
+            }
+            app.invokeLater(() -> {
+                if (isDisposed()) {
+                    return;
+                }
+                String fragment = MissingSqlFragmentSupport.extractFragment(text, refid);
+                area.setText(fragment != null ? fragment : text);
+            }, ModalityState.nonModal());
+        });
     }
 
     /** 用户输入的内容（确定时读取；取消路径不读）。 */

@@ -255,6 +255,28 @@ public final class PreviewResult {
      * 那段注释（券 B）。空表 = 无运行期占位，或没有可填的值（纯说明性注释放不进本表）。</p>
      */
     private final List<RuntimeSlot> runtimeSlots;
+    /**
+     * T-DollarPlainSqlBanner D252：{@code ${}} raw 段的<b>站点计数</b>——裸 SQL 链（独立工作台/弹窗直贴
+     * {@link cn.song.mybatisplus.visualizer.ui.standalone.StandaloneSqlSourceResolver}）由
+     * {@code countDollarRawSegments} 填上（string-aware 口径：字符串字面量里的 {@code ${}} 是字面量不是占位，
+     * {@code \${}} 转义不计——与既有 {@code ?}/{@code #{}} 扫描同口径）。横幅据此对非 XML 形态显示「含 N 处直替」。
+     *
+     * <p>与 XML 链的计数刻意不同源：XML/iBatis 引擎链「字符串字面量内同样计数」（渲染后字符串内
+     * 同样直替），由面板渲染态 {@code xmlDollarSubstitutions} 承载，不走本字段——两链各自忠实各自引擎。
+     * 其它链（Wrapper/JPA/日志/iBatis——iBatis 可见性走 {@code $x$} 风险行）恒 0，既有构造点零影响。</p>
+     */
+    private final int dollarRawCount;
+    /**
+     * T-PreviewActionRow D-4：本次 XML 预览里<b>引用但未定义</b>的 {@code <sql id>} 片段（按 id 排序）。
+     *
+     * <p>由文本来源解析链（{@link cn.song.mybatisplus.visualizer.ui.standalone.StandaloneSqlSourceResolver}）
+     * 在解析时算出，面板据此在结果区给「缺少片段：X —— 点此补上内容」入口（T-PreviewActionRow D-5）。</p>
+     *
+     * <p>为什么放在载荷里而不是让面板自己扫：面板只有<b>渲染后的 SQL</b>（include 已被展开成 TODO 占位），
+     * 原始 XML 只在产出侧手里；缺失事实必须随产物一起走，弹窗与工作台才能同源展示。
+     * 空表 = 无缺失（真实文件来源通常由跨命名空间解析补齐，默认空表 ⇒ 既有链路零感知）。</p>
+     */
+    private final List<String> missingFragmentIds;
 
     public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
                          WrapperType wrapperType, String tableName, String warning, List<String> columns,
@@ -432,8 +454,9 @@ public final class PreviewResult {
     }
 
     /**
-     * 全参规范构造器（48 参）：39 参历史序 + 本轮九个 T-Ibatis2Gap / T-PreviewStmtTypeScope /
-     * T-StartupReadLockFreeze 新尾参（Kotlin 默认参语义，既有调用点经 39 参重载取默认值零影响）。
+     * 全参规范构造器（50 参）：48 参历史序 + 本轮两个 T-DollarPlainSqlBanner / T-PreviewActionRow 尾参
+     * （{@code dollarRawCount} / {@code missingFragmentIds}，Kotlin 默认参语义，既有调用点经 48 参重载
+     * 取默认值零影响）。
      */
     public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
                          WrapperType wrapperType, String tableName, String warning, List<String> columns,
@@ -457,7 +480,8 @@ public final class PreviewResult {
                          WrapperConsumption decidingConsumption,
                          List<WrapperConsumption> otherConsumptions,
                          List<ConsumptionKind> statementTypeOptions,
-                         Function1<ConsumptionKind, PreviewResult> statementTypeSwitch) {
+                         Function1<ConsumptionKind, PreviewResult> statementTypeSwitch,
+                         int dollarRawCount, List<String> missingFragmentIds) {
         this.sql = sql;
         this.compactSql = compactSql;
         this.unresolvedParams = unresolvedParams;
@@ -506,6 +530,47 @@ public final class PreviewResult {
         this.otherConsumptions = otherConsumptions != null ? List.copyOf(otherConsumptions) : List.of();
         this.statementTypeOptions = statementTypeOptions != null ? List.copyOf(statementTypeOptions) : List.of();
         this.statementTypeSwitch = statementTypeSwitch;
+        this.dollarRawCount = Math.max(0, dollarRawCount);
+        this.missingFragmentIds = missingFragmentIds != null ? List.copyOf(missingFragmentIds) : List.of();
+    }
+
+    /**
+     * K2J 互操作：48 参历史形态——本轮两个尾参（{@code dollarRawCount}/{@code missingFragmentIds}）
+     * 取 master 默认值（0 / 空表），既有调用点零改动。
+     */
+    public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
+                         WrapperType wrapperType, String tableName, String warning, List<String> columns,
+                         Map<String, String> columnComments, String tableComment, SqlPreviewModel previewModel,
+                         List<ParamHint> paramHints, List<TableInfo> candidateTables, BatchModel batchModel,
+                         XmlPreviewModel xmlModel, Map<String, String> initialParamValues, List<PerfWarning> perfWarnings,
+                         List<FillClause> fillClauses, String previousSql, List<PagesColumn> pagesColumns,
+                         Map<String, ParamHint> namedParamHints, String stackDigest, String threadName,
+                         boolean hasDollarRawSegments,
+                         String countSql, String paginationLimitLine,
+                         List<String> placeholderParamNames, Set<String> duplicateParamNames,
+                         SelectStatement diagramStatement, String historyFingerprintSeed,
+                         List<String> paginationParamSources, Dialect renderedDialect,
+                         DialectDecisionEngine.Decision dialectDecision, String historyEntryId, String actualSql,
+                         SourceLanguage sourceLanguage, String originalSql,
+                         List<String> degradations, List<RuntimeSlot> runtimeSlots,
+                         Function0<PreviewResult> retryWhenIndexReady, String m2AwaitKey,
+                         boolean informationalWarning,
+                         IbatisParamModel ibatisParamModel,
+                         Function1<PreviewRerenderInput, PreviewResult> rerender,
+                         WrapperConsumption decidingConsumption,
+                         List<WrapperConsumption> otherConsumptions,
+                         List<ConsumptionKind> statementTypeOptions,
+                         Function1<ConsumptionKind, PreviewResult> statementTypeSwitch) {
+        this(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
+                columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
+                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns,
+                namedParamHints, stackDigest, threadName, hasDollarRawSegments, countSql, paginationLimitLine,
+                placeholderParamNames, duplicateParamNames, diagramStatement, historyFingerprintSeed,
+                paginationParamSources, renderedDialect, dialectDecision, historyEntryId, actualSql,
+                sourceLanguage, originalSql, degradations, runtimeSlots,
+                retryWhenIndexReady, m2AwaitKey, informationalWarning,
+                ibatisParamModel, rerender, decidingConsumption, otherConsumptions,
+                statementTypeOptions, statementTypeSwitch, 0, List.of());
     }
 
     /** K2J 互操作：master 新五参取默认值的 29 参形态（既有调用点零改动）。 */
@@ -758,6 +823,51 @@ public final class PreviewResult {
         return runtimeSlots;
     }
 
+    /** T-DollarPlainSqlBanner D252：{@code ${}} raw 段站点计数（非 XML 形态横幅数据源；0 = 无直替）。 */
+    public int getDollarRawCount() {
+        return dollarRawCount;
+    }
+
+    /** T-PreviewActionRow D-4：引用但未定义的 {@code <sql id>} 片段（空表 = 无缺失）。 */
+    public List<String> getMissingFragmentIds() {
+        return missingFragmentIds;
+    }
+
+    /**
+     * Kotlin data class {@code copy(dollarRawCount = …)} 的全量保留等价——
+     * {@link cn.song.mybatisplus.visualizer.ui.standalone.StandaloneSqlSourceResolver} 裸 SQL 链单点引用
+     * （闸门信号已由 {@code hasDollarRawSegments} 先行给定）。
+     */
+    public PreviewResult withDollarRawCount(int newDollarRawCount) {
+        return new PreviewResult(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning,
+                columns, columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel,
+                xmlModel, initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns,
+                namedParamHints, stackDigest, threadName, hasDollarRawSegments, countSql, paginationLimitLine,
+                placeholderParamNames, duplicateParamNames, diagramStatement, historyFingerprintSeed,
+                paginationParamSources, renderedDialect, dialectDecision, historyEntryId, actualSql,
+                sourceLanguage, originalSql, degradations, runtimeSlots,
+                retryWhenIndexReady, m2AwaitKey, informationalWarning,
+                ibatisParamModel, rerender, decidingConsumption, otherConsumptions,
+                statementTypeOptions, statementTypeSwitch, newDollarRawCount, missingFragmentIds);
+    }
+
+    /**
+     * Kotlin data class {@code copy(missingFragmentIds = …)} 的全量保留等价——
+     * {@code StandaloneSqlSourceResolver.withMissingFragments} 单点引用，其余字段逐项保留。
+     */
+    public PreviewResult withMissingFragmentIds(List<String> newMissingFragmentIds) {
+        return new PreviewResult(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning,
+                columns, columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel,
+                xmlModel, initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns,
+                namedParamHints, stackDigest, threadName, hasDollarRawSegments, countSql, paginationLimitLine,
+                placeholderParamNames, duplicateParamNames, diagramStatement, historyFingerprintSeed,
+                paginationParamSources, renderedDialect, dialectDecision, historyEntryId, actualSql,
+                sourceLanguage, originalSql, degradations, runtimeSlots,
+                retryWhenIndexReady, m2AwaitKey, informationalWarning,
+                ibatisParamModel, rerender, decidingConsumption, otherConsumptions,
+                statementTypeOptions, statementTypeSwitch, dollarRawCount, newMissingFragmentIds);
+    }
+
     /** effectiveDialect：previewModel/batchModel 方言优先，缺省取本次渲染瞬态方言。 */
     public Dialect getEffectiveDialect() {
         if (previewModel != null && previewModel.getDialect() != null) {
@@ -815,7 +925,7 @@ public final class PreviewResult {
                 sourceLanguage, originalSql, degradations, runtimeSlots,
                 retryWhenIndexReady, m2AwaitKey, informationalWarning,
                 paramModel, rerenderFn, decidingConsumption, otherConsumptions,
-                statementTypeOptions, statementTypeSwitch);
+                statementTypeOptions, statementTypeSwitch, dollarRawCount, missingFragmentIds);
     }
 
     /**
@@ -831,7 +941,7 @@ public final class PreviewResult {
                 sourceLanguage, originalSql, degradations, runtimeSlots,
                 retryWhenIndexReady, m2AwaitKey, newInformational,
                 ibatisParamModel, rerender, decidingConsumption, otherConsumptions,
-                statementTypeOptions, statementTypeSwitch);
+                statementTypeOptions, statementTypeSwitch, dollarRawCount, missingFragmentIds);
     }
 
     /**
@@ -848,7 +958,7 @@ public final class PreviewResult {
                 sourceLanguage, originalSql, degradations, runtimeSlots,
                 retryWhenIndexReady, m2AwaitKey, informationalWarning,
                 ibatisParamModel, rerender, decidingConsumption, otherConsumptions,
-                statementTypeOptions, statementTypeSwitch);
+                statementTypeOptions, statementTypeSwitch, dollarRawCount, missingFragmentIds);
     }
 
     /**
@@ -867,7 +977,7 @@ public final class PreviewResult {
                 sourceLanguage, originalSql, degradations, runtimeSlots,
                 retryWhenIndexReady, m2AwaitKey, informationalWarning,
                 ibatisParamModel, rerender, decidingConsumption, otherConsumptions,
-                statementTypeOptions, statementTypeSwitch);
+                statementTypeOptions, statementTypeSwitch, dollarRawCount, missingFragmentIds);
     }
 
     /**
@@ -901,7 +1011,7 @@ public final class PreviewResult {
                 sourceLanguage, originalSql, degradations, runtimeSlots,
                 retryWhenIndexReady, m2AwaitKey, informationalWarning,
                 ibatisParamModel, rerender, decidingConsumption, otherConsumptions,
-                statementTypeOptions, statementTypeSwitch);
+                statementTypeOptions, statementTypeSwitch, dollarRawCount, missingFragmentIds);
     }
 
     /** T-PreviewOpenPerfM2 M9：索引未就绪时的重试闭包（null = 无需重试）。 */
@@ -991,7 +1101,9 @@ public final class PreviewResult {
                 && sourceLanguage == that.sourceLanguage
                 && Objects.equals(originalSql, that.originalSql)
                 && Objects.equals(degradations, that.degradations)
-                && Objects.equals(runtimeSlots, that.runtimeSlots);
+                && Objects.equals(runtimeSlots, that.runtimeSlots)
+                && dollarRawCount == that.dollarRawCount
+                && Objects.equals(missingFragmentIds, that.missingFragmentIds);
     }
 
     @Override
@@ -1001,7 +1113,7 @@ public final class PreviewResult {
                 initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, namedParamHints,
                 stackDigest, threadName, hasDollarRawSegments, countSql, paginationLimitLine, placeholderParamNames,
                 duplicateParamNames, diagramStatement, historyFingerprintSeed,
-                sourceLanguage, originalSql, degradations, runtimeSlots);
+                sourceLanguage, originalSql, degradations, runtimeSlots, dollarRawCount, missingFragmentIds);
     }
 
     @Override
@@ -1025,6 +1137,8 @@ public final class PreviewResult {
                 + ", sourceLanguage=" + sourceLanguage
                 + ", originalSql=" + originalSql
                 + ", degradations=" + degradations
-                + ", runtimeSlots=" + runtimeSlots + ")";
+                + ", runtimeSlots=" + runtimeSlots
+                + ", dollarRawCount=" + dollarRawCount
+                + ", missingFragmentIds=" + missingFragmentIds + ")";
     }
 }
