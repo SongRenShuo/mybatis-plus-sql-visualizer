@@ -1,18 +1,24 @@
 // 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/MapperNavigationLineMarkerProviders.kt
-// （F4 48a8f191：Mapper 双向跳转——XML→Java 方）新译。
+// （F4 48a8f191：Mapper 双向跳转——XML→Java 方；T-SyncK2JMaster181 合并 T-MapperNavNamespaceJump 增量）新译。
 package cn.song.mybatisplus.visualizer.ui.gutter;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
+import cn.song.mybatisplus.visualizer.log.MapperXmlLocator;
 import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons;
+import cn.song.mybatisplus.visualizer.ui.nav.MapperNavigationTargets;
 import cn.song.mybatisplus.visualizer.ui.ref.MybatisXmlTargets;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import com.intellij.codeInsight.daemon.LineMarkerInfo;
 import com.intellij.codeInsight.daemon.LineMarkerProvider;
 import com.intellij.openapi.editor.markup.GutterIconRenderer;
 import com.intellij.openapi.project.DumbService;
+import com.intellij.openapi.project.IndexNotReadyException;
 import com.intellij.openapi.project.Project;
+import com.intellij.psi.JavaPsiFacade;
+import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiMethod;
+import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.psi.xml.XmlTag;
 import com.intellij.psi.xml.XmlToken;
 import com.intellij.psi.xml.XmlTokenType;
@@ -33,13 +39,23 @@ import java.util.function.Function;
  * 同口径）行显示配对跳转标记，点击跳到 namespace 对应接口的 {@code id} 方法。
  * slow pass（{@link #collectSlowLineMarkers}）——含接口方法 resolve，不进快通道。</p>
  *
+ * <p>T-MapperNavNamespaceJump（2026-11-24）起 {@code <mapper namespace="…">} <b>根标签</b>另出一枚
+ * 「跳 mapper 接口类」图标：竞品（MPJ {@code view.I} / MyBatisX / MyBatisPlus）都有这一格，接口里
+ * 没有方法时也能跳；本插件此前缺，用户感知为「mapper 没有方法就没法跳转」。</p>
+ *
  * <p>注册见 plugin.xml {@code <codeInsight.lineMarkerProvider language="XML" .../>}。</p>
  */
 public class MapperXmlToJavaLineMarkerProvider implements LineMarkerProvider {
 
-    // T-SyncK2JMaster179 生产补漏：master companion 的会话级正缓存与测试缝。
+    // F1（T-GutterFirstOpenDelay，治 S2「MP 图标消失 3s 重现」）：见 master KDoc 的 ①②③④ 四段判定。
     /** F1-a 会话级正缓存：本会话解析成功过的语句键（形态见 {@link #cacheKey}）。无失效，取舍见类头注释。 */
     public static final Set<String> resolvedStatementKeys = ConcurrentHashMap.newKeySet();
+
+    /**
+     * T-MapperNavNamespaceJump：根标签 → 接口类的会话级正缓存（键见 {@link #classCacheKey}）。
+     * 语义与 {@link #resolvedStatementKeys} 同口径：只在「确认真没有」时缺席，不在「还没查到」时缺席。
+     */
+    public static final Set<String> resolvedClassKeys = ConcurrentHashMap.newKeySet();
 
     /**
      * T-PerfSweep32 券02：缓存键带 {@code project.locationHash} 前缀——resolvedStatementKeys 是
@@ -49,6 +65,11 @@ public class MapperXmlToJavaLineMarkerProvider implements LineMarkerProvider {
      */
     static String cacheKey(@NotNull Project project, @NotNull String namespace, @NotNull String statementId) {
         return project.getLocationHash() + "|" + namespace + "|" + statementId;
+    }
+
+    /** T-MapperNavNamespaceJump：根标签类缓存键（同工程同 namespace 复用；{@code #mapper} 与语句 id 不会撞）。 */
+    static String classCacheKey(@NotNull Project project, @NotNull String namespace) {
+        return project.getLocationHash() + "|" + namespace + "|#mapper";
     }
 
     /** 测试缝：dumb 判定（生产＝DumbService.isDumb）。双侧共用。 */
@@ -63,6 +84,7 @@ public class MapperXmlToJavaLineMarkerProvider implements LineMarkerProvider {
     /** 测试缝：清空正缓存并复位三态定位缝，防跨用例泄漏。 */
     public static void resetResolvedCacheForTest() {
         resolvedStatementKeys.clear();
+        resolvedClassKeys.clear();
         MybatisXmlTargets.methodLookupOverrideForTest = null;
         cn.song.mybatisplus.visualizer.log.MapperXmlLocator.lookupOverrideForTest = null;
     }
@@ -86,9 +108,11 @@ public class MapperXmlToJavaLineMarkerProvider implements LineMarkerProvider {
         }
         if (gutterState != null && !gutterState.getShowGutterIcon()) return;
         if (!GutterGroups.enabledFor(getClass(), gutterState)) return;
-        // 第三道门（T-MapperNavCoexistYield）：gutter 面的共存让位——MyBatisCodeHelperPro 启用时
-        // 它自己也会给同一行出跳转箭头，本插件让位。与 XmlSynHiGate 的注入区间互补是两件事：
-        // 那边判「对方是否真给这段文本上色」，这边判「对方是否在位」（同行两个图标都合规，故让位）。
+        // 第三道门（T-MapperNavCoexistYield / T-MapperNavYieldJavaSideKeep）：**仅 XML 语句行**的共存
+        // 让位——同类插件启用时它自己也会给同一行出跳转箭头，本插件让位。Java 侧（Mapper 接口方法行）
+        // 不再让位：对方 Java 箭头与我方同款，让位会让该行只剩对方一枚、用户无法分辨（见
+        // MapperJavaToXmlLineMarkerProvider 的 KDoc）。与 XmlSynHiGate 的注入区间互补是两件事：
+        // 那边判「对方是否真给这段文本上色」，这边判「对方是否在位」。
         // 探测结论已缓存，此处为 O(1) 布尔，不引入按元素开销。
         if (gutterState != null
                 && MyBatisCompetitorGate.shouldYield(
@@ -108,6 +132,14 @@ public class MapperXmlToJavaLineMarkerProvider implements LineMarkerProvider {
         if (token.getTokenType() != XmlTokenType.XML_NAME) return null;
         XmlTag tag = token.getParent() instanceof XmlTag ? (XmlTag) token.getParent() : null;
         if (tag == null) return null;
+        // T-MapperNavNamespaceJump：`<mapper namespace="…">` 根标签 → 接口类。
+        // 竞品（MPJ view.I / MyBatisX / MyBatisPlus）都在这里给「跳 mapper class」，接口里没有方法也能跳；
+        // 本插件此前缺这一格，用户感知为「mapper 没有方法就没法跳转」。锚点＝根标签名 token（与语句锚同形）。
+        if ("mapper".equals(tag.getName()) && tag.getParentTag() == null
+                && XmlTagUtil.getStartTagNameElement(tag) == token
+                && MybatisXmlTargets.isMapperFile(tag.getContainingFile())) {
+            return createRootMapperMarker(element, tag);
+        }
         if (!XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS.contains(tag.getName())) return null;
         if (XmlTagUtil.getStartTagNameElement(tag) != token) return null;
         // mapper 根的直接子语句标签（嵌套 <include> 内的不算）；非 mapper XML 不误显
@@ -158,6 +190,52 @@ public class MapperXmlToJavaLineMarkerProvider implements LineMarkerProvider {
                 },
                 GutterIconRenderer.Alignment.CENTER,
                 () -> MpSqlVisualizerBundle.message("gutter.mapperStatement.accessible.name")
+        );
+    }
+
+    /**
+     * 根标签 → 接口类图标的五段式（与 {@link #createMarker} 语句侧同不变式）：
+     * ① dumb 乐观产出（不查索引、不入缓存）② 确定存在 → 入缓存并产出
+     * ③ 索引临界（{@link IndexNotReadyException}）→ 缓存命中仍产出 ④ 确定不存在 → 收回缓存并摘图标
+     * ⑤ 其余不产出。namespace 为空 → 不产出（不出死图标）。
+     */
+    @Nullable
+    private static LineMarkerInfo<PsiElement> createRootMapperMarker(@NotNull PsiElement element, @NotNull XmlTag tag) {
+        String rawNamespace = tag.getAttributeValue("namespace");
+        if (rawNamespace == null || rawNamespace.isBlank()) return null;
+        String namespace = rawNamespace;
+        Project project = element.getProject();
+        String key = classCacheKey(project, namespace);
+        if (isDumbProvider.apply(project)) return buildRootMapperMarker(element);
+        PsiClass cls;
+        try {
+            cls = JavaPsiFacade.getInstance(project).findClass(namespace, GlobalSearchScope.allScope(project));
+        } catch (IndexNotReadyException e) {
+            return resolvedClassKeys.contains(key) ? buildRootMapperMarker(element) : null;
+        }
+        if (cls != null) {
+            resolvedClassKeys.add(key);
+            return buildRootMapperMarker(element);
+        }
+        resolvedClassKeys.remove(key);
+        return null;
+    }
+
+    @NotNull
+    private static LineMarkerInfo<PsiElement> buildRootMapperMarker(@NotNull PsiElement element) {
+        return new LineMarkerInfo<PsiElement>(
+                element,
+                element.getTextRange(),
+                MpvsIcons.MapperStatement,
+                elt -> MpSqlVisualizerBundle.message("gutter.mapperClass.tooltip"),
+                (mouseEvent, elt) -> {
+                    XmlTag currentTag = elt.getParent() instanceof XmlTag ? (XmlTag) elt.getParent() : null;
+                    if (currentTag == null) return;
+                    PsiClass target = MapperNavigationTargets.mapperClassOfRootTag(currentTag);
+                    if (target != null) target.navigate(true);
+                },
+                GutterIconRenderer.Alignment.CENTER,
+                () -> MpSqlVisualizerBundle.message("gutter.mapperClass.accessible.name")
         );
     }
 }

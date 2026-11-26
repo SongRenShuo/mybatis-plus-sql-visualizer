@@ -103,6 +103,49 @@ public final class MapperXmlLocator {
     }
 
     /**
+     * 「语句存在」三态（T-MapperPreviewOrder，2026-11-26）：给预览 provider 用——只要
+     * 「有没有同名语句」，不需要行号，因此<b>不建 document</b>（{@link #locate} 里的
+     * {@code PsiDocumentManager.getDocument} 在慢趟每方法一次是重活；预览与跳转拆成两个 provider
+     * 后，预览这边只付索引 + PSI 子树查找）。
+     *
+     * <p>语义与 {@link #locateOrUnknown} 同一套（Found / Absent / Unknown），测试缝共用；
+     * Found 的 {@link Location#line} 填 0（预览侧不读行号）。</p>
+     */
+    @NotNull
+    public static Lookup existsOrUnknown(@NotNull Project project, @NotNull String statementId) {
+        BiFunction<Project, String, Lookup> override = lookupOverrideForTest;
+        if (override != null) {
+            return override.apply(project, statementId);
+        }
+        kotlin.Pair<String, String> parts = splitStatementId(statementId);
+        if (parts == null) {
+            return Absent.ABSENT;
+        }
+        String namespace = parts.getFirst();
+        String id = parts.getSecond();
+        try {
+            // T-M52（本仓既有口径）：243 编译目标只有 compute(ThrowableComputable) 重载，
+            // 且**不加显式类型参数**——写成 `ReadAction.<Lookup>compute(...)` 会让重载解析
+            // 锁定到 compute(Computable)，lambda 不兼容直接编译红。同仓先例：
+            // GenerateCrudSqlFromDbTableAction:59 / ChooseDataSourceTakeover:252。
+            return ReadAction.compute(() -> {
+                for (VirtualFile vf : MapperNamespaceIndex.getMapperXmlFiles(project, namespace)) {
+                    var psiFile = PsiManager.getInstance(project).findFile(vf);
+                    if (!(psiFile instanceof XmlFile file)) {
+                        continue;
+                    }
+                    if (findStatementTag(file, namespace, id) != null) {
+                        return new Found(new Location(vf, 0));
+                    }
+                }
+                return Absent.ABSENT;
+            });
+        } catch (IndexNotReadyException e) {
+            return Unknown.UNKNOWN;
+        }
+    }
+
+    /**
      * 定位语句在 mapper XML 中的位置；任一环失败返回 null（调用方回退 Java 跳转）。
      *
      * @param statementId 完整语句 id（{@code namespace.id}，如 {@code com.example.mapper.UserMapper.selectById}）

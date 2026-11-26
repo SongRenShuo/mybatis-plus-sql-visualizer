@@ -7,7 +7,9 @@ import com.intellij.navigation.GotoRelatedProvider;
 import com.intellij.openapi.actionSystem.DataContext;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiMethod;
+import com.intellij.psi.xml.XmlFile;
 import com.intellij.psi.xml.XmlTag;
 import org.jetbrains.annotations.NotNull;
 
@@ -47,6 +49,32 @@ public class MapperNavigationGotoRelatedProvider extends GotoRelatedProvider {
     }
 
     private List<GotoRelatedItem> itemsFor(PsiElement element) {
+        // T-MapperNavNamespaceJump：光标在 `<mapper namespace>` 根标签上 → 接口类（无方法也能列）。
+        XmlTag rootTag = rootMapperTag(element);
+        if (rootTag != null) {
+            PsiClass cls = MapperNavigationTargets.mapperClassOfRootTag(rootTag);
+            if (cls != null) {
+                String label = cls.getQualifiedName() != null ? cls.getQualifiedName()
+                        : (cls.getName() != null ? cls.getName() : "");
+                return List.of(new RelatedItem(cls, label, GROUP_METHOD, MpvsIcons.MapperMethod));
+            }
+        }
+        // T-MapperClassJump：光标在 Mapper 接口类名上 → 对应 XML 根标签。
+        if (element instanceof com.intellij.psi.PsiIdentifier
+                && element.getParent() instanceof PsiClass) {
+            PsiClass owner = (PsiClass) element.getParent();
+            if (owner.getNameIdentifier() == element) {
+                XmlFile xml = MapperNavigationTargets.xmlFileForMapperInterface(owner);
+                XmlTag root = xml != null ? xml.getRootTag() : null;
+                if (root != null) {
+                    return List.of(new RelatedItem(
+                            root,
+                            xml.getName() != null ? xml.getName() : "",
+                            GROUP_STATEMENT,
+                            MpvsIcons.MapperStatement));
+                }
+            }
+        }
         PsiMethod method = MapperNavigationTargets.nearestMapperMethod(element);
         if (method != null) {
             List<GotoRelatedItem> statements = new ArrayList<>();
@@ -64,6 +92,21 @@ public class MapperNavigationGotoRelatedProvider extends GotoRelatedProvider {
         String label = ownerName == null || ownerName.isEmpty()
                 ? target.getName() : ownerName + "#" + target.getName();
         return List.of(new RelatedItem(target, label, GROUP_METHOD, MpvsIcons.MapperMethod));
+    }
+
+    /** 光标元素的最近 XmlTag 是否就是 {@code <mapper>} 根标签（标签体内的语句标签直接返回 null，不误吞）。 */
+    private static XmlTag rootMapperTag(PsiElement element) {
+        PsiElement current = element;
+        int depth = 0;
+        while (current != null && depth++ < 6) {
+            if (current instanceof XmlTag) {
+                XmlTag tag = (XmlTag) current;
+                return "mapper".equals(tag.getName()) && tag.getParentTag() == null ? tag : null;
+            }
+            if (current instanceof PsiFile) return null;
+            current = current.getParent();
+        }
+        return null;
     }
 
     /** 语句项展示名：{@code selectById}（{@code databaseId} 变体补后缀，避免两项同名看不出区别）。 */

@@ -2,12 +2,17 @@ package cn.song.mybatisplus.visualizer.ui.nav;
 
 import cn.song.mybatisplus.visualizer.ui.ref.MybatisXmlTargets;
 import com.intellij.openapi.project.DumbService;
+import com.intellij.openapi.project.Project;
+import com.intellij.psi.JavaPsiFacade;
+import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiMethod;
+import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.psi.xml.XmlAttribute;
 import com.intellij.psi.xml.XmlAttributeValue;
+import com.intellij.psi.xml.XmlFile;
 import com.intellij.psi.xml.XmlTag;
 import com.intellij.psi.xml.XmlToken;
 import com.intellij.psi.xml.XmlTokenType;
@@ -52,6 +57,18 @@ public final class MapperNavigationTargets {
         return MybatisXmlTargets.resolveStatementTags(method.getProject(), namespace, method.getName());
     }
 
+    /**
+     * T-MapperClassJump：Mapper 接口<b>类</b> → namespace 对应 XML 文件（无则 null）。
+     * 供 Ctrl+B / GotoRelated / gutter 类名锚点共用；竞品（MPJ view.A、MyBatisX）都有这一跳。
+     */
+    @Nullable
+    public static XmlFile xmlFileForMapperInterface(@Nullable PsiClass cls) {
+        if (cls == null || !cls.isInterface()) return null;
+        String namespace = cls.getQualifiedName();
+        if (namespace == null) return null;
+        return MybatisXmlTargets.findMapperFileByNamespace(cls.getProject(), namespace);
+    }
+
     /** XML 语句标签 → namespace 接口的同名方法（非 mapper 文件/非语句标签/无命中返回 null）。 */
     @Nullable
     public static PsiMethod methodFor(XmlTag tag) {
@@ -86,6 +103,61 @@ public final class MapperNavigationTargets {
         return MybatisXmlTargets.STATEMENT_TAGS.contains(tag.getName())
                 && parent != null && "mapper".equals(parent.getName())
                 && parent.getParentTag() == null;
+    }
+
+    /**
+     * T-MapperNavNamespaceJump：{@code <mapper namespace="…">} 根标签 → Mapper 接口类。
+     *
+     * <p>竞品（MyBatisCodeHelperPro {@code view.I}、MyBatisX/MyBatisPlus {@code StatementLineMarkerProvider}）
+     * 都在根标签 / {@code namespace} 属性上给这一跳——接口里<b>没有方法也能落到类</b>。本插件此前缺这一格，
+     * 用户感知为「mapper 没有方法就没法跳转」。</p>
+     */
+    @Nullable
+    public static PsiClass mapperClassOfRootTag(XmlTag tag) {
+        if (!"mapper".equals(tag.getName()) || tag.getParentTag() != null) return null;
+        if (!MybatisXmlTargets.isMapperFile(tag.getContainingFile())) return null;
+        return mapperClassOf(tag.getContainingFile());
+    }
+
+    /** mapper 文件 → namespace 接口类（namespace 空 / 类不存在 / dumb 返回 null）。 */
+    @Nullable
+    public static PsiClass mapperClassOf(PsiFile file) {
+        String namespace = MybatisXmlTargets.rootNamespace(file);
+        if (namespace == null) return null;
+        return mapperClassOf(file.getProject(), namespace);
+    }
+
+    /** namespace 全限定名 → 接口类（dumb 期不查索引，返回 null 由调用方回退）。 */
+    @Nullable
+    public static PsiClass mapperClassOf(Project project, String namespace) {
+        if (namespace.isBlank() || DumbService.isDumb(project)) return null;
+        return JavaPsiFacade.getInstance(project).findClass(namespace, GlobalSearchScope.allScope(project));
+    }
+
+    /**
+     * XML token → 光标所在的 {@code mapper} 根标签，<b>只认三个落点</b>：根标签名、{@code namespace} 属性名、
+     * {@code namespace} 属性值（与 {@link #ownerStatementTag} 的三落点口径同形；标签体内文本/闭标签名不接管）。
+     */
+    @Nullable
+    public static XmlTag rootMapperTagOf(XmlToken token) {
+        PsiElement parent = token.getParent();
+        XmlAttribute attribute = null;
+        if (parent instanceof XmlAttribute) {
+            attribute = (XmlAttribute) parent;
+        } else if (parent instanceof XmlAttributeValue) {
+            attribute = ((XmlAttributeValue) parent).getParent() instanceof XmlAttribute
+                    ? (XmlAttribute) ((XmlAttributeValue) parent).getParent() : null;
+        }
+        if (attribute != null) {
+            if (!"namespace".equals(attribute.getName())) return null;
+            if (!(attribute.getParent() instanceof XmlTag)) return null;
+            XmlTag tag = (XmlTag) attribute.getParent();
+            return "mapper".equals(tag.getName()) && tag.getParentTag() == null ? tag : null;
+        }
+        if (!(parent instanceof XmlTag)) return null;
+        XmlTag tag = (XmlTag) parent;
+        if (XmlTagUtil.getStartTagNameElement(tag) != token) return null;
+        return "mapper".equals(tag.getName()) && tag.getParentTag() == null ? tag : null;
     }
 
     /** 光标元素向上找到的 mapper 接口方法（普通类方法、方法体内引用均返回 null）。 */

@@ -24,7 +24,8 @@ public final class AgentManagerKt {
      *  3. 曾挂载 + 心跳过期 → 带窗口秒数的可核实表述（T-AgentHeartbeat T-05 去因果断言）；
      *  4. 曾挂载 + 首条心跳未到 → 中性等待叙述（T-AgentHeartbeat T-05 新增）；
      *  5. 曾挂载 + 其余 → 连接中断回落；
-     *  6. 从未挂载 → 等待应用进程启动后挂载。
+     *  6. 本次被注入闸门跳过（目标 JDK &lt; 8）→「已跳过注入」（T-AgentStatusOldJvm，在 3~5 之前）；
+     *  7. 从未挂载 → 等待应用进程启动后挂载。
      */
     public static String agentStatusText(AgentStatusSnapshot s) {
         if (!s.enabled()) {
@@ -44,6 +45,16 @@ public final class AgentManagerKt {
             return s.activityFallbackActive()
                 ? attached + "｜" + MpSqlVisualizerBundle.message("settings.enhancedCapture.status.activityFallback")
                 : attached;
+        }
+        // T-AgentStatusOldJvm（由 AgentSessionSupport.kt 增量并入）：目标 JVM 低于 agent 字节码要求时
+        // 注入已被闸门跳过——本项目永远等不到挂载，「等待挂载」是错叙事。位置在「曾挂载」分支之前
+        // （T-AgentStatusOldJvm2 复盘）：everAttached 是项目级粘性标志，先跑一次 JDK 8 再跑 JDK 7 时，
+        // 上次会话的「连接中断」会遮住本次「已跳过注入」的事实——优先级必须是「本次挂载 &gt; 本次跳过
+        // &gt; 上次会话结局」。AgentManager 在会话建立时清跳过标志，故「真实挂载了」不会落入本分支
+        // （且 livePids 分支更先）。
+        // 【反向验证实验摘除点】补丁摘掉本分支 → 优先级用例必红（回落上次会话的结局文案）
+        if (s.targetJvmUnsupported()) {
+            return MpSqlVisualizerBundle.message("settings.enhancedCapture.status.targetJvmTooOld");
         }
         if (s.everAttached()) {
             // T-ReachAudit T-RA-01：心跳过期 = socket 未断而帧停，与真断连分开叙述。

@@ -50,12 +50,27 @@ public final class MyBatisCompetitorGate {
     private static final Logger LOG = Logger.getInstance(MyBatisCompetitorGate.class);
 
     /**
-     * 同类 MyBatis 导航插件的 pluginId 前缀（当前登记一项）。实测本机 MPJ 3.6.8 的 id 为
-     * {@code com.ccnode.codegenerator.MyBatisCodeHelperPro}（{@code META-INF/plugin.xml} 读取）；前缀匹配兜住
-     * Marketplace 版与历史 id 变体。设置页文案写的是「同类插件」，与这里的登记面保持一致——
-     * 将来登记更多会把跳转箭头画在同一行的同类插件时，在本表加前缀即可（探测逻辑无需改）。
+     * 同类 MyBatis 导航插件的 pluginId 前缀（20261124 扩展为三家）。
+     *
+     * <p>登记依据（反编译 {@code META-INF/plugin.xml} + provider 字节码，见计划 T-MapperNavNamespaceJump
+     * §1.1）：</p>
+     * <ul>
+     *   <li>{@code com.ccnode.codegenerator.MyBatisCodeHelperPro}（MPJ 3.6.8/3.7.0）：UAST {@code view.A}
+     *       + XML {@code view.I}；</li>
+     *   <li>{@code com.baomidou.plugin.idea.mybatisx}（MyBatisX 1.7.6）：{@code MapperLineMarkerProvider}
+     *       + {@code StatementLineMarkerProvider}；</li>
+     *   <li>{@code com.baomidou.plugin.idea.mybatisPlus}（MyBatisPlus 1.7.2）：同结构 fork
+     *       （id 大写 {@code P}，故单独列出，不用宽前缀）。</li>
+     * </ul>
+     *
+     * <p>前缀匹配兜住 Marketplace 版与历史 id 变体；将来登记更多会在同行画跳转箭头的同类插件时，
+     * 在本表加前缀即可（探测逻辑无需改）。设置页文案写「同类插件」，与本表保持一致。</p>
      */
-    public static final List<String> PEER_PLUGIN_ID_PREFIXES = List.of("com.ccnode.codegenerator");
+    public static final List<String> PEER_PLUGIN_ID_PREFIXES = List.of(
+            "com.ccnode.codegenerator",              // MyBatisCodeHelperPro
+            "com.baomidou.plugin.idea.mybatisx",     // MyBatisX
+            "com.baomidou.plugin.idea.mybatisPlus"   // MyBatisPlus（同作者 fork）
+    );
 
     private static final String LOG_PREFIX = "[T-MapperNavCoexistYield]";
 

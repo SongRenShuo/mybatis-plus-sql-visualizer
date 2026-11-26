@@ -52,7 +52,7 @@ public class PremainRunConfigurationExtension extends RunConfigurationExtension 
             if (manager == null) {
                 return;
             }
-            String option = manager.preparePremainVmOption();
+            String option = manager.preparePremainVmOption(probeTargetJvmMaxMajor(params));
             if (option == null) {
                 return;
             }
@@ -60,6 +60,24 @@ public class PremainRunConfigurationExtension extends RunConfigurationExtension 
             LOG.info("premain 注入完成（config=" + configuration.getName() + "）：" + option);
         } catch (Throwable t) {
             LOG.warn("premain 注入链异常——本次不注入，回落 attach/桥（零劣化）", t);
+        }
+    }
+
+    /**
+     * T-OldJvmPremainGuard 券01：目标 JVM 能加载的最高类文件 major。
+     *
+     * <p>事实来源是 {@code JavaParameters.getJdkPath()}（243 javap 实证：{@code public String getJdkPath()}）——
+     * 探测本体在纯函数 {@link TargetJvmCompat}（release 文件 → rt.jar 兜底 → 未知），结果按 JDK 路径缓存。
+     * 平台异常按「未知」处理（零突变：放行注入，由 agent 侧引导类兜底）；fatal 照例透传。</p>
+     */
+    private Integer probeTargetJvmMaxMajor(JavaParameters params) {
+        // Kotlin: runCatching { TargetJvmCompat.maxSupportedMajor(params.jdkPath) }.getOrElse { … }
+        try {
+            return TargetJvmCompat.maxSupportedMajor(params.getJdkPath());
+        } catch (Throwable t) {
+            if (FatalErrors.isFatal(t)) throw (Error) t;
+            LOG.warn("目标 JVM 版本探测失败——按未知处理（注入后由 agent 侧引导类兜底）", t);
+            return null;
         }
     }
 

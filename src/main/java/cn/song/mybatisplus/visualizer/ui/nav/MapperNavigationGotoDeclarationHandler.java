@@ -2,9 +2,12 @@ package cn.song.mybatisplus.visualizer.ui.nav;
 
 import com.intellij.codeInsight.navigation.actions.GotoDeclarationHandler;
 import com.intellij.openapi.editor.Editor;
+import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiIdentifier;
 import com.intellij.psi.PsiMethod;
+import com.intellij.psi.xml.XmlFile;
+import com.intellij.psi.xml.XmlTag;
 import com.intellij.psi.xml.XmlToken;
 import org.jetbrains.annotations.Nullable;
 
@@ -27,8 +30,10 @@ import org.jetbrains.annotations.Nullable;
  *
  * <h2>覆盖方向</h2>
  * <ul>
+ *   <li>Java 接口类名 → namespace 对应 XML 根标签（T-MapperClassJump）；</li>
  *   <li>Java 接口方法名 → XML 同名语句（落点取语句 {@code id} 的文本 token）；</li>
- *   <li>XML 语句的起始标签名 / {@code id} 属性名 / {@code id} 属性值 → 接口方法。</li>
+ *   <li>{@code <mapper namespace="…">} 根标签名 / {@code namespace} 属性名或值 → 接口类（T-MapperNavNamespaceJump）；</li>
+ *   <li>XML 语句的起始标签名 / {@code id} 属性名 / {@code id} 属性值 → 接口方法（无同名方法时退化为跳接口类）。</li>
  * </ul>
  *
  * <p>解析与判定集中在 {@link MapperNavigationTargets}，本类只做「元素形态分流」。</p>
@@ -59,20 +64,38 @@ public class MapperNavigationGotoDeclarationHandler implements GotoDeclarationHa
 
     @Nullable
     private PsiElement[] javaToXml(PsiIdentifier identifier) {
+        // T-MapperClassJump：接口类名 → XML 根标签（竞品类级锚点同款）。
+        if (identifier.getParent() instanceof PsiClass) {
+            PsiClass owner = (PsiClass) identifier.getParent();
+            if (owner.getNameIdentifier() == identifier) {
+                XmlFile xml = MapperNavigationTargets.xmlFileForMapperInterface(owner);
+                XmlTag root = xml != null ? xml.getRootTag() : null;
+                if (root != null) return new PsiElement[]{root};
+            }
+        }
         if (!(identifier.getParent() instanceof PsiMethod)) return null;
         PsiMethod method = (PsiMethod) identifier.getParent();
         if (method.getNameIdentifier() != identifier) return null;
-        java.util.List<com.intellij.psi.xml.XmlTag> tags = MapperNavigationTargets.statementTagsFor(method);
+        java.util.List<XmlTag> tags = MapperNavigationTargets.statementTagsFor(method);
         if (tags.isEmpty()) return null;
         return tags.stream().map(MapperNavigationTargets::statementAnchor).toArray(PsiElement[]::new);
     }
 
     @Nullable
     private PsiElement[] xmlToJava(XmlToken token) {
-        com.intellij.psi.xml.XmlTag tag = MapperNavigationTargets.ownerStatementTag(token);
+        // T-MapperNavNamespaceJump：`<mapper namespace="…">` 根标签名 / namespace 属性名或值 → 接口类
+        // （竞品都能在「接口没有方法」时落类，本格补齐）。
+        XmlTag rootMapperTag = MapperNavigationTargets.rootMapperTagOf(token);
+        if (rootMapperTag != null) {
+            PsiClass cls = MapperNavigationTargets.mapperClassOfRootTag(rootMapperTag);
+            if (cls != null) return new PsiElement[]{cls};
+        }
+        XmlTag tag = MapperNavigationTargets.ownerStatementTag(token);
         if (tag == null) return null;
         PsiMethod method = MapperNavigationTargets.methodFor(tag);
-        if (method == null) return null;
-        return new PsiElement[]{method};
+        if (method != null) return new PsiElement[]{method};
+        // D-1：语句 id 找不到同名方法时退化为跳接口类（不造死链接：类也不存在则回落原生跳转）。
+        PsiClass cls = MapperNavigationTargets.mapperClassOf(tag.getContainingFile());
+        return cls != null ? new PsiElement[]{cls} : null;
     }
 }

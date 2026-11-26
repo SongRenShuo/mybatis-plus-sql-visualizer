@@ -9,12 +9,14 @@ import com.intellij.openapi.components.Service;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.wm.ToolWindow;
+import com.intellij.openapi.wm.ToolWindowAnchor;
 import com.intellij.openapi.wm.ToolWindowManager;
 // T-AutoShowMaster：wm.ex 包的 ToolWindowManagerListener——非 ex 包在本机裁剪发行版中不存在
 // （历轮发行实证），两参 stateChanged 是公开 API，三参重载为 @Experimental 会触发 Marketplace 违规
 import com.intellij.openapi.wm.ex.ToolWindowManagerListener;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
@@ -168,6 +170,45 @@ public final class SqlLogManager implements Disposable {
     /** M37.3：自动展开请求处理器（测试缝——默认查 ToolWindowManager 并 show，不 activate）。 */
     volatile Runnable onAutoShowRequest = this::defaultAutoShowRequest;
 
+    /**
+     * T-AutoShowYield：同侧条纹占用查询（同包/同模块测试缝——默认读 ToolWindowManager）。
+     *
+     * <p>为什么需要：新 UI 里同一锚点的侧栏同一时刻只显示一块面板，{@code show()} 会把当前显示的那块
+     * <b>顶掉</b>——用户正在看的 API 调试 / HTTP Client / Database 都注册在右侧，被抢走是纯损失
+     * （真机反馈：用 API 调试插件调接口，响应还没读完日志窗就顶了上来）。</p>
+     *
+     * <p>只查「与本窗同锚点且 isVisible」的其他工具窗；读取失败按「未占用」处理——宁可保留既有
+     * 自动展开能力，也不让平台差异把功能静默关死。相邻读取先例见 {@code FirstCaptureGuide}。</p>
+     */
+    public volatile kotlin.jvm.functions.Function0<Boolean> isOwnStripeOccupiedByOtherPanel = this::defaultStripeOccupied;
+
+    /** {@link #isOwnStripeOccupiedByOtherPanel} 的默认实现（方法引用挂接，避开字段初始化器捕获未赋值的 project）。 */
+    private boolean defaultStripeOccupied() {
+        // Kotlin: runCatching { … }.getOrDefault(false)
+        try {
+            ToolWindowManager manager = ToolWindowManager.getInstance(project);
+            ToolWindow own = manager.getToolWindow(TOOL_WINDOW_ID);
+            if (own == null) {
+                return false;
+            }
+            ToolWindowAnchor ownAnchor = own.getAnchor();
+            List<ToolWindowAnchor> visibleOtherAnchors = new ArrayList<>();
+            for (String id : manager.getToolWindowIdSet()) {
+                if (TOOL_WINDOW_ID.equals(id)) {
+                    continue;
+                }
+                ToolWindow other = manager.getToolWindow(id);
+                if (other == null || !other.isVisible()) {
+                    continue;
+                }
+                visibleOtherAnchors.add(other.getAnchor());
+            }
+            return shouldYieldToOtherPanel(ownAnchor, visibleOtherAnchors);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     private void defaultAutoShowRequest() {
         ApplicationManager.getApplication().invokeLater(() -> {
             if (project.isDisposed()) return;
@@ -266,6 +307,15 @@ public final class SqlLogManager implements Disposable {
                 PluginSettings.getInstance().getState().getLogAutoOpenOnCapture(),
                 now - lastAutoShowAt,
                 autoShowSuppressedByUserClose)) {
+            return false;
+        }
+        if (PluginSettings.getInstance().getState().getLogAutoOpenYield()
+                && isOwnStripeOccupiedByOtherPanel.invoke()) {
+            // T-AutoShowYield：同侧已有面板在显示——show() 会把它顶掉，用户正在用的那块
+            // （API 调试 / HTTP Client / Database）不该被抢。让位期间条目照常入缓冲，切回面板即可看到；
+            // 防抖窗口照常消费，避免用户稍后关掉那块面板时被一条延迟展开偷袭。
+            lastAutoShowAt = now;
+            LOG.info("[T-AutoShowYield] logAutoOpenYield=true 且同侧条纹被其他工具窗占用——本轮不抢面板");
             return false;
         }
         lastAutoShowAt = now;
@@ -808,5 +858,14 @@ public final class SqlLogManager implements Disposable {
      *  自动展开自身只产生 不可见→可见 沿，不会误判；初值 false 时启动/布局中间态不触发。 */
     static boolean isUserCloseTransition(boolean wasVisible, boolean isVisible) {
         return wasVisible && !isVisible;
+    }
+
+    /**
+     * T-AutoShowYield：让位判定（纯函数，测试缝）——同一锚点条纹里已有别的工具窗在显示时
+     * 就判定让位（不调用 {@code show()}）：新 UI 同一侧栏只显示一块面板，展开等于把用户正在用的那块顶掉。
+     * 锚点未知（null）不判定让位，保持既有展开能力。
+     */
+    static boolean shouldYieldToOtherPanel(ToolWindowAnchor ownAnchor, List<ToolWindowAnchor> visibleOtherAnchors) {
+        return ownAnchor != null && visibleOtherAnchors.contains(ownAnchor);
     }
 }

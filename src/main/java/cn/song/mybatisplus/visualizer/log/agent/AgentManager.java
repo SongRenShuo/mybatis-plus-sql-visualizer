@@ -267,6 +267,19 @@ public final class AgentManager implements Disposable {
      */
     public final CopyOnWriteArrayList<PremainChannel> premainChannels = new CopyOnWriteArrayList<>();
 
+    /**
+     * T-OldJvmPremainGuard 券01：已提示过的「目标 JDK 过老」版本串（同一版本只报一次，防反复 Run 刷屏）。
+     * 随 project 级 service 生命周期回收；public 为同模块测试缝。
+     */
+    public final java.util.Set<String> targetJvmNotifiedVersions = ConcurrentHashMap.newKeySet();
+
+    /**
+     * T-AgentStatusOldJvm（2026-11-21）：本会话是否曾因目标 JVM 类版本过低被注入闸门拦下。
+     * 粘性置位（不随单次运行清除）：状态行在「从未挂载」分支用它改说「已跳过注入」；
+     * 真实挂载后由更高优先级分支覆盖叙事，无需反向清除。public 为同模块测试缝。
+     */
+    public final AtomicBoolean targetJvmSkipDetected = new AtomicBoolean(false);
+
     // ---------- T-PS4-03/UI-007 测试缝：去抖窗、时间源与 attach 目标判定可注入（生产链路勿改默认值） ----------
 
     /** attach 排队去抖窗（默认 {@link #DEFAULT_ATTACH_DEBOUNCE_MS}；测试注入短窗驱动去抖语义）。 */
@@ -745,6 +758,9 @@ public final class AgentManager implements Disposable {
         heartbeatDropDetected.set(false);
         // T-AgentHeartbeat T-05：同一口径清「首条心跳未到」标记
         firstHeartbeatPending.set(false);
+        // T-AgentStatusOldJvm2：本次真挂载成功 → 清「目标 JDK 过老已跳过」标志——状态行优先级
+        // 是「本次挂载 > 本次跳过 > 上次会话结局」，真实挂载后不得再显示跳过叙事
+        targetJvmSkipDetected.set(false);
         publishStatusChanged();
         // T-FirstUsePremainConsent S2：attach 兜底挂载成功（能走到这里必非 premain 在场——
         // premain 通道在场的进程在 doAttachAsync 入口就跳过）→ 能力边界告知（每轮至多一次）
@@ -990,15 +1006,36 @@ public final class AgentManager implements Disposable {
      * 不再有 confirmed 前置条件，也不再有弹窗与 EDT 依赖。</p>
      */
     public String preparePremainVmOption() {
+        return preparePremainVmOption(null);
+    }
+
+    /**
+     * T-OldJvmPremainGuard（2026-11-20）：{@code targetJvmMaxMajor} 是目标 JVM 的类版本上限（探测失败
+     * 传 null = 未知放行）。低于 agent 产物（major 52）时跳过注入并给一次性提示——JDK 6/7 上
+     * {@code -javaagent} 载不动入口类，JVM 会直接终止，用户的应用根本起不来。
+     *
+     * <p>闸门序：开关 → <b>目标 JVM 类版本</b> → jar 可用 → 端口。太老时<b>不提取 jar、不协商端口</b>。</p>
+     */
+    public String preparePremainVmOption(Integer targetJvmMaxMajor) {
         boolean enabled = isEnhancedEnabled();
         if (!enabled) {
             String reason = ((PremainInjection.Decision.Skip) PremainInjection.decide(false)).reason();
             LOG.info("premain 注入跳过：" + reason + "（不提取 jar、不协商端口）");
             return null;
         }
+        if (!PremainInjection.targetJvmSupported(targetJvmMaxMajor)) {
+            LOG.warn("premain 注入跳过：" + PremainInjection.REASON_TARGET_JVM_TOO_OLD
+                + "（目标 JDK 判定值 " + targetJvmMaxMajor + " < agent 产物 " + PremainInjection.MIN_TARGET_CLASS_MAJOR + "）"
+                + "——不提取 jar、不协商端口，回落 attach/桥（零劣化）");
+            // T-AgentStatusOldJvm：粘性置位——状态行据此显示「已跳过注入」而不是「等待挂载」
+            // （本项目永远等不到挂载，气球通知错过后就只剩状态行这一个自解释面）。
+            targetJvmSkipDetected.set(true);
+            notifyTargetJvmUnsupported(targetJvmMaxMajor);
+            return null;
+        }
         File jar = extractPremainAgentJar();
         Integer port = jar != null ? openPremainChannel() : null;
-        PremainInjection.Decision decision = PremainInjection.decide(true, jar != null, port);
+        PremainInjection.Decision decision = PremainInjection.decide(true, jar != null, port, targetJvmMaxMajor);
         if (decision instanceof PremainInjection.Decision.Inject inject) {
             LOG.info("premain 注入：端口 " + inject.port() + " 已前置协商（agent 回连前不阻塞用户 Run）");
             // T-StackHoverUi：-javaagent 选项随带调用栈快照帧数预算（premain 场景无 attach 二次下发）
@@ -1010,6 +1047,36 @@ public final class AgentManager implements Disposable {
         String reason = ((PremainInjection.Decision.Skip) decision).reason();
         LOG.warn("premain 注入跳过：" + reason + "——回落 attach/桥（零劣化）");
         return null;
+    }
+
+    /**
+     * T-OldJvmPremainGuard 券01：目标 JDK 过老的一次性提示（同一 Java 版本只报一次）。
+     *
+     * <p>为什么必须提示：跳过注入后增强捕获在该应用上等于沉默失效，用户只会觉得「勾了没反应」；
+     * 而这条限制是产品面的（agent 需要 JDK 8+），必须让用户看到原因与可行替代（控制台日志仍可捕获）。
+     * 去重按判定值（同一目标 JDK 反复 Run 不刷屏），集合随本 project 级 service 生命周期走。
+     * 文案不报具体 JDK 版本：探测来自 rt.jar 兜底时给的是「自带类库编译目标」（实测 JDK 6 为 49），
+     * 拿它说「你的 JDK 是 1.5」会误导——只如实说「低于 8」。</p>
+     */
+    private void notifyTargetJvmUnsupported(Integer maxMajor) {
+        String key = maxMajor != null ? maxMajor.toString() : "unknown";
+        if (!targetJvmNotifiedVersions.add(key)) {
+            return;
+        }
+        ApplicationManager.getApplication().invokeLater(() -> {
+            // Kotlin: runCatching { … }.onFailure { LOG.warn(…) }
+            try {
+                com.intellij.notification.NotificationGroupManager.getInstance()
+                    .getNotificationGroup(AGENT_NOTIFICATION_GROUP_ID)
+                    .createNotification(
+                        cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("agent.targetJvm.title"),
+                        cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("agent.targetJvm.content"),
+                        com.intellij.notification.NotificationType.WARNING)
+                    .notify(project);
+            } catch (Throwable t) {
+                LOG.warn("目标 JDK 过老提示发送失败（零劣化）", t);
+            }
+        });
     }
 
     /**
@@ -1372,9 +1439,11 @@ public final class AgentManager implements Disposable {
             everAttached.set(true);
             // T-AgentHeartbeat T-05（独立复核补位）：与 attachToPid 对称——新会话挂上即清两类回落标记。
             // 此前只写 attachedPids 不清标记，premain 重连后状态行可能残留上一轮摘除的叙事；
-            // 当前无可见后果（agentStatusText 先判 livePids），但任何人重排分支就会露出来。
+            // T-AgentStatusOldJvm2：状态行重排后（本次跳过 > 上次会话结局）本清位已<b>必然可见</b>——
+            // 不清的话「先跑 JDK 8 挂上、再跑 JDK 7 被跳过」的场景里，重跑挂上的会话仍显示跳过叙事。
             heartbeatDropDetected.set(false);
             firstHeartbeatPending.set(false);
+            targetJvmSkipDetected.set(false);
             updateOnline();
             // T-PS5-04：premain 会话建立同 attach 链——巡检懒启 + 推断 URL 回写
             ensureMonitorStarted();
@@ -1534,6 +1603,15 @@ public final class AgentManager implements Disposable {
         // 控制台通道照常解析兜底，两通道不并存（agent 侧已丢，无重复条目）。
         boolean gateNow = online && captureConfirmedActive() && !userPaused;
         boolean gateWas = SqlCaptureGate.paused.getAndSet(gateNow);
+        // T-MultiModuleConsoleYield（2026-11-21）：与闸门同点同步「健康会话 pid 集」——控制台行级
+        // 让位归属的依据（行前缀 PID 字段 ∈ 集 → 让位；∉ 集 → 该行来自无 agent 模块，桥照常解析）。
+        // 与 paused 同点写：避免「闸门已封、pid 集陈旧」的窗口；clear + 重灌（规模=会话数，代价可忽略）。
+        SqlCaptureGate.liveSessionPids.clear();
+        for (AgentSession session : sessions) {
+            if (isSessionHealthy(session)) {
+                SqlCaptureGate.liveSessionPids.add(session.getPid());
+            }
+        }
         // T-CaptureCatchAll 券02：让位起点/回落沿同步给活性回落状态机（白名单漏驱动导致的双哑
         // 由它兜底）。放在闸门写入之后：状态机的「静默计时」必须与闸门实际生效时刻对齐。
         cn.song.mybatisplus.visualizer.log.CaptureActivityFallback.onGateChanged(gateNow);
@@ -1653,7 +1731,9 @@ public final class AgentManager implements Disposable {
             // 秒数取当前在线窗口值（测试注入短窗时文案跟着变，不硬编码 30）
             heartbeatWindowMs / 1000,
             // T-CaptureCatchAll 券02：活性回落解封态——设置页状态行如实披露「已回退控制台解析」
-            cn.song.mybatisplus.visualizer.log.CaptureActivityFallback.isActive()));
+            cn.song.mybatisplus.visualizer.log.CaptureActivityFallback.isActive(),
+            // T-AgentStatusOldJvm：曾因目标 JDK 过老被闸门跳过——状态行改说「已跳过注入」而非「等待挂载」
+            targetJvmSkipDetected.get()));
     }
 
     /** T-SettingsTruth P2：状态迁移点广播（attach 成功 / sweepOffline 摘除 / shutdownAll）。 */

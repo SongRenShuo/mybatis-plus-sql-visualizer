@@ -31,6 +31,7 @@ import cn.song.mybatisplus.visualizer.ui.gutter.StringSqlMethodGutterLineMarkerP
 import cn.song.mybatisplus.visualizer.ui.gutter.XmlInlineSqlGutterLineMarkerProvider;
 import cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProvider;
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext;
+import cn.song.mybatisplus.visualizer.ui.nav.MapperNavigationTargets;
 import cn.song.mybatisplus.visualizer.xml.XmlInlineSqlDetector;
 import com.intellij.openapi.actionSystem.ActionUpdateThread;
 import com.intellij.openapi.actionSystem.AnAction;
@@ -175,19 +176,38 @@ public final class ConvertToSqlAction extends AnAction {
         // T-M25-03：光标在 MyBatis SQL 注解内 → 注解预览
         PsiAnnotation annotation = PsiTreeUtil.getParentOfType(element, PsiAnnotation.class, false);
         if (annotation != null && AnnotationSqlPreviewService.INSTANCE.isSqlAnnotation(annotation)) {
-            SqlPreviewService.previewAsync(project,
-                    () -> AnnotationSqlPreviewService.INSTANCE.preview(annotation, project),
-                    (PreviewResult result) -> { SqlPreviewService.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
+            previewSqlAnnotation(project, annotation, sourceLocation);
             return;
         }
 
         // PSI 转换在后台线程执行（EDT 上慢操作会被 2025.3+ 禁止），回调在 EDT 渲染
+        // T-PreviewFallbackEdtSlowOps（2026-11-26 真机 SEVERE「Slow operations are prohibited on EDT」，
+        // 平台点名本动作）：Mapper XML 兜底的锚点解析走自定义 fileBasedIndex
+        // （`MapperNamespaceIndex` → `FileBasedIndex.getContainingFiles`），必须在 compute 块（BGT +
+        // ReadAction）里做；放到下面的 onResult 回调里就是在 EDT 上查索引。回调只消费这里的预解析结果。
+        java.util.concurrent.atomic.AtomicReference<List<XmlTag>> mapperXmlTags =
+                new java.util.concurrent.atomic.AtomicReference<>(Collections.emptyList());
         SqlPreviewService.previewAsync(project,
-                () -> service.preview(element),
+                () -> {
+                    PreviewResult result;
+                    try {
+                        result = service.preview(element);
+                    } catch (Throwable t) {
+                        // compute 抛错时回调仍会走兜底链（既有语义）——异常分支同样要备料，
+                        // 否则 XML 档会在"预览计算失败"这条路径上静默失效。
+                        mapperXmlTags.set(mapperXmlTagsFor(element));
+                        throw sneakyThrow(t);
+                    }
+                    // 只有 Wrapper 链未命中才需要兜底锚点：命中路径零额外索引查询。
+                    if (result == null) mapperXmlTags.set(mapperXmlTagsFor(element));
+                    return result;
+                },
                 (PreviewResult result) -> {
                     if (result != null) {
                         SqlPreviewService.showResult(project, result, sourceLocation);
-                    } else if (!tryIbatisCallFallback(project, element, sourceLocation)
+                    } else if (!tryMapperXmlMethodFallback(project, mapperXmlTags.get(), sourceLocation)
+                            && !tryMapperAnnotationMethodFallback(project, element, sourceLocation)
+                            && !tryIbatisCallFallback(project, element, sourceLocation)
                             && !tryIbatisMethodFallback(project, element, sourceLocation)
                             && !tryHqlFallback(service, project, element, sourceLocation)
                             && !tryNamedQueryFallback(service, project, element, sourceLocation)
@@ -197,6 +217,132 @@ public final class ConvertToSqlAction extends AnAction {
                         // 均未命中 → 回落文件级 SQL 注解候选
                         showAnnotationCandidates(project, file, editor, sourceLocation);
                     }
+                    return Unit.INSTANCE;
+                });
+    }
+
+    /** 受检异常透传（master 的 Kotlin `throw t` 在 Java 侧只能经泛型擦除等价实现）。 */
+    @SuppressWarnings("unchecked")
+    private static <E extends Throwable> RuntimeException sneakyThrow(Throwable t) throws E {
+        throw (E) t;
+    }
+
+    /**
+     * Mapper XML 兜底的锚点：光标处接口方法 → 同 namespace XML 里的同名语句（含 {@code databaseId} 变体）。
+     *
+     * <p><b>只许在后台线程的 ReadAction 内调用</b>：解析走自定义 fileBasedIndex
+     * （{@code MapperNamespaceIndex.getMapperXmlFiles} → {@code FileBasedIndex.getContainingFiles}），EDT 上调它
+     * 就是 {@code SlowOperations} 断言源（2026-11-26 真机 SEVERE，见
+     * {@code 20261126-1514-T-PreviewFallbackEdtSlowOps} 计划）。非 fatal 异常吞成空表——尤其
+     * {@code IndexNotReadyException} 不得冒泡到 {@code previewAsync}（它会把「预览无命中」变成 runWhenSmart
+     * 重试，改变语义）。</p>
+     *
+     * <p>{@code public} 供测试直调（无 UI 副作用）。</p>
+     */
+    public List<XmlTag> mapperXmlTagsFor(PsiElement element) {
+        try {
+            com.intellij.psi.PsiMethod method = MapperNavigationTargets.nearestMapperMethod(element);
+            return method != null
+                    ? MapperNavigationTargets.statementTagsFor(method)
+                    : Collections.emptyList();
+        } catch (Throwable t) {
+            if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) throw (Error) t;
+            return Collections.emptyList();
+        }
+    }
+
+    /**
+     * Mapper XML 绑定兜底（T-MapperMethodSqlPreview，2026-11-26）：光标在 Mapper <b>接口方法</b>上
+     * （方法名、参数、返回类型任意位置）→ 该方法在同 namespace XML 中的语句预览。
+     *
+     * <p>与方法行预览图标同源：定位走 {@link MapperNavigationTargets#statementTagsFor}（接口判定 + 同名语句，
+     * 含 {@code databaseId} 变体），渲染走 {@link XmlSqlGutterLineMarkerProvider#previewStatementTag}（与 XML
+     * 语句行点击、gutter 图标点击逐字节一致）。单条直接预览；多方言变体弹选择器；无 XML 语句
+     * 返回 false 继续回落（注解候选 / 通用未找到），不出错源提示。</p>
+     *
+     * <p>排在 fallback 链首位：iBatis / JDBC / HQL 等家族的判据都看方法体或调用形态，对无 body 的
+     * Mapper 接口方法本来就不命中，顺序不改变它们的行为；MyBatis XML 绑定语义最直接。</p>
+     *
+     * <p>{@code tags} 是 {@link #mapperXmlTagsFor} 在 {@code previewAsync} 的 compute 块里预解析的结果——
+     * 本函数只做分发（单条直预览 / 多变体弹选择器），不查索引（T-PreviewFallbackEdtSlowOps）。</p>
+     */
+    private boolean tryMapperXmlMethodFallback(Project project, List<XmlTag> tags, String sourceLocation) {
+        if (tags.isEmpty()) return false;
+        if (tags.size() == 1) {
+            previewXmlStatementTag(project, tags.get(0), sourceLocation);
+            return true;
+        }
+        List<SqlSelectionDialog.Row> rows = new ArrayList<>(tags.size());
+        for (XmlTag tag : tags) {
+            String databaseId = tag.getAttributeValue("databaseId");
+            int line = 0;
+            if (tag.getContainingFile() != null && tag.getContainingFile().getViewProvider() != null
+                    && tag.getContainingFile().getViewProvider().getDocument() != null) {
+                line = tag.getContainingFile().getViewProvider().getDocument()
+                        .getLineNumber(tag.getTextRange().getStartOffset()) + 1;
+            }
+            StringBuilder label = new StringBuilder();
+            label.append(tag.getName());
+            if (databaseId != null && !databaseId.isBlank()) {
+                label.append(" [").append(databaseId).append(']');
+            }
+            label.append("（XML 第 ").append(line).append(" 行）");
+            rows.add(SqlSelectionDialog.Row.of(label.toString(), tag.getText()));
+        }
+        new SqlSelectionDialog<>(project, tags, rows, (XmlTag selected) ->
+                previewXmlStatementTag(project, selected, sourceLocation)).show();
+        return true;
+    }
+
+    /** 渲染一条 Mapper XML 语句（复用 XML 语句行 / 方法行预览图标同一条预览链）。 */
+    private void previewXmlStatementTag(Project project, XmlTag tag, String sourceLocation) {
+        XmlSqlGutterLineMarkerProvider.previewStatementTag(project, sourceLocation, () ->
+                tag.getContainingFile() instanceof XmlFile
+                        ? new kotlin.Pair<>((XmlFile) tag.getContainingFile(), tag) : null);
+    }
+
+    /**
+     * Mapper 注解绑定兜底（T-MapperPreviewDedupAndAnnotationShortcut，2026-11-26 用户报障）：
+     * 光标停在带 SQL 注解的方法声明处（方法名 / 参数 / 返回类型 / 方法 JavaDoc）→ 直接预览
+     * <b>该方法自己的</b>注解 SQL。
+     *
+     * <p>此前只有「光标落在 {@code PsiAnnotation} 内」才直预览；停在方法行（注解在上一行）会一路回落到
+     * 文件级候选列表 {@code showAnnotationCandidates}，用户被迫从全文件注解里挑一条。判据纯 PSI：
+     * {@code PsiMethod.modifierList.annotations} 里首个 {@code isSqlAnnotation} 命中的注解；光标在方法外
+     * （类体空白 / import / 字段）仍返回 false，保留列表兜底语义。</p>
+     */
+    private boolean tryMapperAnnotationMethodFallback(Project project, PsiElement element, String sourceLocation) {
+        PsiAnnotation annotation = sqlAnnotationForMethod(element);
+        if (annotation == null) return false;
+        previewSqlAnnotation(project, annotation, sourceLocation);
+        return true;
+    }
+
+    /**
+     * 光标所在方法上的首个 SQL 注解（无方法 / 无注解返回 null）。
+     * {@code public} 供测试直调（不含任何 UI 副作用）；判定与快捷键回落共用同一份。
+     */
+    public PsiAnnotation sqlAnnotationForMethod(PsiElement element) {
+        PsiMethod method = PsiTreeUtil.getParentOfType(element, PsiMethod.class, false);
+        if (method == null) return null;
+        for (PsiAnnotation candidate : method.getModifierList().getAnnotations()) {
+            if (AnnotationSqlPreviewService.INSTANCE.isSqlAnnotation(candidate)) return candidate;
+        }
+        return null;
+    }
+
+    /** SQL 注解预览（注解内光标与方法声明处两处共用，渲染链一份）。 */
+    private void previewSqlAnnotation(Project project, PsiAnnotation annotation, String sourceLocation) {
+        java.util.concurrent.atomic.AtomicReference<cn.song.mybatisplus.visualizer.context.PreviewSourceContext> contextRef =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        SqlPreviewService.previewAsync(project,
+                () -> {
+                    var context = AnnotationSqlPreviewService.INSTANCE.resolveSourceContext(annotation, project);
+                    contextRef.set(context);
+                    return AnnotationSqlPreviewService.INSTANCE.preview(annotation, project, context);
+                },
+                (PreviewResult result) -> {
+                    SqlPreviewService.showResult(project, result, sourceLocation, contextRef.get(), false);
                     return Unit.INSTANCE;
                 });
     }

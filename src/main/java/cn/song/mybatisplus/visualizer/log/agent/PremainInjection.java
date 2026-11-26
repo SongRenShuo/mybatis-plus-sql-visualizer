@@ -4,13 +4,16 @@ package cn.song.mybatisplus.visualizer.log.agent;
 /**
  * T-M56Phase2-Premain：premain 注入决策与 VM 选项拼装（纯函数，无平台依赖）。
  *
- * 拆出来的理由有两条：一是注入链要过四道闸门（增强开关 / 注入确认 / agent jar 可用 / 端口协商），
- * 组合面靠真机跑不现实，抽成纯函数后表驱动一次覆盖；二是注入发生在<b>用户运行配置的准备期</b>，
- * 任何一步失败都不能影响用户 Run——判定与副作用分离，调用方（{@link AgentManager}）只在
+ * 拆出来的理由有两条：一是注入链要过四道闸门（增强开关 / 目标 JVM 类版本 / agent jar 可用 /
+ * 端口协商），组合面靠真机跑不现实，抽成纯函数后表驱动一次覆盖；二是注入发生在<b>用户运行配置的
+ * 准备期</b>，任何一步失败都不能影响用户 Run——判定与副作用分离，调用方（{@link AgentManager}）只在
  * {@link Decision.Inject} 时落盘/协商，其余分支只留日志。
  *
- * 闸门顺序即求值顺序（{@link #decide} 的分支序）：前两道为假时调用方<b>不得</b>触发 jar 提取与
- * 端口协商（后者会开 ServerSocket），{@code agentJarAvailable} / {@code port} 传占位值即可。
+ * 闸门顺序即求值顺序（{@link #decide} 的分支序）：开关为假或目标 JVM 太老时，调用方<b>不得</b>触发
+ * jar 提取与端口协商（后者会开 ServerSocket），{@code agentJarAvailable} / {@code port} 传占位值即可。
+ *
+ * <p>T-OldJvmPremainGuard（2026-11-20）：新增目标 JVM 类版本闸——JDK 6/7 上 {@code -javaagent}
+ * 载不动 major 52 的入口类，JVM 会在 premain 阶段直接终止（不是采集失败，是宿主起不来）。</p>
  */
 public final class PremainInjection {
 
@@ -25,6 +28,18 @@ public final class PremainInjection {
 
     /** 端口前置协商失败（loopback 绑定失败或挂起通道已达上限）。 */
     public static final String REASON_NO_PORT = "port-negotiation-failed";
+
+    /**
+     * T-OldJvmPremainGuard 券01：目标 JVM 的类版本上限低于 agent 产物（跳过注入）。
+     *
+     * <p>agent 按 Java 8 编译（major 52）；JDK 6/7 的上限是 50/51。入口类加载不了时 {@code -javaagent}
+     * 处理失败会让<b>目标 JVM 启动即终止</b>（用户现场：JDK 1.6 项目开增强捕获后起不来），
+     * 故这是注入侧必须拦住的一条——它不是「少采集」，是「别杀宿主」。</p>
+     */
+    public static final String REASON_TARGET_JVM_TOO_OLD = "target-jvm-too-old";
+
+    /** agent 产物（{@code AgentMain} 及其依赖）的类文件 major：Java 8。升级 agent 编译目标时同步。 */
+    public static final int MIN_TARGET_CLASS_MAJOR = 52;
 
     /** 注入判定结果（Kotlin 嵌套形态：Inject/Skip 为 Decision 的嵌套类型，调用点 `Decision.Skip` 双形态对齐）。 */
     public sealed interface Decision {
@@ -45,15 +60,30 @@ public final class PremainInjection {
     }
 
     /**
-     * 三闸门判定（纯函数）。{@code port} 为 null/非正即视为协商失败——端口 0 在 agent 侧
-     * {@code AgentArgs.parse} 后会被 {@code AgentMain.install} 判为「无端口可上报」直接放弃挂载
-     * （AgentMain.java:45-48），故这里同样拒绝。
+     * 目标 JVM 是否认得 agent 字节码（纯判定）。{@code maxMajor} 为 null = 探测不出（未知）→ 放行：
+     * 未知时宁可注入（结构性保护由 agent 侧引导类承担，见 T-OldJvmPremainGuard 券02），
+     * 也不因为探测能力不足把能力整体关掉。
+     */
+    public static boolean targetJvmSupported(Integer maxMajor) {
+        return maxMajor == null || maxMajor >= MIN_TARGET_CLASS_MAJOR;
+    }
+
+    /**
+     * 闸门判定（纯函数）。闸门顺序即求值顺序：开关 → 目标 JVM 版本 → jar 可用 → 端口。
+     * {@code port} 为 null/非正即视为协商失败——端口 0 在 agent 侧 {@code AgentArgs.parse} 后会被
+     * {@code AgentMain.install} 判为「无端口可上报」直接放弃挂载（AgentMain.java:45-48），故这里同样拒绝。
      *
      * <p>T-EnhancedCaptureDefaultOn（2026-10-19）：注入确认闸门已移除——开关打开即注入。</p>
+     *
+     * <p>T-OldJvmPremainGuard：版本闸放在 jar/端口之前——老 JVM 上既不落盘 jar 也不开 ServerSocket。</p>
      */
-    public static Decision decide(boolean enhancedEnabled, boolean agentJarAvailable, Integer port) {
+    public static Decision decide(boolean enhancedEnabled, boolean agentJarAvailable, Integer port,
+                                  Integer targetJvmMaxMajor) {
         if (!enhancedEnabled) {
             return new Decision.Skip(REASON_DISABLED);
+        }
+        if (!targetJvmSupported(targetJvmMaxMajor)) {
+            return new Decision.Skip(REASON_TARGET_JVM_TOO_OLD);
         }
         if (!agentJarAvailable) {
             return new Decision.Skip(REASON_NO_JAR);
@@ -64,9 +94,14 @@ public final class PremainInjection {
         return new Decision.Inject(port);
     }
 
-    /** 三闸门判定（agentJarAvailable/port 均缺省，Kotlin 默认参数的便捷重载）。 */
+    /** 闸门判定（targetJvmMaxMajor 缺省 = 未知放行，Kotlin 默认参数的便捷重载）。 */
+    public static Decision decide(boolean enhancedEnabled, boolean agentJarAvailable, Integer port) {
+        return decide(enhancedEnabled, agentJarAvailable, port, null);
+    }
+
+    /** 闸门判定（agentJarAvailable/port 均缺省，Kotlin 默认参数的便捷重载）。 */
     public static Decision decide(boolean enhancedEnabled) {
-        return decide(enhancedEnabled, true, null);
+        return decide(enhancedEnabled, true, null, null);
     }
 
     /**

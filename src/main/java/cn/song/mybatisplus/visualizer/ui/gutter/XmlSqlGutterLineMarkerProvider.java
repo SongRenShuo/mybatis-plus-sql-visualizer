@@ -21,6 +21,7 @@ import com.intellij.psi.xml.XmlTokenType;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import kotlin.Unit;
+import kotlin.jvm.functions.Function0;
 
 import java.awt.event.MouseEvent;
 import javax.swing.Icon;
@@ -92,43 +93,11 @@ public class XmlSqlGutterLineMarkerProvider implements LineMarkerProvider {
 
         @Override
         public void navigate(MouseEvent e, PsiElement elt) {
-            Project project = elt.getProject();
             XmlTag tag = elt.getParent() instanceof XmlTag ? (XmlTag) elt.getParent() : null;
             if (tag == null) return;
             XmlFile file = tag.getContainingFile() instanceof XmlFile ? (XmlFile) tag.getContainingFile() : null;
             if (file == null) return;
-            SqlPreviewService.previewAsync(project, () -> {
-                long t0 = System.currentTimeMillis();
-                // T-M25.2：传 project 解析 @class@field 静态常量（用户项目常量类字段值）
-                // T-M27.3/4：注入实体上下文（namespace → Mapper 接口 → 主实体 + @TableName 联表候选）——
-                // 预览弹窗补全表/列来源；候选表名全位置提示（主表去重）
-                long t1 = System.currentTimeMillis();
-                // T-StartupReadLockFreeze §十八（2026-11-13 14:48 真机）：索引期**不做**实体/表上下文解析。
-                // 它依赖索引，冷启动时会跟着 JavaBuilder/索引一起等——实测「点击 → compute 开始」11s，
-                // 其中 8s 是 IDE 在建索引/编译，而我们这段闭包就排在哪里等读锁；
-                // 实体上下文只影响补全提示（表/列来源），缺席不影响 SQL 预览本身。
-                boolean dumb;
-                try {
-                    dumb = com.intellij.openapi.project.DumbService.isDumb(project);
-                } catch (Throwable t) {
-                    dumb = false;
-                }
-                // §二十：预览打开不解析联表候选（实测 2~3s、最终只得 1 个候选），候选留给补全触发时再算
-                var src = dumb ? null
-                        : XmlSqlCompletionContextResolver.INSTANCE.resolveXml(project, tag, false);
-                long t2 = System.currentTimeMillis();
-                com.intellij.openapi.diagnostic.Logger.getInstance(XmlSqlGutterLineMarkerProvider.class).info(
-                        "[open-perf] pre-assembly: sourceCtx=" + (t1 - t0) + "ms completion=" + (t2 - t1)
-                                + "ms dumb=" + dumb
-                                + (dumb ? "（索引未就绪，已跳过实体上下文）" : ""));
-                SqlCompletionContext entity = null;
-                var main = src != null ? src.getMain() : null;
-                if (main != null) {
-                    entity = new SqlCompletionContext(main.tableName, main.columns, main.tableAlias,
-                            main.columnComments, main.tableComment, src.getCandidates());
-                }
-                return XmlPreviewService.INSTANCE.preview(file.getText(), tag.getAttributeValue("id"), project, entity);
-            }, result -> { SqlPreviewService.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
+            previewStatementTag(elt.getProject(), null, () -> new kotlin.Pair<>(file, tag));
         }
     }
 
@@ -137,6 +106,62 @@ public class XmlSqlGutterLineMarkerProvider implements LineMarkerProvider {
 
     private static final com.intellij.openapi.diagnostic.Logger LOG =
             com.intellij.openapi.diagnostic.Logger.getInstance(XmlSqlGutterLineMarkerProvider.class);
+
+    /**
+     * 语句标签的预览入口（T-MapperMethodSqlPreview）：XML 语句行与 Mapper 接口方法行共用，
+     * 保证两处点击的装配与渲染逐字节一致（动态 SQL、参数表、<code>&lt;include&gt;</code>、
+     * <code>${}</code> 注入都在同一条链上）。
+     *
+     * <p>{@code resolve} 在 {@link SqlPreviewService#previewAsync} 的 ReadAction 内执行——两处调用方
+     * 锚点形态不同（XML 侧叶子直接给 tag；Java 侧方法名要先解析出同名语句），把解析放在后台，
+     * EDT 上不做 PSI 慢操作。解析不到返回 null，按「未找到」轻提示（不制造点了必空的入口）。</p>
+     */
+    public static void previewStatementTag(
+            @NotNull Project project,
+            @Nullable String sourceLocation,
+            @NotNull Function0<kotlin.Pair<XmlFile, XmlTag>> resolve) {
+        java.util.concurrent.atomic.AtomicReference<cn.song.mybatisplus.visualizer.context.PreviewSourceContext> contextRef =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        SqlPreviewService.previewAsync(project, () -> {
+            kotlin.Pair<XmlFile, XmlTag> resolved = resolve.invoke();
+            if (resolved == null) return null;
+            XmlFile file = resolved.getFirst();
+            XmlTag tag = resolved.getSecond();
+            long t0 = System.currentTimeMillis();
+            var context = XmlPreviewService.INSTANCE.resolveSourceContext(file, tag, null);
+            contextRef.set(context);
+            long t1 = System.currentTimeMillis();
+            // T-StartupReadLockFreeze §十八（2026-11-13 14:48 真机）：索引期**不做**实体/表上下文解析。
+            // 它依赖索引，冷启动时会跟着 JavaBuilder/索引一起等——实测「点击 → compute 开始」11s，
+            // 其中 8s 是 IDE 在建索引/编译，而我们这段闭包就排在哪里等读锁；
+            // 实体上下文只影响补全提示（表/列来源），缺席不影响 SQL 预览本身。
+            boolean dumb;
+            try {
+                dumb = com.intellij.openapi.project.DumbService.isDumb(project);
+            } catch (Throwable t) {
+                dumb = false;
+            }
+            // §二十：预览打开不解析联表候选（实测 2~3s、最终只得 1 个候选），候选留给补全触发时再算
+            var src = dumb ? null
+                    : XmlSqlCompletionContextResolver.INSTANCE.resolveXml(project, tag, false);
+            long t2 = System.currentTimeMillis();
+            LOG.info(
+                    "[open-perf] pre-assembly: sourceCtx=" + (t1 - t0) + "ms completion=" + (t2 - t1)
+                            + "ms dumb=" + dumb
+                            + (dumb ? "（索引未就绪，已跳过实体上下文）" : ""));
+            SqlCompletionContext entity = null;
+            var main = src != null ? src.getMain() : null;
+            if (main != null) {
+                entity = new SqlCompletionContext(main.tableName, main.columns, main.tableAlias,
+                        main.columnComments, main.tableComment, src.getCandidates());
+            }
+            return XmlPreviewService.INSTANCE.preview(file.getText(), tag.getAttributeValue("id"), project, entity, context);
+        }, result -> {
+            // master 默认参展开：sourceLocation + sourceContext（autoParseOnPaste=false）
+            SqlPreviewService.showResult(project, result, sourceLocation, contextRef.get(), false);
+            return kotlin.Unit.INSTANCE;
+        });
+    }
 
     /**
      * F2（T-GutterFirstOpenDelay）：三条预热链的统一踢出点，{@link GutterWarmScheduler} 到点

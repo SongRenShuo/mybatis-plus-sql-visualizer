@@ -452,6 +452,16 @@ public class AgentSession {
                 if (AgentEventAdapter.receivedEvents() == 1L) {
                     LOG.info("增强通道首条事件已到达并进入消费链（pid=" + pid + "）——若面板仍零产出，查消费链（去重窗口/屏蔽/过滤），不再疑 agent 侧");
                 }
+                // T-DriverInternalSqlFilter（2026-11-21，由 AgentSessionSupport.kt 增量并入）：驱动内部语句
+                // （连接初始化族，如 Connector/J 5.1 建连接时自钉版本注释的 @@session 系统变量查询）不是业务
+                // SQL，不入列表。放在「收到即计数」之后——「已收事件 N」口径含被过滤者，面板空时的分流逻辑
+                // 不变；静默丢弃 + 计数不刷日志（预期常态，控制台安静口径）。只作用 agent 通道入队点：
+                // MCP 审计与历史回读不经这里（同入队闸门边界）。
+                // 【反向验证实验摘除点】补丁摘掉本分支 → 端到端过滤用例必红。
+                if (DriverInternalSql.isInternal(event.sql())) {
+                    DriverInternalSql.markDropped();
+                    return;
+                }
                 // R53：用户暂停闸门（在收到计数**之后**——暂停中「已收事件 N」照常增长，
                 // 状态栏据此显示「暂停中且通道活着」而非「通道断了」）。只丢入列表，
                 // 连接/心跳/CONFIG ACK 链一概不动（暂停≠关闭，V80② 自洽）。

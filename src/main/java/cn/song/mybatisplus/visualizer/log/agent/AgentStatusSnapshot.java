@@ -1,3 +1,6 @@
+// T-SyncK2JMaster181 车道C 增量：master src/main/kotlin/…/log/agent/AgentSessionSupport.kt 的
+// T-AgentStatusOldJvm 字段并入本件（k2j 无 AgentSessionSupport.java 同名承载件——master 的
+// AgentStatusSnapshot 已在 k2j 独立成件，增量落此处为最小且唯一有语义的位置）。
 // T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt 移植（AgentStatusSnapshot 顶层 data class）
 package cn.song.mybatisplus.visualizer.log.agent;
 
@@ -30,29 +33,44 @@ public record AgentStatusSnapshot(
      * T-CaptureCatchAll 券02：控制台桥活性回落已解封——agent 在线但长期零事件、控制台仍有 SQL 行，
      * 桥已恢复解析。状态行必须如实披露（用户看到「已挂载」却零条目时，这句是唯一解释）。
      */
-    boolean activityFallbackActive
+    boolean activityFallbackActive,
+    /**
+     * T-AgentStatusOldJvm（2026-11-21）：本会话曾因目标 JVM 类版本低于 agent 产物（major 52，
+     * 即 JDK 低于 8）被注入闸门拦下。这类项目永远等不到挂载，若照旧落进「等待挂载」态，
+     * 用户读作「勾着、在等、像坏了」——必须如实改说「已跳过注入（回落控制台捕获）」。
+     * 粘性置位（本会话曾命中即真）；真实挂载后由更高优先级分支覆盖叙事。
+     */
+    boolean targetJvmUnsupported
 ) {
     /** 便捷构造器：heartbeatExpired 缺省 false（Kotlin 默认参数）。 */
     public AgentStatusSnapshot(boolean enabled, List<Long> livePids, boolean everAttached) {
-        this(enabled, livePids, everAttached, false, false, AgentProtocol.ONLINE_WINDOW_MS / 1000, false);
+        this(enabled, livePids, everAttached, false, false, AgentProtocol.ONLINE_WINDOW_MS / 1000, false, false);
     }
 
     /** 便捷构造器：firstHeartbeatPending / heartbeatWindowSeconds 缺省（Kotlin 默认参数）。 */
     public AgentStatusSnapshot(boolean enabled, List<Long> livePids, boolean everAttached, boolean heartbeatExpired) {
-        this(enabled, livePids, everAttached, heartbeatExpired, false, AgentProtocol.ONLINE_WINDOW_MS / 1000, false);
+        this(enabled, livePids, everAttached, heartbeatExpired, false, AgentProtocol.ONLINE_WINDOW_MS / 1000, false, false);
     }
 
     /** 便捷构造器：heartbeatWindowSeconds 缺省（Kotlin 默认参数）。 */
     public AgentStatusSnapshot(boolean enabled, List<Long> livePids, boolean everAttached, boolean heartbeatExpired,
                                boolean firstHeartbeatPending) {
         this(enabled, livePids, everAttached, heartbeatExpired, firstHeartbeatPending,
-            AgentProtocol.ONLINE_WINDOW_MS / 1000, false);
+            AgentProtocol.ONLINE_WINDOW_MS / 1000, false, false);
     }
 
     /** 便捷构造器：activityFallbackActive 缺省（Kotlin 默认参数）。 */
     public AgentStatusSnapshot(boolean enabled, List<Long> livePids, boolean everAttached, boolean heartbeatExpired,
                                boolean firstHeartbeatPending, long heartbeatWindowSeconds) {
         this(enabled, livePids, everAttached, heartbeatExpired, firstHeartbeatPending,
-            heartbeatWindowSeconds, false);
+            heartbeatWindowSeconds, false, false);
+    }
+
+    /** 便捷构造器：targetJvmUnsupported 缺省（Kotlin 默认参数）。 */
+    public AgentStatusSnapshot(boolean enabled, List<Long> livePids, boolean everAttached, boolean heartbeatExpired,
+                               boolean firstHeartbeatPending, long heartbeatWindowSeconds,
+                               boolean activityFallbackActive) {
+        this(enabled, livePids, everAttached, heartbeatExpired, firstHeartbeatPending,
+            heartbeatWindowSeconds, activityFallbackActive, false);
     }
 }
