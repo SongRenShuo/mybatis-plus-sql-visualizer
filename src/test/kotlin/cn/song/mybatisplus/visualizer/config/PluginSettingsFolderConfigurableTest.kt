@@ -289,6 +289,26 @@ class PluginSettingsFolderConfigurableTest : BasePlatformTestCase() {
         }
     }
 
+    /**
+     * T-SqlLogSettingsJumpAnchor：切页后复位到页顶。
+     *
+     * 平台 `ConfigurableCardPanel` 按 configurable 缓存页面组件并外包 JScrollPane，滚动位置会残留
+     * 到下一次打开（齿轮入口 hint=null 只切页不做定位 → 落在页中间）。这里直接钉住复位操作本身：
+     * 先造一个滚到中部的滚动容器，再调 `scrollToTop`，视口必须回到顶部。
+     */
+    fun testScrollToTopResetsCachedPageScroll() {
+        val content = javax.swing.JPanel()
+        content.size = java.awt.Dimension(320, 2000)
+        val scroll = com.intellij.ui.components.JBScrollPane(content)
+        scroll.viewport.setExtentSize(java.awt.Dimension(320, 200))
+        scroll.viewport.viewPosition = java.awt.Point(0, 120)
+        assertEquals("前置：视口应停在中部", 120, scroll.viewport.viewPosition.y)
+
+        PluginSettingsFolderConfigurable().scrollToTop(content)
+
+        assertEquals("切页后应复位到页顶", 0, scroll.viewport.viewPosition.y)
+    }
+
     private fun epClassName(wrapper: ConfigurableWrapper): String {
         val ep = wrapper.extensionPoint
         return ep.instanceClass ?: ep.implementationClass ?: ep.providerClass ?: "?"
