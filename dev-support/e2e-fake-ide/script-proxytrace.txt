@@ -1,0 +1,21 @@
+# 假 IDE 探针脚本：验收册 B6 代理帧反解复现（demo /mpj/proxy/trace/jdk 与 /cglib，插件 D217）
+#
+# 判据（在 probe.log 的 EVENT JSON 里核对 stackDigest 字段）：
+#   jdk  端点 EVENT.stackDigest 含 cn.song.mpjdemo.service.ProxyTraceService（业务接口反解），
+#        不含裸 com.sun.proxy.$ProxyN#queryUser（该帧名只剩 mapper 代理等不可反解帧）；
+#   cglib 端点 EVENT.stackDigest 含 cn.song.mpjdemo.service.ProxyTraceHeavyService 且
+#        不含 $$SpringCGLIB$$（剥后缀后只剩基类 FQCN）。
+# 反解在 agent 侧 StackDigest 构建时完成（ProxyFrameDecoder.decodeForDisplay），
+# 所以收到的事件里直接就是反解后的帧名——本脚本只负责触发采集，不做断言（断言人工核对）。
+
+mark 0 握手
+wait-hello 90000
+wait-http http://localhost:8082/mpj/device/one/1 120000
+mark jdk 代理端点（栈含业务 $ProxyN 与 mapper $ProxyN 两类帧）
+get http://localhost:8082/mpj/proxy/trace/jdk
+mark cglib 代理端点（栈含 $$SpringCGLIB$$ 增强类帧）
+get http://localhost:8082/mpj/proxy/trace/cglib
+mark 等 agent 异步 flush（载荷留 6s 窗口）
+sleep 8000
+summary
+quit
