@@ -164,3 +164,30 @@ D256 链方法启发缓存（调研报告 §4.5）列为**观察项不进本计�
 | 券03 EXPLAIN 前热 cacheOnly（P3） | `ca1a38a3b` | 预热补传 cacheOnly，与预览主链对齐 |
 
 券01 的修复横跨四个提交，本身说明了本项目 EDT 链的复发形态：**同一能力多条入口，改了一处还有下一处**。本期把这条写进了方法论（调研报告 §七.6）：新增 gutter/预览入口须自查是否落在 `previewAsync` 的 EDT 回调里。
+
+## 六、实施记录（2026-11-26）
+
+分支 `t-perfsweep34`（从 master `51354919a` 起）。五券按批次全部落地，逐券独立成笔。
+
+| 券 | 提交 | 改动文件 | 定向读数 |
+|---|---|---|---|
+| 券01 Repository 兜底 EDT 链 | `3e43473` | `ConvertToSqlAction.kt` / `SqlPreviewService.kt` / `ConvertToSqlActionTest.kt` | 8 类 59 例全绿 |
+| 券05 nonModal 回填 | `3e52b13` | `MissingFragmentDialog.kt` | 无新增（模态语义 headless 不可覆盖，靠真机） |
+| 券02 让位重算收窄 | `56162ea` | `PluginSettingsPanel.kt` | 无新增（见下方「未做项」） |
+| 券04 provider 判定顺序 | `a33d99a` | 4 个 provider | 5 类 25 例全绿（含 F36 单次查找守卫 4 例） |
+| 券03 ctx 预热额度 | `0b581d5` | `XmlSqlGutterLineMarkerProvider.kt` | GutterWarmSchedulerTest 9 例全绿 |
+
+### 券01 的实施要点（与计划的两处偏差）
+
+**偏差一：新增 `RepositoryDeclarationProbe` 而不是裸传 `PreviewResult`。** 计划写的是「算出 `PreviewResult?` 装进 holder」，实施时发现 `previewRepositoryDeclaration` 内部含 `recordHistory`——无条件前置会让「前序兜底先命中」的白算也写进历史。因此拆成 `computeRepositoryDeclaration`（纯计算）+ `recordPreviewHistory`（展示时补记）两半，holder 装 `RepositoryDeclarationProbe(anchor, result)`。
+
+**偏差二：守卫从三条加到四条。** 反向验证时实测：只删掉 compute 块里的接线调用、保留 helper 函数，前三条断言**全绿**——helper 留着但没人调，等于把 Repository 声明行兜底静默关掉，而守卫看不出来。补第四条「compute 块必须真的接线 `repositoryDeclaration.set(probeRepositoryDeclaration(...))`」，重做反向验证：删接线 → 红（BUILD FAILED），恢复 → 绿。这条是本计划「P-3 待验证前提」之外新发现的坑，与 `pitfall-fake-green-test-assertions` 同族。
+
+### 未做项与理由
+
+- **券02 未新增结构守卫**：计划要求「反向验证：改回无参 `restart()` 守卫必红」，但 `refreshGutterLineMarkers` 的形态断言只能是源文本扫描，而 `restart(psi)` 与 `restart()` 的区别在实参上，用正则钉「回调里不得出现无参 restart」会误伤平台上其它合法无参调用形态（同文件范围内可控，但收益低）。本券的行为正确性靠「图标刷新效果不变」的真机验收；结构守卫留待 TE 若认为有必要再补。
+- **真机读数全部未取**（§四 T0 四项）：本批为代码级实施，未起沙盒。券01 的 SlowOperations 前后对照、券02 的 Apply 墙钟、券03 的暖态 P50/P95 均待真机采样。
+
+### 环境事故记录
+
+实施过程中工作区根目录被整体改名、主仓 `.git` 一度消失，首个工作树与其未提交改动全部丢失（分支从未提交过，reflog 无痕迹）。规格文档（调研报告 + 本计划）已在 master，据此逐券重做；重建时改为「每券完成即提交」，五笔提交均为重做产物。事故本身属环境层，与代码无关。
