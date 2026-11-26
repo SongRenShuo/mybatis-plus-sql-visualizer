@@ -8,8 +8,8 @@
 - **Mapper 接口方法行补上预览快捷键（T-MapperMethodSqlPreview，`3d6bb9b57`）**：光标停在 Mapper 接口方法名/参数/返回类型上按 `Alt+Shift+Q`（右键菜单同一入口）即可直接预览该方法绑定的 XML 语句——此前只能点行号旁的预览图标，快捷键会落到「未找到可转换的 Wrapper」。走与图标点击、XML 语句行点击同一条渲染链（参数表、`<include>`、`${}` 注入一致）；同名多方言（`databaseId`）变体弹选择器；没有 XML 语句的方法（含 MP 内置 CRUD）仍回落原有链，不出错源提示。
 
 ### Fixed
-- **Mapper 接口方法的 Wrapper 参数不再多出一枚预览图标（T-MapperPreviewDedupAndAnnotationShortcut）**：`List<Order> selectByXxx(@Param("ew") Wrapper<Order> ew)` 这种签名里，参数名上曾经也出 Wrapper 预览图标，与方法行的 SQL 预览图标同款同行，看着像「图标重复」。参数在无方法体的接口/抽象方法里只是 `${ew.customSqlSegment}` 占位符、不是可预览的链起点，现在不标；实现类与接口 `default` 方法（有 body）的参数照旧。
-- **注解 SQL 的快捷键按方法定位，不再弹全文件列表（T-MapperPreviewDedupAndAnnotationShortcut）**：光标停在 `int createDemoTable();` 这类方法声明行（注解在上一行）时按 `Alt+Shift+Q`，此前会列出整个文件的注解 SQL 让人挑；现在直接预览该方法自己的 `@Select`/`@Update` 等注解 SQL。光标在类体空白处时仍保留文件级列表兜底。
+- **Mapper 接口方法的 Wrapper 参数不再多出一枚预览图标（T-MapperPreviewDedupAndAnnotationShortcut，`0263bf788`）**：`List<Order> selectByXxx(@Param("ew") Wrapper<Order> ew)` 这种签名里，参数名上曾经也出 Wrapper 预览图标，与方法行的 SQL 预览图标同款同行，看着像「图标重复」。参数在无方法体的接口/抽象方法里只是 `${ew.customSqlSegment}` 占位符、不是可预览的链起点，现在不标；实现类与接口 `default` 方法（有 body）的参数照旧。
+- **注解 SQL 的快捷键按方法定位，不再弹全文件列表（T-MapperPreviewDedupAndAnnotationShortcut，`0263bf788`）**：光标停在 `int createDemoTable();` 这类方法声明行（注解在上一行）时按 `Alt+Shift+Q`，此前会列出整个文件的注解 SQL 让人挑；现在直接预览该方法自己的 `@Select`/`@Update` 等注解 SQL。光标在类体空白处时仍保留文件级列表兜底。
 
 ## [2026.11.26-beta.2] - 2026-11-26
 
