@@ -1429,6 +1429,26 @@ runIde——每次重试都再删一遍，把目录删得更残，原本 `unzip 
 
 **Seen 1× (2026-11-26)**
 
+### L111 数平台注册项必须解析 XML，`grep -c` 数的是行数且会漏「一文件多类」
+
+**规则**：统计 `plugin.xml` 的 EP 注册条数时，一律用 XML 解析（Python `ElementTree` 或等价手段）按元素计数；**禁用 `grep -c "<tag"`**（一个注册体跨行就少算，注释与容器开标签会多算），也不要用 `implementation="` 的出现次数代替（属性名与元素名不一致，如 `lineMarkerProvider` 元素用的是 `implementationClass`）。反向同理：数源码里的 provider/converter 类数要看**类声明**（`^class X : ...Provider`），不能用文件数——允许一文件多类。现成命令（本仓根目录跑）：
+
+```bash
+python -I -c "
+import re, xml.etree.ElementTree as ET
+from collections import Counter
+raw=open('src/main/resources/META-INF/plugin.xml',encoding='utf-8').read()
+root=ET.fromstring(re.sub(r'<!DOCTYPE[^>]*>','',raw,flags=re.S))
+print(Counter(e.tag.split('}')[-1] for e in root.iter()))
+"
+# 注意 EP 标签带命名空间前缀：真正要读的键是 codeInsight.lineMarkerProvider（=20），
+# 不是 lineMarkerProvider。fileBasedIndex=3、registryKey=13 同表可查。
+```
+
+**证据**：2026-11-26 对齐 `docs/架构设计/01-项目架构总览.md` 时查出三处过期计数，全部同源：①gutter provider 文档写「19 个类」，`ElementTree` 实数 `codeInsight.lineMarkerProvider` = 20（JAVA 13 + XML 7），而入错门的读数是 `grep -c "codeInsight.lineMarkerProvider" plugin.xml` = **22**——多出的 2 条是**注释行**（`plugin.xml:304` 守卫说明、`:749` 区域约定），注释里提到标签名同样命中；另一个看似合理的替代 `grep -c 'implementation="'` = 24 更离谱，因为该元素实际用的属性名是 `implementationClass`，`implementation="` 命中的是别的 EP。差异的真实来源是 T-MapperMethodSqlPreview 新增的 `MapperMethodPreviewLineMarkerProvider` 没人回填；②`fileBasedIndex` 写 ×2 实为 3（多 `xml/ibatis/SqlMapConfigAliasIndex`）；③`registryKey` 写 ×6 实为 13。另发现 `ui/gutter` 是 **20 类分装 19 文件**——`MapperNavigationLineMarkerProviders.kt` 一个文件里装 XML↔Java 一对，所以按文件数推算永远比类数少 1，这正是 19 这个错值一路传下去的原因。修复提交 `77b7b6307`（含 `03-开发与测试指南.md` §4.4 与 openidea 调研报告 08 两处下游引用）。
+
+**Seen 1× (2026-11-26)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
