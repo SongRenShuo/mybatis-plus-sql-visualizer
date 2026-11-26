@@ -177,6 +177,14 @@ class ConvertToSqlAction : AnAction() {
         // （`MapperNamespaceIndex` → `FileBasedIndex.getContainingFiles`），必须在 compute 块（BGT +
         // ReadAction）里做；放到下面的 onResult 回调里就是在 EDT 上查索引。回调只消费这里的预解析结果。
         val mapperXmlTags = java.util.concurrent.atomic.AtomicReference<List<XmlTag>>(emptyList())
+        // T-PerfSweep34 券01（2026-11-26 第十一期性能调研 §4.1）：L110 只修了九条兜底里的第一条
+        // （Mapper XML），第 8 条 tryJpaFallback 的第 5 步仍在 EDT 上同步跑
+        // `previewRepositoryDeclaration` → JpaEntityResolver.resolve → HibernateNamingConfigProbe
+        // （FilenameIndex 索引查询 + readText 读盘），与 L110 是同一回调、同一类操作。此处前置到
+        // compute 块：回调只消费结果。该预计算不记历史（computeRepositoryDeclaration 无副作用），
+        // 历史由回调在确认展示时补记。
+        val repositoryDeclaration =
+            java.util.concurrent.atomic.AtomicReference<SqlPreviewService.RepositoryDeclarationProbe?>(null)
         SqlPreviewService.previewAsync(project, {
             kotlinWrapperUnavailable.set(kotlinWrapperUnavailableAt(file, offset))
             val context = service.resolveWrapperSourceContext(element)
@@ -185,12 +193,16 @@ class ConvertToSqlAction : AnAction() {
                 service.preview(element, context)
             } catch (t: Throwable) {
                 // compute 抛错时回调仍会走兜底链（既有语义）——异常分支同样要备料，
-                // 否则 XML 档会在"预览计算失败"这条路径上静默失效。
+                // 否则 XML 档/Repository 档会在"预览计算失败"这条路径上静默失效。
                 mapperXmlTags.set(mapperXmlTagsFor(element))
+                repositoryDeclaration.set(probeRepositoryDeclaration(service, element))
                 throw t
             }
             // 只有 Wrapper 链未命中才需要兜底锚点：命中路径零额外索引查询。
-            if (result == null) mapperXmlTags.set(mapperXmlTagsFor(element))
+            if (result == null) {
+                mapperXmlTags.set(mapperXmlTagsFor(element))
+                repositoryDeclaration.set(probeRepositoryDeclaration(service, element))
+            }
             result
         }) { result ->
             if (result != null) {
@@ -203,7 +215,7 @@ class ConvertToSqlAction : AnAction() {
                 && !tryHqlFallback(service, project, element, sourceLocation)
                 && !tryNamedQueryFallback(service, project, element, sourceLocation)
                 && !tryJdbcTemplateFallback(project, element, sourceLocation)
-                && !tryJpaFallback(service, project, element, sourceLocation)
+                && !tryJpaFallback(service, project, element, repositoryDeclaration.get(), sourceLocation)
                 && !tryMethodBodyStringSqlFallback(project, element, sourceLocation)) {
                 // 均未命中 → 回落文件级 SQL 注解候选（M26-A，Mapper 接口场景）
                 showAnnotationCandidates(
@@ -470,7 +482,13 @@ class ConvertToSqlAction : AnAction() {
      * JPA 三态回落（波次一）：派生查询 / @Query / CriteriaQuery —— 命中任一即触发预览并返回 true。
      * 调用方在返回 true 后立即 return，不再走 MyBatis 注解候选回落。
      */
-    private fun tryJpaFallback(service: SqlPreviewService, project: Project, element: PsiElement, sourceLocation: String?): Boolean {
+    private fun tryJpaFallback(
+        service: SqlPreviewService,
+        project: Project,
+        element: PsiElement,
+        repositoryDeclaration: SqlPreviewService.RepositoryDeclarationProbe?,
+        sourceLocation: String?,
+    ): Boolean {
         val method = PsiTreeUtil.getParentOfType(element, PsiMethod::class.java, false)
         // 1. JPA 回落：@Query（优先检查——@Query 方法即使方法名匹配派生查询模式，也走 JPQL 路径）
         if (method != null && JpqlQueryLocator.hasQueryAnnotation(method)) {
@@ -498,8 +516,37 @@ class ConvertToSqlAction : AnAction() {
         // 5. JPA 回落（F-1 修复）：Repository **接口方法声明行**——`deleteAllInBatch()` 这类 bulk 形态
         //    既不在派生查询线（无 `By`、`*All` 词干白名单不放行 `InBatch`）也无调用表达式，
         //    声明行光标下零可达；此处按接口泛型解析实体后走同一条 CRUD 模板线。
-        if (tryRepositoryDeclarationFallback(service, project, method, sourceLocation)) return true
+        //    T-PerfSweep34 券01：实体解析（FilenameIndex 索引查询 + 读配置）已在 compute 块预计算，
+        //    此处只消费 probe；位置与优先级保持原链序不变。
+        if (tryRepositoryDeclarationFallback(service, project, repositoryDeclaration, sourceLocation)) return true
         return false
+    }
+
+    /**
+     * T-PerfSweep34 券01：[tryRepositoryDeclarationFallback] 的 compute 块备料——
+     * 前置门 + 纯计算都在 BGT 完成，返回 null 表示「这条兜底不适用」。
+     *
+     * **只许在后台线程的 ReadAction 内调用**：链内 `JpaEntityResolver.resolve` →
+     * `HibernateNamingConfigProbe.projectUsesComponentPath` 会查 `FilenameIndex` 并 `readText`
+     * 读配置文件，EDT 上调它就是 `SlowOperations` 断言源（与 L110 同型）。
+     *
+     * 门序与 [JpaCrudOperationConverter.convertRepositoryDeclaration] 内部一致（接口判定 →
+     * 方法名名单），把「不适用」的判定提前，省掉不必要的那次索引查询。
+     */
+    private fun probeRepositoryDeclaration(
+        service: SqlPreviewService,
+        element: PsiElement,
+    ): SqlPreviewService.RepositoryDeclarationProbe? {
+        val method = PsiTreeUtil.getParentOfType(element, PsiMethod::class.java, false) ?: return null
+        // 与 tryJpaFallback 的前四步同一口径：@Query / 派生查询 / CriteriaQuery 优先，
+        // 它们命中时第 5 步本就不会走到——此处提前排除，省掉白算。
+        if (JpqlQueryLocator.hasQueryAnnotation(method)) return null
+        if (DerivedMethodLocator.isDerivedQuery(method)) return null
+        if (CriteriaQueryLocator.locate(element) != null) return null
+        val iface = method.containingClass ?: return null
+        if (!iface.isInterface) return null
+        val result = service.computeRepositoryDeclaration(method) ?: return null
+        return SqlPreviewService.RepositoryDeclarationProbe(method, result)
     }
 
     /**
@@ -507,17 +554,20 @@ class ConvertToSqlAction : AnAction() {
      *
      * 只认接口声明（实现类方法由既有路径覆盖），实体解析走 `resolveRepositoryEntityFromClass` 的
      * 严格基类判定——非 Repository 接口返回 null，不会误亮普通接口方法。
+     *
+     * T-PerfSweep34 券01：重活（实体解析 → 索引查询 + 读盘）已由 [probeRepositoryDeclaration]
+     * 在 compute 块预计算，本函数**只消费结果**；历史记录在此补记（预计算刻意不记，避免前序
+     * 兜底命中时的白算污染历史）。
      */
     private fun tryRepositoryDeclarationFallback(
         service: SqlPreviewService,
         project: Project,
-        method: PsiMethod?,
+        probe: SqlPreviewService.RepositoryDeclarationProbe?,
         sourceLocation: String?,
     ): Boolean {
-        val iface = method?.containingClass ?: return false
-        if (!iface.isInterface) return false
-        val preview = service.previewRepositoryDeclaration(method) ?: return false
-        SqlPreviewService.showResult(project, preview, sourceLocation)
+        if (probe == null) return false
+        service.recordPreviewHistory(probe.result, probe.anchor)
+        SqlPreviewService.showResult(project, probe.result, sourceLocation)
         return true
     }
 
