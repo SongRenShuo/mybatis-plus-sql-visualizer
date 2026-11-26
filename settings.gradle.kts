@@ -12,6 +12,17 @@ rootProject.name = "mybatis-plus-sql-visualizer"
 include(":sql-visualizer-agent")
 project(":sql-visualizer-agent").projectDir = file("sub-projects/sql-visualizer-agent")
 
+// T-SyncK2JMaster181（2026-11-26）：纯逻辑引擎导出模块（master `:engine-jar` 的 **Java 投影口径**）——
+// 把 model / sql / xml / reverse / generator / psource / util / log / execute 中零平台渗透的部分
+// 经 prepareEngineSources 机械投影成不含 IntelliJ 类型的 mpsv-engine jar，供非 IntelliJ 宿主
+// （OpenIDEA / Rust 侧）经 JSON 门面 mpsv.engine.EngineApi 消费。
+//
+// 与 master 的口径差（移植核心）：master 从 `src/main/kotlin` 按 `.kt` 裁剪；k2j 生产树是
+// 100% Java（`src/main/kotlin` 恒空），故源根改 `src/main/java` + `.java`，门面手写 Java。
+// 零平台渗透守卫 verifyNoPlatformImports 与实现语言无关，原样保留。
+include(":engine-jar")
+project(":engine-jar").projectDir = file("sub-projects/engine-jar")
+
 // T-TestPerf2（2026-09-15）：build cache 关闭改落 settings 层。gradle.properties 的
 // org.gradle.caching=false 会被用户级 ~/.gradle/gradle.properties 的 caching=true 按 Gradle
 // 属性优先级（GRADLE_USER_HOME > 项目根）覆盖而空转——实证：冷启动分片构建出现
