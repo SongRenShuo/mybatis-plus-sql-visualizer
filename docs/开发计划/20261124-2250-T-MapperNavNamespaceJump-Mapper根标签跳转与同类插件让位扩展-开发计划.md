@@ -137,7 +137,7 @@ MyBatisCodeHelperPro 的 `view.I` 同构：`namespace` 属性 → mapper class�
 
 ---
 
-## 八、实施记录（2026-11-24，分支 `feature/mapper-nav-namespace-jump`，工作树 `../mybatis-plus-sql-visualizer-mappernav`；**未合并主分支**）
+## 八、实施记录（2026-11-24，分支 `feature/mapper-nav-namespace-jump`，工作树 `../mybatis-plus-sql-visualizer-mappernav`；**已并入 master（`145381d28`，2026-11-25）**）
 
 ### 8.1 拍板结果
 
