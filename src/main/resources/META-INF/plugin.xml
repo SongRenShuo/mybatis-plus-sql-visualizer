@@ -271,6 +271,14 @@
         <!-- Mapper statement 与接口方法双向导航 -->
         <codeInsight.lineMarkerProvider language="XML"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.MapperXmlToJavaLineMarkerProvider"/>
+        <!-- T-MapperPreviewOrder（2026-11-26 用户报障「预览图标首次在右、过一会到左」）：
+             方法行 SQL 预览图标单独成 provider，且**必须注册在 MapperJavaToXmlLineMarkerProvider
+             之前**——平台慢趟按 provider 顺序收集（LineMarkersPass.queryProviders 外层遍历
+             providers），同一行两枚的左右序由此确定：预览恒左、跳转恒右，与 XML 语句行
+             （XmlSqlGutter 在前、MapperXmlToJava 在后）完全同构。
+             顺序由 MapperPreviewProviderOrderGuardTest 钉住（改本段顺序即红）。 -->
+        <codeInsight.lineMarkerProvider language="JAVA"
+                                        implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.MapperMethodPreviewLineMarkerProvider"/>
         <codeInsight.lineMarkerProvider language="JAVA"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.MapperJavaToXmlLineMarkerProvider"/>
         <!-- T-MapperNavShortcut：Mapper 双向跳转接入平台原生快捷键——Ctrl+B / Ctrl+Click

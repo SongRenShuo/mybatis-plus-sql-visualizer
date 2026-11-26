@@ -19,6 +19,8 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
 
     private val javaProvider = MapperJavaToXmlLineMarkerProvider()
+    /** T-MapperPreviewOrder：方法行预览图标独立 provider（plugin.xml 注册在 javaProvider 之前）。 */
+    private val previewProvider = MapperMethodPreviewLineMarkerProvider()
     private val xmlProvider = MapperXmlToJavaLineMarkerProvider()
 
     override fun setUp() {
@@ -430,16 +432,18 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
     fun testJavaMethodRowHasPreviewAndNavigationMarkers() {
         val java = addMapper()
         addXml("  <select id=\"count\">SELECT 1</select>")
-        val all = collectFor(javaProvider, methodNameLeaves(java).filter { it.text == "count" })
+        val leaves = methodNameLeaves(java).filter { it.text == "count" }
+        // T-MapperPreviewOrder：预览与跳转是两个 provider，合并顺序 = provider 注册顺序（预览先）。
+        val all = collectFor(previewProvider, leaves) + collectFor(javaProvider, leaves)
         assertEquals("count 方法行应恰 2 枚（预览 + 跳转）", 2, all.size)
-        assertEquals("预览图标在前（与 XML 语句行阅读顺序一致）", previewTooltip, all[0].lineMarkerTooltip)
+        assertEquals("预览图标在前（provider 顺序，与 XML 语句行同构）", previewTooltip, all[0].lineMarkerTooltip)
         assertSame("跳转图标保持既有样式", MpvsIcons.MapperMethod, all[1].icon)
         assertEquals("跳转 tooltip 不变", MpSqlVisualizerBundle.message("gutter.mapperMethod.tooltip"), all[1].lineMarkerTooltip)
     }
 
     fun testJavaMethodPreviewMarkerAbsentWithoutXml() {
         val java = addMapper()
-        assertEmpty("无 XML 语句的方法行不得出预览图标（不出点了必空的入口）", collectFor(javaProvider, methodNameLeaves(java)))
+        assertEmpty("无 XML 语句的方法行不得出预览图标（不出点了必空的入口）", collectFor(previewProvider, methodNameLeaves(java)))
     }
 
     fun testJavaMethodPreviewMarkerFollowsDumbOptimisticBranch() {
@@ -447,9 +451,9 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         MapperXmlToJavaLineMarkerProvider.isDumbProvider = { true }
         try {
             val java = addMapper()
-            val ms = collectFor(javaProvider, methodNameLeaves(java).filter { it.text == "count" })
-            assertEquals("dumb 窗乐观产出：预览 + 跳转 2 枚（与跳转同口径）", 2, ms.size)
-            assertEquals("预览图标沿用 F1-b 乐观分支", previewTooltip, ms[0].lineMarkerTooltip)
+            val ms = collectFor(previewProvider, methodNameLeaves(java).filter { it.text == "count" })
+            assertEquals("dumb 窗乐观产出：预览 1 枚（与跳转同口径）", 1, ms.size)
+            assertEquals("预览图标沿用 F1-b 乐观分支", previewTooltip, ms.single().lineMarkerTooltip)
         } finally {
             MapperXmlToJavaLineMarkerProvider.isDumbProvider = original
         }
@@ -458,9 +462,10 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
     fun testJavaClassRowHasNoPreviewMarker() {
         val java = addMapper()
         addXml("<select id=\"count\">select 1</select>")
-        val ms = collectFor(javaProvider, listOf(classNameIdentifier(java)))
-        assertEquals("类名行只出类跳转一枚，不带预览（类名不是语句）", 1, ms.size)
-        assertSame(MpvsIcons.MapperMethod, ms.single().icon)
+        assertEmpty("类名行不出预览（类名不是语句）", collectFor(previewProvider, listOf(classNameIdentifier(java))))
+        val nav = collectFor(javaProvider, listOf(classNameIdentifier(java)))
+        assertEquals("类跳转仍在", 1, nav.size)
+        assertSame(MpvsIcons.MapperMethod, nav.single().icon)
     }
 
     fun testJavaMethodPreviewMarkerFilteredByMapperXmlGroup() {
@@ -470,7 +475,11 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
             settings.loadState(before.copy(showGutterIcon = true, gutterGroupMapperXml = false))
             val java = addMapper()
             addXml("<select id=\"count\">SELECT 1</select>")
-            assertEmpty("mapperXml 组关闭时预览与跳转同灭", collectFor(javaProvider, methodNameLeaves(java)))
+            val leaves = methodNameLeaves(java)
+            assertEmpty(
+                "mapperXml 组关闭时预览与跳转同灭",
+                collectFor(previewProvider, leaves) + collectFor(javaProvider, leaves),
+            )
         } finally {
             settings.loadState(before)
         }

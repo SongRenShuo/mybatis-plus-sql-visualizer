@@ -193,7 +193,11 @@ class MapperNavCoexistUastReproTest : BasePlatformTestCase() {
      */
     private fun collectMethodLineMarkers(file: PsiFile, language: Language): List<LineMarkerInfo<*>> {
         val providers = LineMarkersPass.getMarkerProviders(language, project)
-            .filter { it is MapperJavaToXmlLineMarkerProvider || it === peer }
+            .filter {
+                it is MapperJavaToXmlLineMarkerProvider ||
+                    it is MapperMethodPreviewLineMarkerProvider ||
+                    it === peer
+            }
         val elements = CollectHighlightsUtil.getElementsInRange(file, 0, file.textLength)
         val result = mutableListOf<LineMarkerInfo<*>>()
         for (provider in providers) {

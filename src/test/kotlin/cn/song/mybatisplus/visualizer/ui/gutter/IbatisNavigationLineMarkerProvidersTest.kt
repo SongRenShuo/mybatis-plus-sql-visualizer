@@ -585,7 +585,7 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         assertEquals(
             "让位只让跳转：MyBatis 方法行预览图标仍产出",
             1,
-            allMarkers(mybatisJavaToXml, iface).count(::isMethodPreviewMarker),
+            allMarkers(MapperMethodPreviewLineMarkerProvider(), iface).count(::isMethodPreviewMarker),
         )
 
         // 对照：竞品不在位时 MyBatis 那对恢复产出——证明让位门本身在起作用

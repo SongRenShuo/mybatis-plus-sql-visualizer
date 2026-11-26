@@ -143,10 +143,13 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
     fun test接口方法_出预览与跳转两枚且定位命中() {
         addMapperXmlForInterface()
         myFixture.configureByText("UserMapper.java", javaFixture)
-        val markers = collectMarkers(MapperJavaToXmlLineMarkerProvider(), methodNameLeaves())
-        assertEquals("UserMapper.selectById 声明行应恰 2 枚（预览 + 跳转）", 2, markers.size)
-        assertEquals("其中一枚跳转箭头", 1, markers.count { it.icon === MpvsIcons.MapperMethod })
-        assertEquals("其中一枚 SQL 预览图标", 1, markers.count { it.lineMarkerTooltip == previewTooltip })
+        val leaves = methodNameLeaves()
+        // T-MapperPreviewOrder：预览与跳转拆成两个 provider（预览注册在前），各收集一次。
+        val nav = collectMarkers(MapperJavaToXmlLineMarkerProvider(), leaves)
+        val preview = collectMarkers(MapperMethodPreviewLineMarkerProvider(), leaves)
+        assertEquals("UserMapper.selectById 声明行合计应恰 2 枚（预览 + 跳转）", 2, nav.size + preview.size)
+        assertEquals("其中一枚跳转箭头", 1, nav.count { it.icon === MpvsIcons.MapperMethod })
+        assertEquals("其中一枚 SQL 预览图标", 1, preview.count { it.lineMarkerTooltip == previewTooltip })
         assertTrue("接口方法应触达 locate（正缓存入账）",
             MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys
                 .contains(MapperXmlToJavaLineMarkerProvider.cacheKey(project, "com.demo.mapper.UserMapper", "selectById")))
@@ -190,12 +193,16 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
         return tag.name == "mapper" && tag.parentTag == null
     }
 
-    /** Java 侧基线（T-MapperMethodSqlPreview）：方法行两枚——跳转箭头 + SQL 预览。 */
+    /** Java 侧基线（T-MapperPreviewOrder）：跳转与预览分属两个 provider，各收集一次。 */
     private fun javaSideCounts(): Pair<Int, Int> {
         addMapperXmlForInterface()
         myFixture.configureByText("UserMapper.java", javaFixture)
-        val ms = collectMarkers(MapperJavaToXmlLineMarkerProvider(), methodNameLeaves())
-        return ms.count { it.icon === MpvsIcons.MapperMethod } to ms.count { it.lineMarkerTooltip == previewTooltip }
+        val leaves = methodNameLeaves()
+        val nav = collectMarkers(MapperJavaToXmlLineMarkerProvider(), leaves)
+            .count { it.icon === MpvsIcons.MapperMethod }
+        val preview = collectMarkers(MapperMethodPreviewLineMarkerProvider(), leaves)
+            .count { it.lineMarkerTooltip == previewTooltip }
+        return nav to preview
     }
 
     private val previewTooltip: String

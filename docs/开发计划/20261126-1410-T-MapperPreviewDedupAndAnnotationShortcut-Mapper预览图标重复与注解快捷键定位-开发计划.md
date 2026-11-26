@@ -211,3 +211,25 @@ private fun tryMapperAnnotationMethodFallback(project: Project, element: PsiElem
 
 - 截图类声明行（`public interface OrderMapper extends BaseMapper<Order>`）的第二枚图标：我方在该行只出 1 枚类跳转（`MpvsIcons.MapperMethod`），S1 修的是方法参数行。若真机类名行仍显示两枚，第二枚来自同类导航插件（MyBatisX/MPJ 的类级箭头），hover tooltip 可区分；如需连这一枚也处理，属于让位/同类图标叠加话题，另立项。
 - 真机夹具 `OrderMapper` 的 `Wrapper<Order>` 参数修复前后对照：装包后方法行只应剩「预览 + 跳转」两枚，`ew` 参数行不再有预览图标。
+
+---
+
+## 九、补：方法行图标左右序（T-MapperPreviewOrder，2026-11-26 同日）
+
+用户追加反馈：「mapper 的预览图标首次渲染时老是在右边，过一会出现在左边了，希望保持左边，对齐 xml」。
+
+### 9.1 机制
+
+平台慢趟按 **provider 顺序**收集（`LineMarkersPass.queryProviders` 外层遍历 providers，每个 provider 的 `collectSlowLineMarkers` 结果按 add 顺序消费），同一行多枚图标的左右序由此决定。此前预览与跳转都在 `MapperJavaToXmlLineMarkerProvider` 一个 provider 内，首次 daemon pass 与后续重算的收集/合并差异让顺序翻转；XML 侧因为「预览 provider 在前、跳转 provider 在后」两个类而稳定——用户说的「对齐 xml」正是这个结构。
+
+### 9.2 修法
+
+- 预览图标拆成独立 provider `MapperMethodPreviewLineMarkerProvider`，`plugin.xml` 注册在 `MapperJavaToXmlLineMarkerProvider` **之前**；跳转 provider 只产箭头（让位门语义不变）。
+- 预览侧判定用新增的 `MapperXmlLocator.existsOrUnknown`（索引候选 + PSI 子树匹配，**不建 document**）——跳转侧仍用 `locateOrUnknown`（要行号）；两边各付一次查询，但预览侧不碰 document，成本低于复用。
+- 顺序守卫 `MapperPreviewProviderOrderGuardTest`：① 平台 `LineMarkersPass.getMarkerProviders(Java)` 里预览在跳转之前；② `plugin.xml` 注册段顺序。
+
+### 9.3 读数
+
+- 定向 9 类 **157/0**（含新守卫 2 条；4 个既有测试类按「两 provider 各收集一次」同步）。
+- 反向：把 `plugin.xml` 两个注册元素对调 → 守卫 **2/2 红**；还原后 2/0。
+- 一处测试坑：守卫最初用裸类名 `indexOf` 定位注册点，结果先命中**注释里的类名说明**（注释也在注册元素之前），假红一次；改用 `implementationClass="<全名>"` 片段定位。

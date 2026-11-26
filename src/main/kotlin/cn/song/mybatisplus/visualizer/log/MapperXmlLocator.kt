@@ -69,6 +69,31 @@ object MapperXmlLocator {
     data class Location(val virtualFile: VirtualFile, val line: Int)
 
     /**
+     * 「语句存在」三态（T-MapperPreviewOrder，2026-11-26）：给预览 provider 用——只要
+     * 「有没有同名语句」，不需要行号，因此**不建 document**（[locate] 里的
+     * `PsiDocumentManager.getDocument` 在慢趟每方法一次是重活；预览与跳转拆成两个 provider
+     * 后，预览这边只付索引 + PSI 子树查找）。
+     *
+     * 语义与 [locateOrUnknown] 同一套（Found / Absent / Unknown），测试缝共用；
+     * Found 的 [Location.line] 填 0（预览侧不读行号）。
+     */
+    fun existsOrUnknown(project: Project, statementId: String): Lookup {
+        lookupOverrideForTest?.let { override -> return override(project, statementId) }
+        val (namespace, id) = splitStatementId(statementId) ?: return Lookup.Absent
+        return try {
+            ReadAction.compute<Lookup, RuntimeException> {
+                for (vf in MapperNamespaceIndex.getMapperXmlFiles(project, namespace)) {
+                    val file = PsiManager.getInstance(project).findFile(vf) as? XmlFile ?: continue
+                    if (findStatementTag(file, namespace, id) != null) return@compute Lookup.Found(Location(vf, 0))
+                }
+                Lookup.Absent
+            }
+        } catch (e: IndexNotReadyException) {
+            Lookup.Unknown
+        }
+    }
+
+    /**
      * 定位语句在 mapper XML 中的位置；任一环失败返回 null（调用方回退 Java 跳转）。
      * @param statementId 完整语句 id（`namespace.id`，如 `com.example.mapper.UserMapper.selectById`）
      */
