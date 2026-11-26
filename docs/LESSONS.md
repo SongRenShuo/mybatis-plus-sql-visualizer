@@ -1245,7 +1245,35 @@ CI run 45562438538 的 test(4)：第 1/2 次真竞态（1m02 / 49s），第 3 �
 
 **Seen 1× (2026-11-25)**
 
-### L102 批量替换 API 属性名会连坐字符串常量里的同名后缀——改完先 grep 键名再跑测试
+### L102 发行 CI 红先按「单条 flake」验证，再归因到最近提交
+
+**规则**：拿到红先做三件事——① 看失败 job/step 与最近提交的**影响面**是否相交（有没有碰该模块/该测试）；② 读断言原文判断是否时序类（`expected N but was N±1`、超时、并发计数）；③ 用 rerun 复跑验证。三步都不支持「是这次改动」时才去改代码；flaky 断言复跑即绿就记台账、另开去抖任务，**不要在发行 publish 正在跑时改测试**。
+
+**证据**：`插件 CI（release）· master @ fbb91e565`（run 45578089046）attempt 1 红在 `agenttest` 的 `SenderLoopDrainRateTest > 风暴排水期CONFIG到达_即被处理且看门狗不误触发`：`expected:<512> but was:<513>`（off-by-one，典型并发时序）；同 run 的 build / test 5 片 / verify 3 平台 / verifyplugin / marketplace **全绿**。attempt 2 同一提交全绿、publish 成功。该提交只加了 `sub-projects/engine-jar` 与 `settings.gradle.kts` 一行，与 agent 传输层无交集。
+
+**反例**：见到红就去改最近提交的模块，或把 gate 连带红当成本模块问题（gate 只是依赖 agenttest）。
+
+**Seen 1× (2026-11-25)**
+
+### L103 新增 Gradle 子模块必须登记进 CI 任务图，否则模块永不构建
+
+**规则**：`settings.gradle.kts` 新增 `include` 后，必须同步检查 CI 工作流的任务清单（build / test 分片 / verify / gate）是否覆盖该模块；只写 `build.gradle.kts` 而不接 CI，模块会「本地能构建、CI 从不构建」，腐化无人发现。
+
+**证据**：`engine-jar`（提交 `b3a8aeb9a`）在 run 45578089046 的 13 份 job 日志里**一次都没出现**（`grep -l engine-jar ex/*.txt` 零命中），而 `build` job 报 `BUILD SUCCESSFUL`——说明它不在任何任务图内。后续需在 T5-1/T7 接线：至少 `:engine-jar:jar :engine-jar:check` 进 build 腿，并把产物与 sha256 归档。
+
+**Seen 1× (2026-11-25)**
+
+### L104 跨类复用的项目服务，测试必须在 setUp 清业务状态（tearDown 的清理只保护后续类）
+
+**规则**：light 项目在分片内跨测试类复用，`projectService` 拿到的是同一实例。`tearDown` 里 `clear()` 只让**下一个类**干净，保护不了本类的**第一个**用例；凡是断言「初始为 0/空」的用例，`setUp` 里必须显式清业务状态（在 capture 之后、改配置之前），否则前一个类留下的条目会漏进来，表现为罕见的 `expected:<0> but was:<1>`。
+
+**证据**：CI run `45584370342` 分片 4 在纯 docs 提交 `1620748ea` 上红在 `SqlConsoleBridgeFilterProviderTest > test非捕捉态_零处理_不置位`（`assertEquals(0, manager.entries.snapshot().size)` 读到 1）。该类 `setUp` 只 `SqlLogManagerProjectState.capture` + 改 `dedupeEnabled`，未清 `entries`；`tearDown` 的 `manager.entries.clear()` 只覆盖后续类。修复＝`setUp` 在 capture 后补 `manager.entries.clear()`；本地定向 3 用例全绿（XML `tests="3"`）。
+
+**反例**：把「测试隔离」理解成「tearDown 清理」，忽略同片共用实例的**首例**暴露面。
+
+**Seen 1× (2026-11-25)**
+
+### L105 批量替换 API 属性名会连坐字符串常量里的同名后缀——改完先 grep 键名再跑测试
 
 **规则**：用「全量替换 `.foo` → `.bar`」修 API 属性名时，替换面会覆盖 `"a.b.foo"` 这类**字符串字面量**。
 凡是替换目标后缀同时出现在 bundle key / 配置键 / 消息 ID 里，替换后必须 `grep` 一遍「键名 + 新后缀」，
@@ -1255,10 +1283,11 @@ CI run 45562438538 的 test(4)：第 1/2 次真竞态（1m02 / 49s），第 3 �
 `lineMarkerTooltip`（243 的访问器实叫 `getLineMarkerTooltip()`），连坐把
 `MpSqlVisualizerBundle.message("gutter.mapperMethodPreview.tooltip")` 改成 `.lineMarkerTooltip`——
 键不存在返回键名本身，预览 marker 过滤恒 false，6 个方法各算两枚 → **16 红**；二次修正键名后 95/0。
+（对齐轮注：本支原编 L102，与 master 侧 L102 撞号，2026-11-26 合流时改编 L105）
 
 **Seen 1× (2026-11-25)**
 
-### L103 平台 transform 只剩 app.jar 且被 IDE daemon 持有时，用平台 zip `unzip -n` 就地补齐，别硬删
+### L106 平台 transform 只剩 app.jar 且被 IDE daemon 持有时，用平台 zip `unzip -n` 就地补齐，别硬删
 
 **规则**：`:test` 报「IDE by path … 找不到 com.intellij core plugin」时先看
 `~/.gradle/caches/*/transforms/<hash>/transformed/ideaIU-*/lib` 的 jar 数——若只剩 `app.jar` /
@@ -1270,6 +1299,7 @@ CI run 45562438538 的 test(4)：第 1/2 次真竞态（1m02 / 49s），第 3 �
 **证据**：`T-MapperMethodSqlPreview` 实施轮（2026-11-25）：`9.7.0/transforms/cfd9113040487d86d63…`
 只有 2 个 jar，PID 27684（IDE 2026.3 的 kotlin daemon）持有；删/改名均 Permission denied；
 `unzip -n` 补齐 2268 files 后 `:test` 正常跑出 95/0。
+（对齐轮注：本支原编 L103，与 master 侧 L103 撞号，2026-11-26 合流时改编 L106）
 
 **Seen 1× (2026-11-25)**
 

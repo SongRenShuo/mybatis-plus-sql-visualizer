@@ -20,25 +20,56 @@ import com.intellij.openapi.project.Project
  * 编辑器文档）——rehighlight 重放由去重口径兜底（同 SQL 同指纹）。
  *
  * 捕捉态机：走与桥同款 capturing 守卫（[SqlLogManager.capturing]），非捕捉态零处理。
+ *
+ * **T-EpAttachBeforeCapture（2026-11-25）**：EP 装配与控制台创建时机解耦、与捕获开启时机解耦。
+ * 原实现在 `getDefaultFilters` 里判 `sqlLogManagerIfCreated(project) == null` 就返回空数组——
+ * 捕获服务未创建时创建的**旧控制台永远没有 EP**。而桥是捕获开启后轮询补挂的，单独跑时旧控制台
+ * 靠桥能捕获；后建控制台的 EP 一经产出就把**进程级** [SqlCaptureGate.epActive] 置位，旧控制台的
+ * 桥随即被全局短路、又无 EP 兜底 → 旧控制台零产出（用户现象「两个应用单独都能捕获，并存只剩
+ * 后启动的那个」）。现在 `getDefaultFilters` 始终返回 Filter，Filter 内部**惰性**取 manager：
+ * 捕获服务尚未创建时只是零处理，用户点捕获后同一 Filter 实例自动生效。
  */
-class SqlConsoleBridgeFilterProvider : com.intellij.execution.filters.ConsoleFilterProvider {
+class SqlConsoleBridgeFilterProvider internal constructor(
+    /**
+     * manager 查找缝（T-EpAttachBeforeCapture）：默认走 [sqlLogManagerIfCreated]，测试可注入
+     * 「先 null、后返回 manager」的序列，模拟「控制台先建、捕获后开」的装配时序。
+     */
+    private val managerLookup: (Project) -> SqlLogManager?,
+    /**
+     * 未拿到 manager 时的重查间隔（毫秒）。控制台行速率可达数万/秒，逐行 `getServiceIfCreated`
+     * 是白付的成本；默认 500ms → 每个未启用捕获的控制台最多 2 次/秒。测试注入 0 表示每次都查。
+     */
+    private val managerLookupIntervalMs: Long = 500L,
+) : com.intellij.execution.filters.ConsoleFilterProvider {
+
+    /** 平台实例化入口（EP 由平台反射装配，必须有无参构造）。 */
+    constructor() : this(::sqlLogManagerIfCreated)
 
     override fun getDefaultFilters(project: Project): Array<Filter> {
-        // T-ST-02b2：读路径经 sqlLogManagerIfCreated（永不发起创建 → 不会毒化服务容器）；
-        // 服务未创建＝本插件从未启用捕获＝无过滤需求，等价于「非捕捉态零处理」
-        val manager = sqlLogManagerIfCreated(project) ?: return emptyArray()
-        return arrayOf(EpLineFilter(project, manager))
+        // T-EpAttachBeforeCapture：不再因 manager 未创建返回空数组（旧控制台没有 EP 的根因）。
+        // 惰性生效语义在 EpLineFilter 内：未拿到 manager 时零处理，等价于原来的「无过滤需求」；
+        // 不发起服务创建（managerLookup 恒为 getServiceIfCreated），不毒化服务容器。
+        return arrayOf(EpLineFilter(project, managerLookup, managerLookupIntervalMs))
     }
 
     companion object {
         private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(SqlConsoleBridgeFilterProvider::class.java)
     }
 
-    /** EP 行过滤器：实例即 per-console 解析状态。 */
+    /** EP 行过滤器：实例即 per-console 解析状态；manager 惰性持有（T-EpAttachBeforeCapture）。 */
     private class EpLineFilter(
         private val project: Project,
-        private val manager: SqlLogManager,
+        private val managerLookup: (Project) -> SqlLogManager?,
+        private val managerLookupIntervalMs: Long,
     ) : Filter {
+
+        /** 捕获服务缓存：首次取到后常驻；项目销毁后置空。未启用捕获时为 null。 */
+        @Volatile
+        private var manager: SqlLogManager? = null
+
+        /** 未拿到 manager 时的下次重查时刻（限频，避免逐行 service 查找）。 */
+        @Volatile
+        private var nextManagerLookupAtMs = 0L
 
         private val ctx = BridgeLineContext(
             myBatisParser = MyBatisLogParser(
@@ -80,14 +111,35 @@ class SqlConsoleBridgeFilterProvider : com.intellij.execution.filters.ConsoleFil
             )
         }
 
+        /**
+         * 惰性取捕获服务：未取到时返回 null（零处理），取到后常驻。
+         *
+         * 限频只在「尚未取到」阶段生效——控制台行速率可达数万/秒，逐行 `getServiceIfCreated`
+         * 是纯白付；默认 500ms 最多一次。取到之后走缓存，零查找。
+         */
+        private fun currentManager(): SqlLogManager? {
+            if (project.isDisposed) {
+                manager = null
+                return null
+            }
+            manager?.let { return it }
+            val now = System.currentTimeMillis()
+            if (now < nextManagerLookupAtMs) return null
+            nextManagerLookupAtMs = now + managerLookupIntervalMs
+            return managerLookup(project)?.also { manager = it }
+        }
+
         override fun applyFilter(line: String, entireLength: Int): Filter.Result? {
-            // 捕捉态守卫（与桥同款状态机）：非捕捉态零处理
+            // 捕捉态守卫（与桥同款状态机）：捕获服务尚未创建 / 非捕捉态 → 零处理。
+            // T-EpAttachBeforeCapture：这里才是「未启用捕获」的判定点；装配面恒有 Filter，
+            // 用户点捕获后本实例自动生效（不再出现「旧控制台永远没有 EP」）。
+            val manager = currentManager() ?: return null
             if (!manager.capturing) return null
             // T-PS4-02：timePrefix 不再逐行读 PluginSettings——经 manager 桥侧缓存取（对齐桥侧
             // timePrefixCache 形态，刷新点一致：挂载/设置变更；EP 首行早于桥挂载时惰性补种）。
             // 值语义与原逐行读取一致（blank 归 null）。
             val timePrefix = manager.consoleBridge.currentTimePrefix()
-            val produced = processConsoleLine(line, ctx, timePrefix, {}, onErrorText = ::bindConsoleError)
+            val produced = processConsoleLine(line, ctx, timePrefix, {}, onErrorText = { bindConsoleError(manager, it) })
             // T-CaptureTruth T-CT-04：置位条件由「处理过任意一行」收窄为「实证产出过条目」——
             // EP 被平台调用 ≠ EP 真在链上产出（覆盖不全时原口径会封死桥的回落通道 → 静默零捕获）。
             // 置位前桥侧照常解析；置位后桥只短路重复解析，条目仍由 EP 单路产出。
@@ -103,7 +155,7 @@ class SqlConsoleBridgeFilterProvider : com.intellij.execution.filters.ConsoleFil
          * T-M55-02：错误反向绑定与桥同款（丢弃留 debug 痕）。EP 通道无重放守卫，
          * rehighlight 重放场景靠同文本幂等绑定兜底（文本相同不再替换实例）。
          */
-        private fun bindConsoleError(errorText: String) {
+        private fun bindConsoleError(manager: SqlLogManager, errorText: String) {
             when (val result = manager.entries.bindErrorToRecent(errorText)) {
                 SqlLogEntryBuffer.ErrorBindResult.BOUND -> {}
                 else -> LOG.debug("EpLineFilter: 错误块绑定丢弃（$result）：${errorText.lineSequence().firstOrNull()?.take(120)}")
