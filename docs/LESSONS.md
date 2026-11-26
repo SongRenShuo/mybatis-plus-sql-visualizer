@@ -1353,7 +1353,22 @@ scoop 等包管理器装的），一律写可执行文件的绝对路径，不�
 **反例**：写 `"command": "rtk"` 后靠「重启一下就继承到了」自我安慰——父进程环境没刷新时重启
 继承的仍是旧快照；也不要把 `hook.run.failed` 的密集刷屏当成「钩子参数填错」去改 `args`。
 
-**Seen 1× (2026-11-26)**
+**第二层（同日实测，配置改不到的一半）**：把钩子 `command` 改成绝对路径只修好了「钩子能否被
+拉起」，**修不了「钩子吐回来的命令能否被执行」**。rtk 这类**改写型**钩子的输出形态是
+`{"hookSpecificOutput":{"updatedInput":{"command":"rtk git add …"}}}`——它在改写串里写的仍是
+**裸 `rtk`**，这个前缀是钩子内部写死的，配置文件里没有对应开关（`rtk config` 的 `[hooks]` 段
+只有 `exclude_commands` / `transparent_prefixes`）。于是出现本章最迷惑的形态：**钩子本身
+exit 0、配置界面显示正常，但每条被改写的命令都以 `command not found` / 127 告终**，表现为
+`git add` 失败而 `git status` 看起来「只是输出怪」。判据：`rtk hook check "<cmd>"` 干跑，
+输出 `rtk <cmd>` 即本条；`rtk hook check "rtk config"` 输出 `No rewrite`，证明它只在**无前缀**
+时才加前缀（不会叠成 `rtk rtk`）。**解法是给裸名补一个 PATH 可达的 shim**，不是改钩子配置：
+`rtk.cmd` 写进 WinGet 包目录（该目录在注册表 PATH 里），Git Bash 另需一份同名 sh 脚本。
+反向验证：移走 shim → 裸 `rtk` 立刻回到 `command not found`；放回 → `rtk 1.2.1`（两次读数）。
+另注：`C:\Users\USER\bin` 之前**只在 Git Bash 进程 PATH 里**、注册表里没有（`-contains` 为
+False），是 dev shell 注入的假象——要长期生效必须显式写进 `HKCU\Environment` 的 Path。
+
+**Seen 1× (2026-11-26)**（第二层同日实测补记）
+
 
 ### L109 沙盒 IDE 的崩溃日志会写进 gradle transform 缓存，把整个平台包判失效
 
