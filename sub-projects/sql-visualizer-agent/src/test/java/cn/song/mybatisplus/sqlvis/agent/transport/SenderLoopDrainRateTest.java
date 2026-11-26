@@ -202,6 +202,15 @@ public class SenderLoopDrainRateTest {
                     stub.outbound.eventCount() > 0);
         } finally {
             producing.set(false);
+            // 必须先 join 再清理：生产线程可能已通过 producing 判断、正停在 EventBus.offer 之前，
+            // 只置标志而不 join，它的最后一轮 offer 会落在 tearDown/下一用例 setUp 的 clearQueued
+            // 之后，在共享静态队列里留下 1 条存量 —— 下一用例（本类执行序紧邻的
+            // 风暴排水期CONFIG到达…）prefill 512 时账上变成 513，表现为 expected:<512> but was:<513>
+            // 的偶发 off-by-one（CI run 45578089046 / 45730701535 两次）。
+            producer.join(2000L);
+            assertFalse("风暴生产线程必须确定性退出（迟到的 offer 会污染共享队列）",
+                    producer.isAlive());
+            EventBus.clearQueued();
             run.stop();
         }
     }
@@ -472,9 +481,16 @@ public class SenderLoopDrainRateTest {
     }
 
     private static void prefillEvents(int count) {
+        // 起点显式化：EventBus.QUEUE 是测试 JVM 内共享的静态队列，起点非空时「投出 N 条」的判据
+        // 会整体偏移，表现为 expected:<512> but was:<513> 这类与代码无关的 off-by-one。
+        // 把前提写成断言，污染会自报家门（残留条数与发生位置），而不是伪装成排水缺陷。
+        final int before = EventBus.queuedCount();
+        assertEquals("共享队列起点必须为空：上一个用例残留 " + before
+                + " 条，本用例的条数账会整体偏移", 0, before);
         for (int i = 0; i < count; i++) {
             EventBus.offer(event("SELECT drain-" + i));
         }
+        assertEquals("预填后共享队列应恰为 " + count + " 条", count, EventBus.queuedCount());
     }
 
     private static SqlEvent event(String sql) {
