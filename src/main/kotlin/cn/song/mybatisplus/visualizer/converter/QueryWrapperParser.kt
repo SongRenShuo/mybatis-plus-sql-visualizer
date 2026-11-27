@@ -49,14 +49,66 @@ class QueryWrapperParser(
     private var setEntitySeq = 0
 
     /**
+     * D264 修5（L9/L16）：本次解析中**未识别**的链方法名（按出现顺序去重）。
+     *
+     * 为什么要收：`parseInternal` 的巨型 `when` 只枚举官方方法名，未命中即静默丢弃——这是
+     * 「条件少了一部分」的第二条独立路径（收集层之外）。用户自研 wrapper 的语义化链方法
+     * （`statusEq` / `byKeyword`）与未来版本的 MP 新方法都会落在这里，**无日志、无标记**，
+     * 用户看到的是「这条查询本来就没有这个过滤条件」。
+     *
+     * 本字段只解决**可见性**：不改变条件条数、不尝试展开方法体（无 PSI 上下文，且属跨方法
+     * 展开范畴）。由 [cn.song.mybatisplus.visualizer.ui.SqlPreviewService] 渲染成面板红字，
+     * 与既有 `unparsedSets` 同款口径。
+     *
+     * 成本：命中 `when` 的 else 分支时一次集合 add（`LinkedHashSet` 去重，约 O(1)），
+     * **不额外遍历调用列表**，不触达索引。
+     */
+    val unknownMethods: List<String>
+        get() = unknownMethodNames.toList()
+
+    private val unknownMethodNames = LinkedHashSet<String>()
+
+    /**
+     * D264 修5：**已知的静默方法名**——它们不是条件方法、也不在本解析器产出 SQL 片段，
+     * 静默忽略是既有且正确的语义。命中本集合的方法名不进 [unknownMethods]，
+     * 否则用户会在面板上看到「无法解析 lambda / setTableName」这类噪音。
+     *
+     * 集合内容的来源：
+     *  - MPJ 类型互转与结构方法（`lambda` / `stringQuery` / `selectAll` / `setAlias` / …）——
+     *    [MpjLambdaConverter]/[MpjQueryConverter] 会先行剔除大部分，但两个 converter 的剔除
+     *    集合不完全一致（如 `selectAll` / `setTableName` 只在 lambda 侧剔除），此处兜住残余；
+     *  - MPJ no-op 方法（`setTableName` / `pageByMain`，运行时语义，静态无可渲染内容）；
+     *  - 写族 set 方法（`set` / `setSql` / `setUpdateEntity` …）——[LambdaUpdateConverter] 已剔除，
+     *    此处兜住「链中间节点被其它 converter 透传」的情形。
+     *
+     * 只有**业务语义未知**的名字（自研 wrapper 的 `statusEq` / `byKeyword`、未来 MP 新方法）
+     * 才会漏到 [unknownMethods]。
+     */
+    private val SILENT_METHOD_NAMES: Set<String> = setOf(
+        // MPJ / MP 类型互转标记
+        "lambda", "lambdaJoin", "stringQuery",
+        // MPJ 列/结构方法（列由各 converter 自行解析，到这里只剩「不产出条件」的事实）
+        "selectAll", "selectIgnore", "selectAs", "selectAsClass", "selectSub",
+        "selectCollection", "selectAssociation", "selectFilter",
+        // MPJ 联表 / 集合 / 尾段结构（由 MpjJoinSupport / MpjLambdaConverter 处理）
+        "leftJoin", "innerJoin", "rightJoin", "fullJoin", "join",
+        "union", "unionAll", "fill", "setAlias", "setTableName", "pageByMain",
+        "from", "around", "deleteAll",
+        // 写族 set 方法（SET 子句来源，非 WHERE 条件）
+        "set", "setSql", "setIncrBy", "setDecrBy", "setIfExists", "setApply",
+        "setUpdateEntity", "setUpdateEntityAndNull",
+    )
+
+    /**
      * 解析调用链为 SELECT 语句模型。
      *
      * @param chain PSI 解析产物
-     * @return 可直接交给 SqlGenerator 的语句模型
+     * @return 可直接交给 SqlGenerator 的语句模型（未识别方法名随 [SelectStatement.unknownMethods] 带出）
      */
     fun parse(chain: WrapperChain): SelectStatement {
         toggleSeq = 0
         setEntitySeq = 0
+        unknownMethodNames.clear()
         return parseInternal(chain)
     }
 
@@ -249,7 +301,12 @@ class QueryWrapperParser(
                     }
                 }
 
-                // 其他方法（not/嵌套条件等）暂忽略，保证健壮性
+                // D264 修5（L9/L16）：未识别的方法名**留痕**而不是静默丢弃——
+                // 只加可见性、不改条件条数（既有契约 `QueryWrapperParserTest.未知方法_安全忽略` 保持）。
+                // 知识边界：不在这里展开自定义方法体（无 PSI 上下文，且属跨方法展开范畴）。
+                else -> {
+                    if (call.methodName !in SILENT_METHOD_NAMES) unknownMethodNames += call.methodName
+                }
             }
         }
 
@@ -265,6 +322,7 @@ class QueryWrapperParser(
             rawFirst = rawFirst,
             rawFirstParams = rawFirstParams,
             comment = comment,
+            unknownMethods = unknownMethodNames.toList(),
         )
     }
 

@@ -247,6 +247,11 @@ object BatchOperationConverter {
         // selectJoinList 族今天不在 [BATCH_OPERATIONS]，守卫放在注册表之后对它永远不会执行）
         if (isJoinFamilyRejected(methodName)) return null
         val operation = BATCH_OPERATIONS[methodName] ?: return null
+        // D264 修0：实参静态可见是 Wrapper，但调用方（[SqlPreviewService]）没能定位出条件链——
+        // 此时批量模板只会产出 `SELECT 全列 FROM 表`（无 WHERE）的**静默错误 SQL**。
+        // 宁可无预览，不可输出错误 SQL（口径同 [isJoinFamilyRejected]）。判据见
+        // [isWrapperArgumentUnsupportedBatch]（类型级，无索引查询）。
+        if (isWrapperArgumentUnsupportedBatch(call)) return null
         val target = resolveEntityTable(call) ?: return null
         val table = target.table
         // T-M20-07：Map 等值条件方法独立分支（键值静态不可得 → 占位文本；避免并入主键等值/IN 分支）
@@ -320,6 +325,54 @@ object BatchOperationConverter {
      */
     private fun isJoinFamilyRejected(methodName: String): Boolean =
         methodName in JOIN_CONSUMER_METHOD_NAMES
+
+    // ------------------------------------------------------------------
+    // D264 修0：实参是 Wrapper 时的批量兜底拒绝
+    // ------------------------------------------------------------------
+
+    /**
+     * D264 修0：调用实参里是否有**静态可见为 Wrapper 类型**的表达式。
+     *
+     * 用途：批量模板（`SELECT 全列 FROM 表` / `WHERE id IN (...)`）**完全不含** wrapper 携带的
+     * 条件。一旦实参是 Wrapper 而调用方没能走通 Wrapper 链路径，批量模板就会产出
+     * `SELECT id, status, device_name FROM device_info_entity`（无 WHERE）这种**静默错误 SQL**——
+     * 用户会以为这条查询本来就没有过滤条件（D264 R10 实测产物）。口径与本文件的
+     * [isJoinFamilyRejected] 一致：宁可无预览，不可输出错误 SQL。
+     *
+     * 判据是**类型级**的（`detectWrapperTypeDeep`：先查浅层类名白名单，再按父链识别自研子类，
+     * 都带名字前门），**不做 `ReferencesSearch`**、不解析方法名——本方法在预览路径上，
+     * 每次只对一个调用的实参列表做类型文本判定（微秒级）。
+     *
+     * 覆盖的形态（含非首参）：BaseMapper 3.5.17 的 `selectList(IPage, Wrapper)` 分页重载 wrapper
+     * 在第二参，只看首参会漏。
+     *
+     * 不覆盖：类型无法识别的自研 Wrapper（`CustomWrapper<T>` 之类，父链接不到 MP/MPJ）——
+     * 静态上看不出它是 Wrapper，按「实参静态可见是 Wrapper」的判据不拦（同名 join 族已有
+     * [isJoinFamilyRejected] 一律拒绝）。
+     */
+    internal fun hasWrapperTypedArgument(call: PsiMethodCallExpression): Boolean =
+        call.argumentList.expressions.any { expr ->
+            WrapperLocator.detectWrapperTypeDeep(expr.type) != null
+        }
+
+    /**
+     * D264 修0：本次调用是否属于「批量模板不该接管」的 Wrapper 实参形态（`true` = 拒绝产出批量 SQL）。
+     *
+     * 单一判据供两处共用：本文件 [convert]（拒绝产出）与
+     * [cn.song.mybatisplus.visualizer.ui.SqlPreviewService.preview]（把拒绝转成明确提示，
+     * 而不是静默 return null）。两处必须同源，否则会出现「这里拒了、那里还在出模板 SQL」。
+     *
+     * 三道门，全部是 O(1) 文本/类型判定：
+     *  1. 方法名在 [BATCH_OPERATIONS]（不在注册表时本链路本来就不接管，无需拒绝）；
+     *  2. 不是 join 消费族（其已由 [isJoinFamilyRejected] 一律拒绝，语义另算）；
+     *  3. 实参里有静态可见的 Wrapper 类型（[hasWrapperTypedArgument]）。
+     */
+    internal fun isWrapperArgumentUnsupportedBatch(call: PsiMethodCallExpression): Boolean {
+        val methodName = call.methodExpression.referenceName ?: return false
+        if (methodName !in BATCH_OPERATIONS) return false
+        if (isJoinFamilyRejected(methodName)) return false
+        return hasWrapperTypedArgument(call)
+    }
 
     // ------------------------------------------------------------------
     // T-WriteFamily（R4）：空 Wrapper 写族的精确形态 + 接收者守卫

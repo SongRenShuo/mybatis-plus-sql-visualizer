@@ -562,6 +562,155 @@ class SqlPreviewServicePreviewTest: BasePlatformTestCase() {
         )
     }
 
+    // ------------------------------------------------------------------
+    // D264 修0 / 修5：Wrapper 条件链解析失败的可见化
+    // ------------------------------------------------------------------
+
+    /**
+     * D264 修0：`selectList(FilterUtil.buildQuery(1))`——实参静态可见是 Wrapper，但 Wrapper 链路径
+     * 定位不到链（工具方法返回裸变量，属修2 范畴）。**修复前**批量模板接手，产出
+     * `SELECT id, status, device_name FROM device_info_entity`（无 WHERE）的静默错误 SQL。
+     * 现在必须：不产 SQL、给出明确原因。
+     */
+    fun testD264WrapperArgButChainUnresolvedRefusesBatchTemplate() {
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<DeviceInfoEntity> w = FilterUtil.buildQuery(1);
+                    mapper.selectList(w);
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                    private Integer status;
+                    private String deviceName;
+                }
+
+                static class FilterUtil {
+                    static LambdaQueryWrapper<DeviceInfoEntity> buildQuery(Integer status) {
+                        LambdaQueryWrapper<DeviceInfoEntity> q = new LambdaQueryWrapper<>();
+                        q.eq(DeviceInfoEntity::getStatus, status);
+                        return q;
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("必须给出结果（而不是静默 return null），否则用户不知道发生了什么", result)
+        assertTrue("不得产出无 WHERE 的全表 SQL：\n${result!!.sql}", !result.sql.contains("FROM device_info_entity"))
+        assertEquals("SQL 必须为空（拒绝产出）", "", result.sql)
+        assertNotNull("必须带明确提示", result.warning)
+        val warning = result.warning!!
+        assertTrue("提示要点明「检测到 Wrapper 但无法解析条件链」：$warning", warning.contains("无法解析其条件链"))
+        assertTrue("提示要点明方法名：$warning", warning.contains("selectList"))
+    }
+
+    /**
+     * D264 修0（wrapper 路径最坏面）：`return q` 形态下链被定位到，但链上收集到的
+     * 只有工具方法名（`[buildQuery]`）、一个可识别条件都没有——同样必须拒绝产出，不能给无 WHERE SQL。
+     */
+    fun testD264ConditionlessChainWithUnknownMethodRefusesPreview() {
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<DeviceInfoEntity> w = FilterUtil.buildQuery(1);
+                    mapper.selectList(w);
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                    private Integer status;
+                }
+
+                static class FilterUtil {
+                    static LambdaQueryWrapper<DeviceInfoEntity> buildQuery(Integer status) {
+                        LambdaQueryWrapper<DeviceInfoEntity> q = new LambdaQueryWrapper<>();
+                        q.eq(DeviceInfoEntity::getStatus, status);
+                        return q;
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull(result)
+        val sql = result!!.sql
+        assertTrue("产物不得是无条件的全表 SELECT：\n$sql", !sql.startsWith("SELECT ") || sql.contains("WHERE") || sql.isEmpty())
+        assertTrue("拒绝时必须留下原因：$sql / ${result.warning}", sql.isEmpty() || result.warning != null)
+    }
+
+    /**
+     * D264 修5：自研 wrapper 的语义化链方法（`statusEq`）——收集层能过、解析层不认。
+     * 修复后条件仍然缺（不猜语义是刻意的），但**必须出现在 warning 里**，用户能看到少了什么。
+     */
+    fun testD264UnknownChainMethodSurfacesInWarning() {
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class MyWrapper<T> extends LambdaQueryWrapper<T> {
+                public MyWrapper<T> statusEq(Integer status) { return this; }
+            }
+
+            public class Demo {
+                public void query() {
+                    MyWrapper<DeviceInfoEntity> w = new MyWrapper<>();
+                    w.eq(DeviceInfoEntity::getId, 1L);
+                    w.statusEq(1);
+                    mapper.selectList(w);
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                    private Integer status;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("链上已有 eq 条件，应正常产出预览", result)
+        assertTrue("既有条件必须保留：\n${result!!.sql}", result.sql.contains("WHERE") && result.sql.contains("id = 1"))
+        val warning = result.warning
+        assertNotNull("未识别方法必须可见（不能静默丢条件）：${result.sql}", warning)
+        assertTrue("warning 要点名 statusEq：$warning", warning!!.contains("statusEq"))
+        assertTrue("warning 要说明「条件未出现在 SQL 中」：$warning", warning.contains("无法静态解析"))
+    }
+
+    /** D264 修5 反向守卫：全部方法都识别时**不挂**任何警告（避免噪音式误报）。 */
+    fun testD264KnownMethodsProduceNoUnknownMethodWarning() {
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, 1001L);
+                    mapper.selectList(w);
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull(result)
+        assertNull("全部方法已识别时不得有 warning（避免把正常预览变成告警）：${result!!.warning}", result.warning)
+    }
+
     override fun setUp() {
         super.setUp()
         // O-97 治理（T-TestPerf15）：进态恢复出厂默认，截断跨类全局设置态泄漏
