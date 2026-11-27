@@ -654,6 +654,17 @@ class GuardSelfTestCoverageMetaGuardTest {
          */
         val GUARD_CLASSES = listOf(
             GuardEntry(
+                "convention/PsiConditionWhitelistCoverageGuardTest.kt",
+                listOf(DecisionFn("uncoveredSettMethods", FnKind.VIOLATIONS)),
+                "D264 守卫（2026-11-28 CI 实证）：伪条件白名单 CONDITION_CHAIN_METHOD_NAMES 必须覆盖 " +
+                    "converter 的赋值方法面。修 4 的 isPseudoConditionCall 会剔掉白名单外的方法名，而白名单与 " +
+                    "converter 能力面会漂移——本轮两次实证：车道 A 漏 setSql/setIncrBy 等，CI 分片 1 实测 " +
+                    "S58 期望 `SET status = 2, updated_at = now()` 只剩 `SET status = 2`；车道 B 漏逻辑删除" +
+                    "六方法与 on(...)，产生假警告。判定内核 uncoveredSettMethods 返回「converter 支持但白名单" +
+                    "缺失」的方法名集合（对照 LambdaUpdateConverter / UpdateJoinConverter 的 SET 常量）。" +
+                    "自证=缺 setSql 必被点名 / 齐备时放行 / 白名单整体缺失时不空转 三态。",
+            ),
+            GuardEntry(
                 "ui/gutter/MapperPreviewProviderOrderGuardTest.kt",
                 emptyList(),
                 "T-MapperPreviewOrder 守卫（2026-11-26）：同一方法行的两枚图标左右序由 provider 收集顺序决定" +
