@@ -135,7 +135,9 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
         // T-AgentStatusOldJvm2：模拟「上一次运行命中过 JDK 闸门」——会话建立必须清掉跳过标志，
         // 否则状态行在「本次挂载」时仍显示跳过叙事（优先级：本次挂载 > 本次跳过 > 上次会话结局）
         manager.targetJvmSkipDetected.set(true)
-        writeFrame(socket, AgentProtocol.CMD_HELLO, """{"pid":$pid}""")
+        // T-SAF-02：通道令牌随 HELLO 回带，无令牌的 HELLO 会被身份门拒掉（会话不建立）——
+        // 本用例验的是「会话建立后清跳过标志」，必须走带令牌的 writeHello（2026-11-27 分支 CI 首曝）。
+        writeHello(socket, pid)
 
         awaitTrue("premain 会话未建立") { manager.sessions.isNotEmpty() }
         // sessions 先入表、updateOnline/publishStatusChanged 随后，故在线态各自等一次

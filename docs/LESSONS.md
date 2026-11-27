@@ -1572,6 +1572,17 @@ align 与 valign 都不在），默认 `vertical-align: middle` 下，两列说�
 
 **Seen 1× (2026-11-18)**
 
+### L120 本支改过的身份门/契约，合流后要回扫 master 新用例的调用形态；分支必须至少跑一次全量分片
+
+**规则**：分支改动收敛了某个**入口契约**（身份门、序列化格式、必填字段、上限）之后，下一次把 master 併进来时，要用「本支改造点的调用形态」回扫 master 新加的用例——新用例是按**老契约**写的，git 文本合并不报冲突，红点只会出现在全量分片里。同时：`push-test.yml` 只挂 master push，**分支不跑分片就没有任何人在看**，所以分支收口/合流前必须手动 `gh workflow run build-plugin.yml --ref <分支> -f mode=gate` 跑一次全量，别拿「定向绿 + 合流前报告」当分支可发行的证据。
+
+**证据**：2026-11-27 分支 `merge-master-acceptance-doc` 首次全量 CI（run 45963297818）shard3 红 1 例：`AgentManagerPremainTest.test回连_建会话_写幂等表_置在线态` 在 `awaitTrue("premain 会话未建立")` 超时。根因＝master `95ecbea44`（T-AgentStatusOldJvm2，2026-11-21）新加的这个用例用裸 HELLO `writeFrame(socket, CMD_HELLO, {"pid":N})`，而本支 `0495ade42`（T-SAF-02，双向令牌身份门）要求 HELLO 回带 `token`，无令牌即拒、会话不建立；同文件其余回连用例都已改走 `writeHello(...)`（带令牌），只有这个后加的漏了。归属：用例自 11-21 落地、本支 11-22 併过 master，到 11-27 才第一次有分片读数——红点潜伏 6 天。修复＝该用例改走 `writeHello(socket, pid)`（定向 16 例全绿），随后重跑 gate。
+
+**正例**：合流前先 `git log <merge-base>..origin/master -- <本支契约改过的文件目录>` 找新用例，按新契约回扫；分支每次合流后手动 dispatch 一次 gate，把分片读数当场拿到。
+**反例**：看到「零冲突 + 定向测试绿 + 合流前验收文档」就宣布分支可发；或把失败当 flake 重跑——本例重试轮同样红（16 例 1 红），是确定性错配不是抖动。
+
+**Seen 1× (2026-11-27)**
+
 
 ## 升级记录
 
