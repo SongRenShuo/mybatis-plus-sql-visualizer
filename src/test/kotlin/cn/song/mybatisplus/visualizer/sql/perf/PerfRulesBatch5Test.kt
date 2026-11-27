@@ -10,6 +10,7 @@ import cn.song.mybatisplus.visualizer.sql.OpenGaussDialect
 import cn.song.mybatisplus.visualizer.sql.OracleDialect
 import cn.song.mybatisplus.visualizer.sql.PostgreSQLDialect
 import cn.song.mybatisplus.visualizer.sql.SqlServerDialect
+import cn.song.mybatisplus.visualizer.sql.SqlPerfAnalyzer
 import cn.song.mybatisplus.visualizer.sql.GaussDbDialect
 import cn.song.mybatisplus.visualizer.sql.perf.rules.PerfRulesBatch5
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -395,6 +396,58 @@ class PerfRulesBatch5Test {
     fun `规则条数_Batch5只含一条规则`() {
         assertEquals(1, PerfRulesBatch5.all.size)
         assertEquals("param_limit_exceeded", PerfRulesBatch5.all[0].ruleId)
+    }
+
+    // ------------------------------------------------------------------
+    // 接入链路：走 SqlPerfAnalyzer 端到端，证明引擎真能触达本规则
+    // ------------------------------------------------------------------
+
+    /*
+     * 为什么必须有这组：单测直接 new 规则实例只能证明「规则自己算得对」，证不了
+     * 「引擎会调用它」——第四批的方言规则要靠 PerfRuleEngine 识别 DialectAwarePerfRule
+     * 才切到 check(ctx)，漏了注册或没实现子接口，规则会**存在但永不触发**，
+     * 隔离单测照样全绿。这里只经由公开入口 analyze(sql, dialect) 断言。
+     */
+
+    @Test
+    fun `接入_经SqlPerfAnalyzer_Oracle超限能命中`() {
+        SqlPerfAnalyzer.clearCache()
+        val sql = selectWithIn(1001)
+        val warnings = SqlPerfAnalyzer.analyze(sql, OracleDialect)
+        assertTrue(
+            "规则已注册且引擎能分派到 DialectAwarePerfRule（隔离单测绿不代表接入通了）: $warnings",
+            warnings.any { it.ruleId == "param_limit_exceeded" },
+        )
+    }
+
+    @Test
+    fun `接入_经SqlPerfAnalyzer_无方言不命中`() {
+        SqlPerfAnalyzer.clearCache()
+        val sql = selectWithIn(1001)
+        val warnings = SqlPerfAnalyzer.analyze(sql)
+        assertTrue(
+            "无方言上下文不得报（宁可不报）: $warnings",
+            warnings.none { it.ruleId == "param_limit_exceeded" },
+        )
+    }
+
+    @Test
+    fun `接入_经SqlPerfAnalyzer_方言不同结论不同_缓存不串味`() {
+        val sql = selectWithIn(1001)
+        SqlPerfAnalyzer.clearCache()
+        // 先 Oracle（命中）再 PG（不命中）：缓存键必须含方言，否则第二次会拿到第一次的结论
+        assertTrue(SqlPerfAnalyzer.analyze(sql, OracleDialect).any { it.ruleId == "param_limit_exceeded" })
+        assertTrue(
+            "同 SQL 换方言后缓存串味（缓存键缺方言）",
+            SqlPerfAnalyzer.analyze(sql, PostgreSQLDialect).none { it.ruleId == "param_limit_exceeded" },
+        )
+        // 反向顺序
+        SqlPerfAnalyzer.clearCache()
+        assertTrue(SqlPerfAnalyzer.analyze(sql, PostgreSQLDialect).none { it.ruleId == "param_limit_exceeded" })
+        assertTrue(
+            "反向顺序也应给出各自正确结论",
+            SqlPerfAnalyzer.analyze(sql, OracleDialect).any { it.ruleId == "param_limit_exceeded" },
+        )
     }
 
     @Test
