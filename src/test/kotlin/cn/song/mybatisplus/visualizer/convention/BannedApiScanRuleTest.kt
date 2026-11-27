@@ -656,7 +656,7 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
             CatchExemption(16, "控制台桥的平台可选能力探测与反射候选遍历：失败即降级（轮询兜底/null/视为存活）"),
         // 11 处：后台收集候选（链头/注解/XML tag）失败返回空列表 → EDT 提示「未找到候选」。
         "src/main/java/cn/song/mybatisplus/visualizer/actions/ConvertToSqlAction.java" to
-            CatchExemption(11, "后台候选收集失败返回空列表，用户侧看到「未找到候选」提示（非长驻链路）"),
+            CatchExemption(12, "后台候选收集失败返回空列表，用户侧看到「未找到候选」提示（非长驻链路）"),
         // 4 处：JOIN 图渲染/富化失败回落「无图 / 未富化模型」（原 SqlPreviewPanel.kt 4 处随 T-M53-II 拆分入本文件）。
         "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelResultViewKt.java" to
             CatchExemption(4, "JOIN 图渲染/富化失败回落无图或未富化模型（已 warn 留痕 + 显式摘转圈）"),
@@ -700,7 +700,7 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
             CatchExemption(1, "安全闸门 fail-closed：解析器对恶意构造输入可能抛 Error，必须接住并拒绝"),
         // 1 处：反射探测返回 false。
         "src/main/java/cn/song/mybatisplus/visualizer/log/SqlLogManager.java" to
-            CatchExemption(1, "反射能力探测失败返回 false"),
+            CatchExemption(2, "反射能力探测失败返回 false；T-AutoShowYield 让位侧的同侧条纹查询失败降级为「不抢面板」（车道C 增量，非长驻链路）"),
         // 1 处：后台候选收集失败返回空。
         "src/main/java/cn/song/mybatisplus/visualizer/actions/GenerateCrudSqlFromEntityAction.java" to
             CatchExemption(1, "后台候选收集失败返回空列表（动作提示无候选）"),
@@ -860,15 +860,18 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
             // fatal 判定入落地集/豁免表，其余 30 处为未判定降级站点）。
             // T-SyncK2JMaster179 修红 D：179 轮各路增量（含 highlight/index/gutter 族与 F9/F4 回填）
             // 继续把 master 的 runCatching 落成 try/catch(Throwable)，未判定降级站点 559→659。
-            // T-SyncK2JMaster180 修红（守卫实测 659→692）：本轮 131 提交增量（standalone/N+1/MCP D238·D239/
-            // PerfSweep30~32）继续把 master 的 runCatching 落成 try/catch(Throwable)，未判定降级站点 +33。
-            692,
+            // T-SyncK2JMaster181 修红（守卫实测 692→710）：本轮 319 提交增量（D254 实体字段/
+            // D255 setEntity 参数键/D256 Wrapper 父链/T-EpAttachBeforeCapture/T-OldJvmPremainGuard/
+            // T-MapperNavNamespaceJump/T-MapperMethodSqlPreview/T-PreviewFallbackEdtSlowOps 等）
+            // 继续把 master 的 runCatching 落成 try/catch(Throwable)，未判定降级站点 +18。
+            710,
             unjudgedOutside,
         )
         assertEquals(
             "k2j 全量 catch (Throwable …) 站点基线漂移（须与 BannedApiSourceScanTest.fatalCatchSiteTotalBaseline 同步重登）",
-            // T-SyncK2JMaster180 修红（守卫实测 1168→1224）：本轮增量全量站点 +56。
-            1224,
+            // T-SyncK2JMaster181 修红（守卫实测 1224→1250）：本轮 319 提交增量全量站点 +26，
+            // 与 BannedApiSourceScanTest.fatalCatchSiteTotalBaseline 逐字同步。
+            1250,
             allSites,
         )
         // 全量对账恒等式（口径说明）：全量 = 豁免登记 + 其余未判定 + 落地判定（regex 口径，含

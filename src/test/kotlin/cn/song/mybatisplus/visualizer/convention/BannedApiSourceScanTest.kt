@@ -1319,7 +1319,10 @@ class BannedApiSourceScanTest {
         // 2 处（T-SyncK2JMaster82，2026-10-25 新入落地集）：执行计划双通道翻译把 master 侧
         // submitExplainDirectConsole 预热块与 submitExplainOrStructured hints 块两处
         // `runCatching`+fatal 透传落成 `catch (Throwable)` + `throw (Error) t`，实测口径计数 2。
-        "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecutionKt.java" to 2,
+        // T-SyncK2JMaster181（守卫实测重登 2→3）：车道D 的 T-PreviewFallbackEdtSlowOps /
+        // T-DollarPlainSqlBanner 增量在该文件新增 1 处判定（解析链抛错路径补 `throw t` 原样 rethrow，
+        // 不吞）。守卫原读数 expected:<2> but was:<3>。
+        "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecutionKt.java" to 3,
         "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsoleKt.java" to 8,
         // 15→17（T-SyncK2JMaster177，2026-11-08 守卫实测）：A2 波次把 master 的
         // createTempPsiFileAsync / revalidateOnEdt 两个 runCatching 落成 catch(Throwable)+fatal 透传
@@ -1447,7 +1450,12 @@ class BannedApiSourceScanTest {
     // T-SyncK2JMaster180 修红（守卫实测重登）：1168 → 1224。本轮 131 提交增量（standalone/
     // N+1/MCP D238·D239/PerfSweep30~32）把 master 的 runCatching 落成 try/catch(Throwable)
     // （937 个 .java 文件 1224 站点）。守卫原读数 expected:<1168> but was:<1224>。
-    private val fatalCatchSiteTotalBaseline = 1224
+    // T-SyncK2JMaster181 修红（守卫实测重登）：1224 → 1250。本轮 319 提交增量（D254 实体字段/
+    // D255 setEntity 参数键/D256 Wrapper 父链/T-EpAttachBeforeCapture/T-OldJvmPremainGuard/
+    // T-MapperNavNamespaceJump/T-MapperMethodSqlPreview/T-PreviewFallbackEdtSlowOps 等）把 master
+    // 的 runCatching 继续落成 try/catch(Throwable)（945 个 .java 文件 1250 站点）。
+    // 守卫原读数 expected:<1224> but was:<1250>。
+    private val fatalCatchSiteTotalBaseline = 1250
 
     /**
      * 原生执行链里「解包了 `InvocationTargetException` 但未对解包结果判 fatal」的站点数基线
