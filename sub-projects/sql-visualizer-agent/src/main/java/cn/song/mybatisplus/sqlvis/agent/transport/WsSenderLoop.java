@@ -27,7 +27,14 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p><b>事件语义逐字不变</b>：每个出站控制/事件帧的信封 {@code body} 就是 TCP 下 {@code writeFrame}
  * 会写出的同一串 JSON（HELLO、HEARTBEAT、EVENT、CONFIG_ACK 全同形）；入站 CONFIG 的解析与生效
  * 直接复用 {@link SenderLoop#handleInbound}，不复制一份逻辑。差异只在传输层：TCP 是
- * {@code [len][cmd][body]}，WS 是 RFC 6455 文本帧包一层 {@code {"cmd":N,"body":"…"}}。
+ * {@code [len][cmd][body]}，WS 是 RFC 6455 帧包一层 {@code {"cmd":N,"body":"…"}}。
+ *
+ * <p><b>帧 opcode 跟随对端</b>：载荷两种 opcode 都合法，但两端客户端说话方式不同——IntelliJ 插件
+ * 用通用 WS 客户端发 TEXT，OpenIDEA 宿主（{@code crates/ide-host/src/plugins/websocket.rs}）把
+ * 插件字节一律封成 BINARY 发出、且只把收到的 BINARY 交给插件。所以这里入站 TEXT 与 BINARY 同等
+ * 对待，并记住对端用哪种，出站镜像回去：对 TEXT 客户端行为与以前逐字节相同，对 BINARY 客户端
+ * 才切到 BINARY。不这么做的话两个方向都会**静默**丢帧（宿主丢 TEXT、本类丢 BINARY），症状是
+ * 连得上却只有 15s 后的 CONFIG 看门狗报停采。
  *
  * <p><b>会话语义</b>与 TCP 循环逐条对齐：连接即发 HELLO 并补发一条 HEARTBEAT；事件每轮尽出
  * ≤64 条防饿死心跳；出站静默达心跳间隔发 HEARTBEAT；入站 CONFIG 下行到 {@link AgentState}；
@@ -145,13 +152,16 @@ final class WsSenderLoop implements Runnable {
         final long heartbeatIntervalMs = SenderLoop.resolveHeartbeatIntervalMs();
         final long watchdogMs = SenderLoop.resolveConfigWatchdogMs();
 
-        writeEnvelope(out, EventBus.CMD_HELLO, "{\"pid\":" + pid() + "}");
+        writeEnvelope(out, WsFrameCodec.OP_TEXT, EventBus.CMD_HELLO, "{\"pid\":" + pid() + "}");
         // 连接建立即补发心跳：插件侧在线判定从连上那一刻就新鲜（与 TCP 路径同语义）
-        writeEnvelope(out, EventBus.CMD_HEARTBEAT, SenderLoop.heartbeatBody());
+        writeEnvelope(out, WsFrameCodec.OP_TEXT, EventBus.CMD_HEARTBEAT, SenderLoop.heartbeatBody());
         long lastOutboundMs = System.currentTimeMillis();
         long connectedAtMs = lastOutboundMs;
         boolean configSeen = false;
         boolean watchdogFired = false;
+        // 出站 opcode：默认 TEXT（IntelliJ 客户端），首个入站数据帧若是 BINARY 就整场切成 BINARY。
+        // 用单元素数组是因为 drainOverflow 的 lambda 要捕获它，局部变量不能既变又被捕获。
+        final int[] outboundOpcode = {WsFrameCodec.OP_TEXT};
         final ByteArrayOutputStream fragments = new ByteArrayOutputStream();
 
         final cn.song.mybatisplus.sqlvis.agent.model.SqlEvent[] slot =
@@ -161,7 +171,7 @@ final class WsSenderLoop implements Runnable {
             if (!AgentState.isDisabled()) {
                 while (burst < EVENT_BURST_MAX && EventBus.pollEvent(slot, 0)) {
                     try {
-                        writeEnvelope(out, EventBus.CMD_EVENT, EventBus.encodeEvent(slot[0]));
+                        writeEnvelope(out, outboundOpcode[0], EventBus.CMD_EVENT, EventBus.encodeEvent(slot[0]));
                         burst++;
                         lastOutboundMs = System.currentTimeMillis();
                     } catch (IOException io) {
@@ -171,15 +181,15 @@ final class WsSenderLoop implements Runnable {
                     }
                 }
                 final int overflowFlushed =
-                        EventBus.drainOverflow(agg -> writeEnvelope(out, EventBus.CMD_EVENT,
-                                EventBus.encodeEvent(agg)));
+                        EventBus.drainOverflow(agg -> writeEnvelope(out, outboundOpcode[0],
+                                EventBus.CMD_EVENT, EventBus.encodeEvent(agg)));
                 if (overflowFlushed > 0) {
                     burst += overflowFlushed;
                     lastOutboundMs = System.currentTimeMillis();
                 }
             }
             if (System.currentTimeMillis() - lastOutboundMs >= heartbeatIntervalMs) {
-                writeEnvelope(out, EventBus.CMD_HEARTBEAT, SenderLoop.heartbeatBody());
+                writeEnvelope(out, outboundOpcode[0], EventBus.CMD_HEARTBEAT, SenderLoop.heartbeatBody());
                 lastOutboundMs = System.currentTimeMillis();
             }
 
@@ -195,7 +205,13 @@ final class WsSenderLoop implements Runnable {
                         out.flush();
                         return;
                     } else if (frame.opcode == WsFrameCodec.OP_TEXT
+                            || frame.opcode == WsFrameCodec.OP_BINARY
                             || frame.opcode == WsFrameCodec.OP_CONTINUATION) {
+                        // 数据帧的两种 opcode 都收：载荷是同一份 UTF-8 JSON 信封，opcode 只说明
+                        // 对端是谁（见类注释）。记住对端用哪种，后续出站镜像回去。
+                        if (frame.opcode == WsFrameCodec.OP_BINARY) {
+                            outboundOpcode[0] = WsFrameCodec.OP_BINARY;
+                        }
                         fragments.write(frame.payload);
                         if (frame.fin) {
                             final String text = new String(fragments.toByteArray(), StandardCharsets.UTF_8);
@@ -210,13 +226,13 @@ final class WsSenderLoop implements Runnable {
                                 }
                                 final String ack = CONFIG_HANDLER.handleInbound(inbound.cmd, inbound.body);
                                 if (ack != null) {
-                                    writeEnvelope(out, EventBus.CMD_CONFIG_ACK, ack);
+                                    writeEnvelope(out, outboundOpcode[0], EventBus.CMD_CONFIG_ACK, ack);
                                     lastOutboundMs = System.currentTimeMillis();
                                 }
                             }
                         }
                     }
-                    // 其他 opcode（binary 等）不属于本协议：忽略但不中断
+                    // 其他 opcode（控制帧 PONG 等）不属于本协议：忽略但不中断
                 } catch (SocketTimeoutException idle) {
                     // 无入站数据
                 }
@@ -242,15 +258,16 @@ final class WsSenderLoop implements Runnable {
     }
 
     /**
-     * 写一个信封文本帧。超限时 {@link WsFrameCodec#envelope} 抛 IllegalArgumentException：
-     * 显式计入 {@link #oversizedCount()} 并原样上抛——事件路径的两个 catch
-     * （单事件 {@code catch (Throwable)}、账本出账 {@code catch (Throwable)}）各自按
+     * 写一个信封数据帧（opcode 由调用方给，TEXT 或 BINARY）。超限时 {@link WsFrameCodec#envelope}
+     * 抛 IllegalArgumentException：显式计入 {@link #oversizedCount()} 并原样上抛——事件路径的两个
+     * catch（单事件 {@code catch (Throwable)}、账本出账 {@code catch (Throwable)}）各自按
      * 「丢该条 / 计 dropped」处理，控制帧则在会话层结束本次会话。绝不写半帧。
      */
-    private static void writeEnvelope(OutputStream out, int cmd, String body) throws IOException {
+    private static void writeEnvelope(OutputStream out, int opcode, int cmd, String body)
+            throws IOException {
         try {
-            // envelope() 只是 JSON 载荷；必须再包一层 RFC 6455 文本帧头
-            out.write(WsFrameCodec.encode(WsFrameCodec.OP_TEXT, WsFrameCodec.envelope(cmd, body)));
+            // envelope() 只是 JSON 载荷；必须再包一层 RFC 6455 帧头
+            out.write(WsFrameCodec.encode(opcode, WsFrameCodec.envelope(cmd, body)));
             out.flush();
         } catch (IllegalArgumentException tooLarge) {
             final long n = OVERSIZED.incrementAndGet();
