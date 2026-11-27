@@ -4,48 +4,39 @@
 
 ## [Unreleased]
 
-## [2026.11.27-beta.1] - 2026-11-27
+## [2026.11.27] - 2026-11-27
 
-> 范围＝`2026.11.26-beta.2`（`0bda99e74`）之后到本版发行提交的增量（今日新基号首轮内测：beta.2 全部内容一并纳入累计口径，beta.2 发行版保留共存）。区间内 11 笔用户可感 `src/main` 提交，收口为 2 个任务面：Mapper 方法行预览链（T-MapperMethodSqlPreview / T-MapperPreviewDedupAndAnnotationShortcut / T-MapperPreviewOrder / T-PreviewFallbackEdtSlowOps）与 T-PerfSweep34 性能五券；其余 mcprush 收录、内容营销、盘点、验收册、记忆精简、CI 与测试类提交用户不可见。逐条根因与真机读数见 `docs/发行说明/20261127-0900-Mapper方法行预览快捷键与性能收口-内测说明.md`
+> 范围＝上一正式版 `2026.11.25`（`452692060`）之后到本版发行提交的全部用户可见增量（含三轮内测 `2026.11.26-beta.1` / `beta.2` / `2026.11.27-beta.1` 全部内容；三段内测段由本节取代，内测发行版保留共存）。按最终能力面合并为 11 项，`Mapper 方法行预览`与`自研 Wrapper 支持`合并两轮的同族增量、`预览链两处 UI 线程卡顿与一处回填丢失`合并三笔同族修复。其余 mcprush 收录 / 内容营销 / 盘点 / 验收册 / 记忆精简 / CI 与测试类提交用户不可见。逐条根因与真机读数见 `docs/发行说明/20261127-1100-Mapper方法行预览与自研Wrapper及性能收口-发行说明.md`，三轮内测细目见 `docs/发行说明/` 三篇内测说明留档
 
 ### Added
-- **Mapper 接口方法行补上预览快捷键（T-MapperMethodSqlPreview，`3d6bb9b57`）**：光标停在 Mapper 接口方法名/参数/返回类型上按 `Alt+Shift+Q`（右键菜单同一入口）即可直接预览该方法绑定的 XML 语句——此前只能点行号旁的预览图标，快捷键会落到「未找到可转换的 Wrapper」。走与图标点击、XML 语句行点击同一条渲染链（参数表、`<include>`、`${}` 注入一致）；同名多方言（`databaseId`）变体弹选择器；没有 XML 语句的方法（含 MP 内置 CRUD）仍回落原有链，不出错源提示。
+
+- **Mapper 接口方法行也能预览 SQL（T-MapperMethodSqlPreview，`12f3232b8` + `3d6bb9b57`）**：方法名行新增预览图标，点击弹出该方法对应语句的动态 SQL 预览；此外光标停在方法名/参数/返回类型上按 `Alt+Shift+Q`（右键菜单同一入口）也能直接预览，此前这条路会落到「未找到可转换的 Wrapper」。两条入口走与 XML 语句行点击完全一致的装配与渲染链（参数表、`<include>`、`${}` 注入同一套）；同名多方言（`databaseId`）变体弹选择器；没有 XML 语句的方法（含 MP 内置 CRUD）仍回落原有链，不出错源提示。该方法行因此有两枚图标——左预览、右既有跳转箭头；开启同类插件共存让位时只让跳转、预览保留（三家竞品 Java 侧都只有跳转箭头，无预览能力），只装 MyBatisCodeHelperPro 时开让位该行不再为空。不加新设置项，随「MyBatis mapper XML」组开关与总闸。
+
+- **自研 Wrapper 子类（MPJ 套壳封装）现在能预览了（T-ServiceJoinWrapperPreview，D256，`736b6a272`）**：`CustomJoinWrapper extends AbstractLambdaJoinBaseWrapper<…>` 这类把 MPJ 整套复制改名、或在自己框架里再包一层的 Wrapper，此前插件只认官方类名——声明行没有 gutter 图标，Service 封装里的 `repository.selectJoinList(Dto.class, wrapper)` 点了没反应。现在沿类型父链识别（FQN 前缀 / 接口同名组合 / 依赖未索引时按链方法兜底），声明行与 `selectJoinList` / `selectJoinOne` / `selectJoinMap` / `selectJoinCount` 调用行都能直接预览。
 
 ### Fixed
-- **方法行两枚图标固定为「预览在左、跳转在右」（T-MapperPreviewOrder，`031fb9089` + `6c1dc40a6`）**：此前预览与跳转在同一个 provider 里产出，首次渲染时偶发「预览在右、过一会跳到左边」，与 XML 语句行的稳定顺序不一致。这是第三次报障——前两版修法（同 provider 双 marker、锚点 offset 小一档）都只让收集顺序偏向自己，真机多轮 daemon 复用下仍会翻转。现在的修法不再依赖收集顺序：预览图标固定用 `Alignment.LEFT`、跳转箭头保持 `CENTER`，平台 `EditorGutterComponentImpl.processIconsRowForY` 按 alignment 分列排布（先排完所有 LEFT，再把 CENTER 整体放其右侧），左右序与 marker 收集顺序、daemon 增量复用、provider 注册顺序全部无关。另补 `MapperPreviewDaemonOrderTest` 钉住该行为。功能与图标样式不变。
+
+- **方法行两枚图标固定为「预览在左、跳转在右」（T-MapperPreviewOrder，`031fb9089` + `6c1dc40a6`）**：第三次报障。此前预览与跳转在同一个 provider 里产出，首次渲染偶发「预览在右、过一会跳到左边」，与 XML 语句行的稳定顺序不一致。前两版修法（同 provider 双 marker、锚点 offset 小一档）都只让收集顺序偏向自己，真机多轮 daemon 复用下仍会翻转。现在改用平台的分列机制：预览固定 `Alignment.LEFT`、跳转保持 `CENTER`，`EditorGutterComponentImpl.processIconsRowForY` 按 alignment 分列排布（先排完所有 LEFT，再把 CENTER 整体放其右侧），左右序与 marker 收集顺序、daemon 增量复用、provider 注册顺序全部无关。另补 `MapperPreviewDaemonOrderTest` 钉住该行为。
+
 - **Mapper 接口方法的 Wrapper 参数不再多出一枚预览图标（T-MapperPreviewDedupAndAnnotationShortcut，`0263bf788`）**：`List<Order> selectByXxx(@Param("ew") Wrapper<Order> ew)` 这种签名里，参数名上曾经也出 Wrapper 预览图标，与方法行的 SQL 预览图标同款同行，看着像「图标重复」。参数在无方法体的接口/抽象方法里只是 `${ew.customSqlSegment}` 占位符、不是可预览的链起点，现在不标；实现类与接口 `default` 方法（有 body）的参数照旧。
+
 - **注解 SQL 的快捷键按方法定位，不再弹全文件列表（T-MapperPreviewDedupAndAnnotationShortcut，`0263bf788`）**：光标停在 `int createDemoTable();` 这类方法声明行（注解在上一行）时按 `Alt+Shift+Q`，此前会列出整个文件的注解 SQL 让人挑；现在直接预览该方法自己的 `@Select`/`@Update` 等注解 SQL。光标在类体空白处时仍保留文件级列表兜底。
-- **Mapper 接口方法上按快捷键预览时不再在 EDT 查索引（T-PreviewFallbackEdtSlowOps，`c5685aee8`）**：`Alt+Shift+Q` 落在 Mapper 接口方法、且 Wrapper 链没有命中时，兜底要按 namespace 找同名 XML 语句，这步原先跑在 UI 线程（EDT）的预览回调里——`idea.log` 每次留两条 `SEVERE Slow operations ... Plugin to blame: MyBatis SQL Visualizer`，索引要追平时界面还会卡一下。现在锚点解析放回后台线程的读动作里完成，回调只做分发与渲染；预览行为不变（单条直接出、多方言 `databaseId` 变体仍弹选择器）。
-- **Repository 接口方法声明行的预览不再卡一下（T-PerfSweep34 券01，`3e434734f`）**：光标停在 `deleteAllInBatch()` 这类 Repository 声明行按 `Alt+Shift+Q` 时，「按接口泛型找实体」这一步会去查文件名索引并读工程的 Hibernate/Spring 配置文件，原先跑在 UI 线程上——首次点击（以及任意文件编辑后缓存失效时）会短暂卡顿，`idea.log` 里是平台点名的慢操作。这是上一次修 `Alt+Shift+Q` 卡顿（`c5685aee8`）时同一处兜底链漏掉的第二条分支；现在解析也放到后台线程，UI 线程只负责显示。预览结果与之前完全一致。
-- **缺失片段框「从文件选择」选完没反应（T-PerfSweep34 券05，`3e52b138f`）**：预览里遇到未解析的 `<include refid>` 时，弹框里点「从文件选择」、选好 XML 后文本框没有任何变化。原因是回填动作被排在一个「等模态框关掉才执行」的队列上，而那时框已经关了、结果被丢弃。现在选完即回填。
+
+- **两个应用同时开着时，先启动的那个不再丢 SQL（T-EpAttachBeforeCapture，`ad4f5994b`）**：控制台捕获通道原先只在控制台创建那一刻装配，先启动应用、之后才点「开始捕获」时，这个控制台拿不到 EP 通道；后启动应用的控制台一旦捕获到 SQL，会把进程级的接管标志置位，前一个控制台的兜底解析也随之中止——表现为「两个应用单独跑都能看到 SQL，同时跑只剩后启动的那个」。现在捕获通道对任何控制台都先装配、捕获开启后自动生效，两边各收各的。
+
+- **预览链两处 UI 线程卡顿与一处回填丢失（T-PreviewFallbackEdtSlowOps / T-PerfSweep34 券01、券05）**：① `Alt+Shift+Q` 落在 Mapper 接口方法、且 Wrapper 链没有命中时，兜底要按 namespace 找同名 XML 语句，这步原先跑在 UI 线程的预览回调里——`idea.log` 每次留两条 `SEVERE Slow operations ... Plugin to blame: MyBatis SQL Visualizer`，索引要追平时界面还会卡一下；现在锚点解析放回后台线程的读动作里完成（`c5685aee8`）。② 同一处兜底链还有第二条分支漏改——光标停在 `deleteAllInBatch()` 这类 Repository 声明行时「按接口泛型找实体」会去查文件名索引并读工程的 Hibernate/Spring 配置文件，这条也在 UI 线程上；现在同样移到后台（`3e434734f`）。③ 预览里遇到未解析的 `<include refid>` 时，弹框里点「从文件选择」、选好 XML 后文本框没有任何变化——回填动作被排在一个「等模态框关掉才执行」的队列上，而那时框已经关了；现在选完即回填（`3e52b138f`）。
+
+- **从日志面板点「设置」不再停在 SQL 日志页中间（T-SqlLogSettingsJumpAnchor，`52322da26`）**：设置页按页面缓存内容与滚动位置，齿轮入口只切页不做定位，于是 SQL 日志这种多分组长页会沿用上次停的位置。现在只切页时落点复位到页顶；搜索与引导链接的带目标定位（滚动 + 高亮）不受影响。
+
+- **join 消费族加了守卫（D256，`84ae88a2d` + `0c15797e5`）**：wrapper 未识别时不再输出 `WHERE id IN (?, ...)` 这类凭空条件的错误 SQL。
 
 ### Changed
+
 - **切换「同类插件共存让位」不再拖慢整个项目（T-PerfSweep34 券02，`56162eaf6`）**：这个开关只影响行号旁的图标，但原先切换后会让所有已打开项目重新做一遍全量代码分析，大工程下要等一会儿才恢复。现在只重算当前打开着的那些文件。图标刷新效果不变。
-- **gutter 图标判定顺序微调（T-PerfSweep34 券04，`a33d99a4a`）**：4 个图标 provider 原先对每个语法元素都先读一次插件设置再判断「这个元素是不是我的目标」，现在先做那个几乎零成本的判断。纯内部重排，无行为变化。
-- **补全上下文预热加了每项目次数上限（T-PerfSweep34 券03，`0b581d5b1`）**：冷启动后连续打开很多 mapper 文件时，原先每个文件都会触发一次较重的实体解析预热；现在每项目最多 2 个文件（与同批的装配预热同口径）。首次点击预览/补全仍命中热缓存。
 
-## [2026.11.26-beta.2] - 2026-11-26
-
-> 范围＝`2026.11.26-beta.1` 之后到本版发行提交的增量（今日第二轮内测：beta.1 全部内容一并纳入累计口径，beta.1 发行版保留共存）。区间内 2 个用户可感 `src/main` 任务面：T-MapperMethodSqlPreview（`12f3232b8`）、T-EpAttachBeforeCapture（`ad4f5994b`，tag 之后落码、此前误落进 beta.1 段，本版归位）；`ad4f5994b` 之后的 engine-jar / agent 旁路 / 测试与文档提交为 sidecar 基础设施或用户不可见改动。逐条根因与真机读数见 `docs/发行说明/20261126-1118-Mapper方法行预览图标与双应用捕获修复-内测说明.md`
-
-### Added
-- **Mapper 接口方法行也能直接预览 SQL（T-MapperMethodSqlPreview，`12f3232b8`）**：方法名行新增预览图标，点击弹出该方法对应语句的动态 SQL 预览，装配与渲染和 XML 语句行点击完全一致（参数表、`<include>`、`${}` 注入同一条链）；该方法行因此有两枚图标——左预览、右既有跳转箭头。开启同类插件共存让位时只让跳转、预览保留（三家竞品 Java 侧都只有跳转箭头，无预览能力），只装 MyBatisCodeHelperPro 时开让位该行不再为空。不加新设置项，随「MyBatis mapper XML」组开关与总闸。
-
-### Fixed
-- **两个应用同时开着时，先启动的那个不再丢 SQL（T-EpAttachBeforeCapture，`ad4f5994b`）**：控制台捕获通道原先只在控制台创建那一刻装配，先启动应用、之后才点「开始捕获」时，这个控制台拿不到 EP 通道；后启动应用的控制台一旦捕获到 SQL，会把进程级的接管标志置位，前一个控制台的兜底解析也随之中止——表现为「两个应用单独跑都能看到 SQL，同时跑只剩后启动的那个」。现在捕获通道对任何控制台都先装配、捕获开启后自动生效，两边各收各的。该修复落在 beta.1 tag 之后，beta.1 发行包内不含它。
-
-## [2026.11.26-beta.1] - 2026-11-25
-
-> 范围＝`2026.11.25` 正式版（`452692060`）之后到本版发行提交的增量，3 个用户可感 `src/main` 任务面：T-ServiceJoinWrapperPreview（D256，`736b6a272` 合流）、T-AutoShowYield（`12b84ae03`）、T-SqlLogSettingsJumpAnchor（`52322da26`）；其余 `fbe0ce7aa` / `dd402368c` 等为 CI / 计划 / 索引 / 记忆精简类提交。基号 `2026.11.25` 今日已被正式版占用，按版本号规范换次日基号起 beta.1。逐条根因、真机读数与反向验证见 `docs/发行说明/20261125-1630-自动开窗让位与设置落点及自研Wrapper预览-内测说明.md` 与 `docs/开发计划/` 对应计划文档
-
-### Added
-- **自研 Wrapper 子类（MPJ 套壳封装）现在能预览了（T-ServiceJoinWrapperPreview，D256，`736b6a272`）**：`CustomJoinWrapper extends AbstractLambdaJoinBaseWrapper<…>` 这类把 MPJ 整套复制改名、或在自己框架里再包一层的 Wrapper，此前插件只认官方类名——声明行没有 gutter 图标，Service 封装里的 `repository.selectJoinList(Dto.class, wrapper)` 点了没反应。现在沿类型父链识别（FQN 前缀 / 接口同名组合 / 依赖未索引时按链方法兜底），声明行与 `selectJoinList` / `selectJoinOne` / `selectJoinMap` / `selectJoinCount` 调用行都能直接预览；join 消费族同时加了守卫，不会再在 wrapper 未识别时输出 `WHERE id IN (?, ...)` 这类凭空条件的错误 SQL。
-
-### Changed
 - **发现 SQL 自动打开日志窗口不再顶掉你正在用的面板（T-AutoShowYield，`12b84ae03`）**：新 UI 同一侧栏同一时刻只显示一块面板，此前自动展开会把正在使用的 API 调试 / HTTP Client / Database 顶掉（表现为「我在看接口响应，日志窗抢上来了」）。现在同一侧栏已有其他工具窗口在显示时不展开，SQL 照常捕获、切回面板即可看到；设置页 SQL 日志组新增子开关「自动展开时让位给正在使用的面板」（默认开，父开关关闭时禁用），关掉即恢复每次必开。
 
-### Fixed
-- **从日志面板点「设置」不再停在 SQL 日志页中间（T-SqlLogSettingsJumpAnchor，`52322da26`）**：设置页按页面缓存内容与滚动位置，齿轮入口只切页不做定位，于是 SQL 日志这种多分组长页会沿用上次停的位置。现在只切页时落点复位到页顶；搜索与引导链接的带目标定位（滚动 + 高亮）不受影响。
+- **gutter 判定顺序与补全预热的内部提速（T-PerfSweep34 券04、券03，`a33d99a4a` + `0b581d5b1`）**：4 个图标 provider 原先对每个语法元素都先读一次插件设置再判断「这个元素是不是我的目标」，现在先做那个几乎零成本的判断；补全上下文预热加了每项目次数上限，冷启动后连续打开很多 mapper 文件时不再每个文件都触发一次较重的实体解析预热（与同批的装配预热同口径，每项目最多 2 个文件）。纯内部重排与节流，无行为变化，首次点击预览/补全仍命中热缓存。
 
 ## [2026.11.25] - 2026-11-25
 

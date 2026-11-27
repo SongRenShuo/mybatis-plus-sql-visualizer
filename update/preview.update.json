@@ -1,7 +1,7 @@
 {
-  "version": "2026.11.27-beta.1",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.27-beta.1/mybatis-plus-sql-visualizer-2026.11.27-beta.1.zip",
-  "changeNotes": "Mapper 接口方法行新增预览图标, 点图标或按 Alt+Shift+Q 直接预览对应 XML 语句, 让位时只让跳转预览保留\n自研 Wrapper 子类现在也能预览了, 沿类型父链识别 MPJ 套壳封装, 声明行与 selectJoinList 等调用行都能直接预览\n方法行两枚图标锁定为预览在左跳转在右, 改用 alignment 分列排布, 真机多轮复用与注册顺序不再影响左右序\n方法行的 Wrapper 参数不再多出一枚重复预览图标, 无方法体的接口参数只作占位符不标\n注解 SQL 的快捷键按方法定位, 光标停在方法声明行直接出该方法自己的 @Select 等语句, 不再弹全文件列表\n修复 Mapper 接口方法上按快捷键预览时在 UI 线程查索引, 并补上 Repository 声明行同一处兜底漏掉的第二分支\n修复缺失片段框点从文件选择后选完不回填, 回填不再排在等模态框关闭的队列上\n修复两个应用同时开着时先启动的那个不再丢 SQL, 捕获通道先于捕获开启装配, 先建的控制台也能自动生效\n修复从日志面板点设置停在 SQL 日志页中间的问题, 只切页时落点复位到页顶, 带目标定位不受影响\njoin 消费族加了守卫, wrapper 未识别时不再输出 WHERE id IN 这类凭空条件的错误 SQL\n让位开关切换不再触发全项目重新分析, 只重算当前打开着的文件\n发现 SQL 自动打开日志窗不再顶掉正在用的面板, 同侧已有工具窗时不展开, 设置页新增让位子开关\ngutter 判定改为先做低成本判断, 补全上下文预热加了每项目次数上限",
+  "version": "2026.11.27",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.27/mybatis-plus-sql-visualizer-2026.11.27.zip",
+  "changeNotes": "Mapper 接口方法行新增预览图标, 点图标或按 Alt+Shift+Q 直接预览对应 XML 语句, 让位时只让跳转预览保留\n自研 Wrapper 子类现在也能预览了, 沿类型父链识别 MPJ 套壳封装, 声明行与 selectJoinList 等调用行都能直接预览\n方法行两枚图标锁定为预览在左跳转在右, 改用 alignment 分列排布, 真机多轮复用与注册顺序不再影响左右序\n方法行的 Wrapper 参数不再多出一枚重复预览图标, 无方法体的接口参数只作占位符不标\n注解 SQL 的快捷键按方法定位, 光标停在方法声明行直接出该方法自己的 @Select 等语句, 不再弹全文件列表\n修复两个应用同时开着时先启动的那个不再丢 SQL, 捕获通道先于捕获开启装配, 先建的控制台也能自动生效\n修复预览链两处 UI 线程卡顿与一处回填丢失, 兜底锚点解析移到后台线程, 缺失片段选完即回填\n修复从日志面板点设置停在 SQL 日志页中间的问题, 只切页时落点复位到页顶, 带目标定位不受影响\njoin 消费族加了守卫, wrapper 未识别时不再输出 WHERE id IN 这类凭空条件的错误 SQL\n让位开关切换不再触发全项目重新分析, 只重算当前打开着的文件\n发现 SQL 自动打开日志窗不再顶掉正在用的面板, 同侧已有工具窗时不展开, 设置页新增让位子开关\ngutter 判定改为先做低成本判断, 补全上下文预热加了每项目次数上限",
   "publishDate": "2026-11-27",
   "sinceBuild": "243"
 }
