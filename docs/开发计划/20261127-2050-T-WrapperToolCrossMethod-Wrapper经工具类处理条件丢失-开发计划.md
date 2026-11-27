@@ -719,3 +719,31 @@ Map 条件族实参是 `Map` 不是 Wrapper，不进 `hasWrapperTypedArgument`�
 **教训**：多路并行车道的验收不能只看「各自全绿」。本轮的教训是——
 **任何涉及同一语义链（收集 → 解析 → 判定）的多处修复，必须在合并后重新验证该链的端点行为**，
 因为每处修复都可能改变另一处所依赖的前提。
+
+### CI 全量暴露的第二个 A 侧回归：白名单漏 UPDATE 赋值族
+
+`run 46035409349` 分片 1 报 2 例红，都是 A 的修 4（伪条件守卫）误伤：
+
+| 用例 | 期望 | 实际 |
+|---|---|---|
+| S58 update setSql 与 set 混合 | `SET status = 2, updated_at = now()` | `SET status = 2`（setSql 被剔） |
+| testStringUpdateWrapperSetSqlAndStringColumn | `SET use_total = use_total + 1` | SET 为空 |
+
+**根因**：`CONDITION_CHAIN_METHOD_NAMES` 只列了 `set`/`last`/`apply`/`eqSql` 等，
+漏了 `setSql`/`setIncrBy`/`setDecrBy`/`setIfExists`。而 `isPseudoConditionCall` 的类型兜底
+（qualifier 是 Wrapper 类型就放行）在**链式写法**下失效——
+`new LambdaUpdateWrapper<>().set(...).setSql(...)` 里 `setSql` 的 qualifier 是 `set(...)`
+的方法调用，`qualifier.type` 解析不出 Wrapper。
+
+**这暴露的设计缺陷**：白名单必须与 **converter 的能力面同源**，不能只列「看起来像条件」的方法。
+同一个坑本轮踩了两次（另一次是 B 自己发现的逻辑删除六方法 + `on(...)` 误报）。
+建议后续把「白名单 ↔ converter 支持方法集」做成守卫用例，防止再漏。
+
+**修复**：`a3e9b15e1`，补全四个方法；本地 `SqlPreviewSpecMatrixAdvancedTest` + `SqlPreviewServiceTest` 全绿。
+
+### 与既有失败的区别（不是本轮引入）
+
+`DemoMpChainAnchorCensusTest` 也在分片 1 报红，但**master 上同样红**——
+比对 `run 46029337966`（sha `4823faadc`）的同一条用例，失败读数一字不差
+（期望 36/49/104，实际 `[36, 53, 65, 79, 94, 108, 120, 134, 147, 159, 172, 186, 200, 211, 227, 228, 241]`）。
+既有问题，不属本轮修复范围，已在计划里销号留痕。
