@@ -205,41 +205,62 @@ class PluginXmlStructureGuardTest {
     }
 
     /**
-     * 二维码卡片的两列须显式等宽（2026-11-03 线上报障：作者微信码明显大于交流群码）。
+     * 二维码卡片：单元格里只放图片，两张图尺寸相等（2026-11-27 线上报障：两张码「没对齐」，上次修的一版没生效）。
      *
-     * 根因不在图片本身（两张源图都是 220×220，内容留白也一致），而在 Marketplace 描述区样式
-     * `.mdContent img{width:100%;max-width:800px}`：**CSS 盖掉了 `<img width="200">` 这个表现属性**，
-     * 图片改为撑满所在 `<td>`。两个 `<td>` 都不写 width 时，auto table layout 的列宽由单元格里
-     * 说明文字长度决定——左列文字更长就更宽，于是左边那张码更大（按线上同款样式本地复现 526px vs
-     * 368px，比例 1.43 与线上截图 448 vs 313 一致）。
+     * 上一版（2026-11-03）的判据是「两个 `<td>` 写同样的 width」，那修的是**水平轴**。2026-11-27 截图实测
+     * 推翻了这个方向：左码 w=178 / 右码 w=179（宽度本就相等，列间距 206 ≈ width 200 + 边框），真正的偏差是
+     * **右码整体下移 7px**（y 起点 440 vs 447）。
      *
-     * 修法＝给两个 `<td>` 写同样的 width：单元格定宽后 img 撑满的宽度也相同。平台白名单佐证：
-     * 线上描述里 `<td>` 的 align 被剥掉、`<img>` 的 width 保留，与 jsoup `Safelist.relaxed`
-     * （td/img 均含 width、td 无 align）一致，故 td 的 width 可用。
+     * 垂直错位的成因：`<td>` 的 `align` / `valign` 都会被平台白名单剥掉（jsoup `Safelist.relaxed` 的 td
+     * 只留 `abbr/axis/colspan/rowspan/width`，无 align/valign）→ 默认 `vertical-align: middle`。两列说明
+     * 文字行数不同（3 行 vs 2 行）时，内容少的列整体向下居中，图片起点自然偏低。
+     *
+     * 所以修法不能靠属性对齐，只能靠**内容等高**：表格单元格里只放一张同尺寸的 `<img>`，说明文字移到表格外
+     * 的独立段落。两列内容同高 → 无垂直居中偏移；列宽由图片唯一决定 → 两列等宽。已在 IDE 自带 JBR 25
+     * （Swing `JEditorPane + HTMLEditorKit`，即 IDE 插件页的渲染器）实测通过。
+     *
+     * 附带事实：`<td width>` 在 IDE 插件页的 Swing 渲染器里**跨 JDK 行为分裂**——JBR 25 正常，JDK 8 会把
+     * 右码整体挤出可视区，因此这个属性也一并弃用，不再作为对齐手段。
      */
     @Test
-    fun `二维码卡片两列须显式等宽`() {
+    fun `二维码卡片只放图片且两图等尺寸`() {
         val desc = rawDescription()
-        val cells = Regex("""<td\b([^>]*)>\s*<img\b[^>]*src="[^"]*qr\.(?:png|jpg)"[^>]*>""").findAll(desc).toList()
+        val cells = Regex("""<td\b[^>]*>(.*?)</td>""", RegexOption.DOT_MATCHES_ALL)
+            .findAll(desc)
+            .filter { it.value.contains("qr.") }
+            .toList()
         assertHolds("描述中二维码卡片应为 2 个（实际 ${cells.size}）", cells.size == 2)
 
-        val tdWidths = cells.map { cell ->
-            Regex("""\bwidth\s*=\s*"(\d+)"""").find(cell.groupValues[1])?.groupValues?.get(1)
+        // 单元格里不得再有说明文字：行高不等会让两列内容各自 vertical-align:middle 居中，图片上下错位
+        cells.forEachIndexed { i, cell ->
+            val inner = cell.groupValues[1]
+            val withoutAlt = inner.replace(Regex("""alt="[^"]*""""), "")
+            assertHolds(
+                "第 ${i + 1} 个二维码单元格里不该有说明文字（<td> 的 align/valign 会被平台白名单剥掉，" +
+                    "行高不等会让两列内容各自居中、图片垂直错位；说明请放到表格外的 <p>）：$inner",
+                !withoutAlt.contains("<b>") && !Regex("""[\u4e00-\u9fa5]""").containsMatchIn(withoutAlt),
+            )
         }
-        assertHolds(
-            "二维码卡片的 <td> 须显式写 width（缺省时 Marketplace 的 img{width:100%} 让两列按说明文字长度" +
-                "一大一小）：实际 $tdWidths",
-            tdWidths.all { it != null },
-        )
-        assertHolds("二维码卡片两个 <td> 的 width 须相同（实际 $tdWidths）", tdWidths.distinct().size == 1)
 
-        val imgWidths = cells.map { cell ->
-            Regex("""<img\b[^>]*\bwidth\s*=\s*"(\d+)"""").find(cell.value)?.groupValues?.get(1)
+        // 两张图的显式尺寸必须存在且相同——这是不同渲染器（浏览器 CSS 覆盖 / Swing 表现属性）下唯一稳定的等宽依据
+        val imgSizes = cells.map { cell ->
+            val tag = Regex("""<img\b[^>]*>""").find(cell.value)?.value ?: ""
+            Pair(
+                Regex("""\bwidth\s*=\s*"(\d+)"""").find(tag)?.groupValues?.get(1),
+                Regex("""\bheight\s*=\s*"(\d+)"""").find(tag)?.groupValues?.get(1),
+            )
         }
         assertHolds(
-            "二维码 <img> 的 width 须与所在 <td> 的 width 一致（Marketplace 下 img 按 td 撑满，两者不一致" +
-                "会误导后续维护）：td=$tdWidths img=$imgWidths",
-            tdWidths == imgWidths,
+            "二维码 <img> 须显式声明 width 与 height（两图尺寸是不同渲染器下唯一稳定的等宽依据）：实际 $imgSizes",
+            imgSizes.all { it.first != null && it.second != null },
+        )
+        assertHolds("二维码两张 <img> 的 width/height 须彼此相等（实际 $imgSizes）", imgSizes.distinct().size == 1)
+
+        // 白名单会剥 align / valign，写了只是误导维护者以为对齐有保障
+        assertHolds(
+            "描述里的 <td> 不要写 align / valign（平台白名单会剥掉，见 jsoup Safelist.relaxed）：" +
+                "实际=${Regex("""<td\b[^>]*\b(?:align|valign)\s*=\s*"[^"]*"""").findAll(desc).map { it.value }.toList()}",
+            !Regex("""<td\b[^>]*\b(?:align|valign)\s*=""").containsMatchIn(desc),
         )
     }
 
