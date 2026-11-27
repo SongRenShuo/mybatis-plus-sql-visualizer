@@ -731,6 +731,54 @@ class WrapperToolClassReproTest : BasePlatformTestCase() {
         assertTrue("工具类内部的 ne 应被收集：$calls", "ne" in calls)
     }
 
+    /**
+     * REPRO-16（护栏，D264 修 1）：**互递归 helper** 必须能有限步终止。
+     *
+     * `a()` 调 `b(w)`、`b()` 调 `a(w)`——递归展开若没有「深度上限 + 方法身份 visited 门」，
+     * 这条语料会直接把 EDT 预览线程打爆（栈溢出/卡死 IDE）。
+     * 断言只要求「能返回且外层 eq 在链上」，不要求内部条件齐全：环上的方法体各收集一次即停。
+     *
+     * 用户 2026-11-27 追加硬约束：深度/环防护缺一不可，本用例是该约束的可回归证据。
+     */
+    fun testReproMutualRecursionTerminates() {
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<>();
+                    w.eq(DeviceInfoEntity::getId, 1L);
+                    FilterUtil.a(w);
+                    mapper.selectList(w);
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                    private Integer status;
+                }
+
+                static class FilterUtil {
+                    static void a(LambdaQueryWrapper<DeviceInfoEntity> w) {
+                        w.ne(DeviceInfoEntity::getStatus, 1);
+                        b(w);
+                    }
+
+                    static void b(LambdaQueryWrapper<DeviceInfoEntity> w) {
+                        w.isNotNull(DeviceInfoEntity::getId);
+                        a(w);
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+        // 能执行到这里本身就是护栏：无防护的递归会 StackOverflowError / 无限挂起
+        val calls = callsAtConsumer()
+        assertTrue("互递归必须有限步终止且保留外层条件：$calls", "eq" in calls)
+        assertTrue("环上第一次进入的方法体条件应被收集：$calls", "ne" in calls)
+    }
+
     // ------------------------------------------------------------------
     // 装置
     // ------------------------------------------------------------------
