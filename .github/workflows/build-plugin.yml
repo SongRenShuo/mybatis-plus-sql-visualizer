@@ -1034,3 +1034,79 @@ jobs:
 
           "GitHub Release ``$tag``：分支 $env:RELEASE_BRANCH @ $headSha，正文＝本版 change notes（$($bullets.Count) 条）+ 历史折叠（$historyVersions 版 / $historyBullets 条）+ 元信息与反馈，完整说明 $notesUrl" |
             Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+  registry:
+    # 与 publish 并行：两者只共享 gate 这一个前置，谁先跑完都不影响对方，发行总时长不变。
+    # 为什么不挂在 publish 末尾：publish 要传 8MB 附件 + 回读正文，已经是最慢的一段；
+    # Registry 同步还要下载 ~8MB 的 publisher 二进制再发一次网络请求，串上去会白加一到两分钟。
+    needs: [gate]
+    if: ${{ !cancelled() && (inputs.mode == 'publish' || (inputs.mode == 'release' && needs.gate.result == 'success')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # id-token: write 只给本 job——MCP Registry 用 GitHub OIDC 认发布者身份，无需在仓库存任何 secret。
+    # 不放在全局，避免 build/verify/test 那些 job 也多拿一个可签发 OIDC 令牌的能力。
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: 同步到 MCP Registry
+        # 为什么要这一步：mcprush 这类目录**不自己存版本号**，跟随 MCP Registry 记录。
+        # 2026-11-27 查出 11-25/11-26 四次发行漏同步，页面一直停在 2026.11.24-beta.1。
+        # 失败不阻断发行：GitHub Release 与插件包此时已经发出，漏同步只是「目录显示旧版」，补一次即可。
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $version = ((Get-Content 'gradle.properties' | Where-Object { $_ -match '^version=' } | Select-Object -First 1) -replace '^version=', '').Trim()
+          if (-not $version) { throw '未能从 gradle.properties 解析出 version=' }
+
+          $manifest = 'dev-support/mcp-registry/server.json'
+          if (-not (Test-Path -LiteralPath $manifest)) { throw "Registry 清单不存在：$manifest" }
+
+          # 版本号以 gradle.properties 为准，写进清单再发布。清单里的 version 只是上一次的残留值，
+          # 不靠人工记得改——本次连漏四版就是因为靠人记。
+          $json = Get-Content -LiteralPath $manifest -Raw -Encoding utf8 | ConvertFrom-Json
+          $json.version = $version
+          $rendered = $json | ConvertTo-Json -Depth 8
+          Set-Content -LiteralPath $manifest -Value $rendered -Encoding utf8NoBOM
+          Write-Host "Registry 清单版本改写为 $version"
+
+          # publisher 二进制走 GitHub Release 取，不用 npm 上同名包（那个是第三方浏览器自动化工具，不是官方的）
+          $pubDir = Join-Path $env:RUNNER_TEMP 'mcp-publisher'
+          New-Item -ItemType Directory -Force -Path $pubDir | Out-Null
+          $tarball = Join-Path $pubDir 'mcp-publisher.tar.gz'
+          $url = 'https://github.com/modelcontextprotocol/registry/releases/download/v1.8.16/mcp-publisher_linux_amd64.tar.gz'
+          Invoke-WebRequest -Uri $url -OutFile $tarball -UseBasicParsing
+          tar -xzf $tarball -C $pubDir
+          $exe = Join-Path $pubDir 'mcp-publisher'
+          if (-not (Test-Path -LiteralPath $exe)) { throw "解压后没有 mcp-publisher：$pubDir" }
+          chmod +x $exe
+          & $exe --version
+
+          # OIDC 登录：GitHub Actions 专用，凭 id-token: write 换 Registry JWT。
+          # publish 默认读 ./server.json，所以在清单目录下执行。
+          Push-Location (Split-Path -Parent $manifest)
+          try {
+            & $exe login github-oidc
+            if ($LASTEXITCODE -ne 0) { throw 'login github-oidc 失败（检查本 job 的 id-token: write 权限）' }
+            & $exe publish
+            if ($LASTEXITCODE -ne 0) { throw 'publish 失败' }
+          } finally {
+            Pop-Location
+          }
+
+          # 回读校验：Registry 必须收录本版
+          Start-Sleep -Seconds 3
+          $resp = Invoke-RestMethod -Uri 'https://registry.modelcontextprotocol.io/v0/servers?search=mybatis-plus-sql-visualizer' -UseBasicParsing
+          $hit = @($resp.servers) | Where-Object {
+            $_.server.version -eq $version -and $_.server.name -eq 'io.github.SongRenShuo/mybatis-plus-sql-visualizer'
+          } | Select-Object -First 1
+          if (-not $hit) { throw "Registry 回读没找到 $version，发布可能未生效" }
+          Write-Host "Registry 已收录 $version"
+
+          "MCP Registry：已同步 $version（login github-oidc，无 secret），回读命中。" |
+            Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
