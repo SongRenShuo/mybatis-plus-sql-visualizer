@@ -433,18 +433,21 @@ SqlPreviewServicePreviewTest > testD264ConditionlessChainWithUnknownMethodRefuse
 钉住（同时断言 `id = 1001` 条件仍正常产出）。同类候选已排查：`selectByMap` / `removeByMap` 等
 Map 条件族实参是 `Map` 不是 Wrapper，不进 `hasWrapperTypedArgument`，修 0 不误伤。
 
-**定向读数（同机两遍，取第二遍）**
+**定向读数（同机两遍，取第二遍；白名单补全后的最终一轮，`BUILD SUCCESSFUL`）**
 
-| 测试类 | 例数 | 失败 | 第二遍耗时 |
+| 测试类 | 例数 | 失败 | 耗时 |
 |---|---|---|---|
-| `QueryWrapperParserTest` | 30 | 0 | 0.158s |
-| `BatchOperationJoinGuardTest` | 8 | 0 | 17.253s |
-| `SqlPreviewServicePreviewTest` | 21 | 0 | 7.429s |
+| `QueryWrapperParserTest` | 30 | 0 | 0.125s |
+| `BatchOperationJoinGuardTest` | 8 | 0 | 11.353s |
+| `SqlPreviewServicePreviewTest` | 21 | 0 | 3.827s |
+| `SqlPreviewServiceLogicDeleteAndChainTest`（白名单反向守卫） | 18 | 0 | 3.949s |
 
-> 第一遍（`QueryWrapperParserTest` + `SqlPreviewServicePreviewTest`）出现过 3 例失败与
-> `EOFException` / `ServiceNotReadyException`——同时有 D264-A 会话在同一 build 目录跑测试，
-> 属并发串扰；单独复跑同类用例全绿。这不是本车道的读数，如实登记。
-> 修 5 白名单补全后的 `SqlPreviewServiceLogicDeleteAndChainTest` 因并发槽位已满（3 路）未能取得读数，交回收口阶段复跑。
+合计 77 例 / 0 失败。
+
+> 首轮（修 5 白名单补全前）曾出现 3 例失败 + `EOFException` / `ServiceNotReadyException`：
+> 当时另有 D264-A 会话在同一份 build 目录跑测试，属并发串扰；单独复跑全绿。
+> 另有两轮因并发争用失败在构建阶段（`engine-jar/compileKotlin` 产物被删、`prepareTestSandbox`
+> 拷贝 `panweidb-jdbc-2.0.0.jar` 撞文件锁），均与代码无关，重试即过。如实登记，不当作绿。
 
 ### 教训预登记
 
