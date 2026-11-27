@@ -9,6 +9,7 @@ import cn.song.mybatisplus.visualizer.sql.perf.rules.PerfRulesBatch1
 import cn.song.mybatisplus.visualizer.sql.perf.rules.PerfRulesBatch2
 import cn.song.mybatisplus.visualizer.sql.perf.rules.PerfRulesBatch3
 import cn.song.mybatisplus.visualizer.sql.perf.rules.PerfRulesBatch4
+import cn.song.mybatisplus.visualizer.sql.perf.rules.PerfRulesBatch5
 import net.sf.jsqlparser.statement.Statement
 
 /**
@@ -23,7 +24,7 @@ import net.sf.jsqlparser.statement.Statement
  *  3. [PerfRuleEngine] 应用所有已注册规则；
  *  4. 返回 [PerfWarning] 列表（最多 10 条）。
  *
- * 规则注册在 init 块中完成（四批共 21 条规则）。
+ * 规则注册在 init 块中完成（五批共 22 条规则）。
  *
  * 性能约束：
  *  - 典型 SQL（< 1000 字符）分析耗时 < 50ms；
@@ -44,11 +45,12 @@ object SqlPerfAnalyzer {
     }
 
     init {
-        // 注册四批规则（共 21 条）
+        // 注册五批规则（共 22 条）
         PerfRuleEngine.registerAll(PerfRulesBatch1.all)
         PerfRuleEngine.registerAll(PerfRulesBatch2.all)
         PerfRuleEngine.registerAll(PerfRulesBatch3.all)
         PerfRuleEngine.registerAll(PerfRulesBatch4.all)
+        PerfRuleEngine.registerAll(PerfRulesBatch5.all)
     }
 
     /**

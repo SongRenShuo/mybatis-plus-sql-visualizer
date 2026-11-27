@@ -14,7 +14,7 @@ import kotlin.coroutines.coroutineContext
 /**
  * sqlv_perf_advice 工具（T-McpToolset2 / T-MTS2-01，R1 纯逻辑）：SQL 性能建议。
  *
- * 复用 F-2 的 SqlPerfAnalyzer（21 条规则引擎，规则内缓存）；警告经
+ * 复用 F-2 的 SqlPerfAnalyzer（22 条规则引擎，规则内缓存）；警告经
  * [MpSqlVisualizerBundle.messageEn]（bundle base 即英文，零新键）渲染为 agent 面英文，
  * 未识别键诚实输出键名。纯静态分析，不触数据库。
  * 逻辑分层同 [SqlVisualizerCheckSqlTool]：[perfAdvice] 纯函数可测，挂起方法只做 audit 包装。
@@ -24,7 +24,7 @@ open class SqlVisualizerPerfAdviceTool : McpToolsetSupport("sqlv_perf_advice") {
 
     companion object {
         /**
-         * 建议条数预算（21 条规则多命中理论上可超）：超限按 SEVERITY 等级序先裁低级
+         * 建议条数预算（22 条规则多命中理论上可超）：超限按 SEVERITY 等级序先裁低级
          * （ERROR > WARN > INFO，高危建议不因预算丢失），计数后缀恒可见。阈值宽于正常
          * 产出（日常 SQL 命中为个位数）——少于上限的输出逐字节与无预算版本一致（防回归硬门禁）。
          */
