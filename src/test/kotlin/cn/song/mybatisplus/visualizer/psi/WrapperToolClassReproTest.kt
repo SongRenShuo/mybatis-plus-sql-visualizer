@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.psi
 
 import cn.song.mybatisplus.visualizer.converter.QueryWrapperParser
+import cn.song.mybatisplus.visualizer.model.WrapperArg
+import cn.song.mybatisplus.visualizer.model.WrapperChain
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiMethodCallExpression
@@ -528,11 +530,15 @@ class WrapperToolClassReproTest : BasePlatformTestCase() {
     }
 
     /**
-     * REPRO-12：嵌套 lambda **代码块体**里调用辅助方法。
+     * REPRO-12：嵌套 lambda **代码块体**里掺入非条件调用。
      *
-     * `resolveNestedLambda` 的代码块分支把块内**所有** `PsiMethodCallExpression` 都收进链
-     * （`ArgResolver.kt:181-184`，无 Wrapper 方法判定），因此 `helper(foo)` 这种非条件调用
-     * 会被当成条件方法——与 REPRO-5 的 `[buildQuery]` 同源的伪条件面，但这里在嵌套 lambda 里。
+     * `resolveNestedLambda` 的代码块分支历史上把块内**所有** `PsiMethodCallExpression` 都收进链
+     * （`ArgResolver.kt:181-184`，无 Wrapper 方法判定），因此 `trim()` 这种非条件调用也会变成
+     * `WrapperCall`——撞上 MP 条件方法名时就渲染出语义完全错误的 SQL。
+     *
+     * 断言口径：`and(x -> {...})` 的块内条件按设计落在 `and` 的 [WrapperArg.NestedArg] 里
+     * （外层链只有 `[eq, and]`，见 `WrapperLocatorTest.testAndOrNestedLambda` 的既有契约），
+     * 所以这里断言**摊平后的有效条件集**与最终 SQL，而不是只看外层链。
      */
     fun testReproNestedLambdaBlockWithHelperCall() {
         myFixture.configureByText(
@@ -560,9 +566,49 @@ class WrapperToolClassReproTest : BasePlatformTestCase() {
             }
             """.trimIndent(),
         )
-        val calls = callsAtConsumer()
-        assertTrue("嵌套链至少应收集外层 eq 与内层 ne：$calls", calls.containsAll(listOf("eq", "ne")))
+        val calls = flattenedCallsAtConsumer()
+        assertTrue("嵌套链应收集外层 eq 与块内 ne：$calls", calls.containsAll(listOf("eq", "ne")))
         assertTrue("块内非条件调用 trim 不得进链：$calls", "trim" !in calls)
+        val sql = sqlAtConsumer()
+        assertTrue("块内 ne 应落成 status 条件，实际 SQL：\n$sql", sql.contains("status <> 1"))
+    }
+
+    /**
+     * REPRO-12b：块内非 Wrapper 调用**撞上 MP 条件方法名**（`select("status")`）。
+     *
+     * 这是无差别收集最坏的一面：被误收的调用不会像 `trim()` 那样在下游被静默丢弃，
+     * 而是真的被当成 `select` 渲染成列，产出语义错误的 SQL。修复后它在语法前门就被挡掉
+     * （无 qualifier，不进链），既不进链也不改变 SELECT 列。
+     */
+    fun testReproNestedLambdaBlockCallCollidingWithMpMethod() {
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<>();
+                    w.eq(DeviceInfoEntity::getId, 1L);
+                    w.and(x -> {
+                        x.ne(DeviceInfoEntity::getStatus, 1);
+                        select("status");
+                    });
+                    mapper.selectList(w);
+                }
+
+                private static void select(String col) { }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                    private Integer status;
+                }
+            }
+            """.trimIndent(),
+        )
+        val calls = flattenedCallsAtConsumer()
+        assertTrue("撞名的工具调用不得进链：$calls", "select" !in calls)
+        assertTrue("块内 ne 仍应收集：$calls", "ne" in calls)
     }
 
     /**
@@ -746,6 +792,26 @@ class WrapperToolClassReproTest : BasePlatformTestCase() {
         val located = WrapperLocator.locateWithTable(anchor)
             ?: fail("在消费行定位不到 Wrapper 链（locateWithTable 返回 null）").let { return emptyList() }
         return located.chain.calls.map { it.methodName }
+    }
+
+    /**
+     * 摊平嵌套链后的方法名序列：外层链按序，遇到 `and/or/nested` 分组调用的
+     * [WrapperArg.NestedArg] 就把子链方法名就地展开（`and(x -> { x.ne(...) })` 的 ne 在子链里）。
+     *
+     * 需要它的理由：嵌套条件按设计不进外层链（`WrapperLocatorTest.testAndOrNestedLambda`
+     * 期望外层 `[eq, and, orderByAsc]`），只看外层链测不出块体收集的完整性。
+     */
+    private fun flattenedCallsAtConsumer(): List<String> {
+        val anchor = consumerAnchor()
+        val located = WrapperLocator.locateWithTable(anchor)
+            ?: fail("在消费行定位不到 Wrapper 链（locateWithTable 返回 null）").let { return emptyList() }
+        return flatten(located.chain)
+    }
+
+    private fun flatten(chain: WrapperChain): List<String> = chain.calls.flatMap { call ->
+        listOf(call.methodName) + call.args
+            .filterIsInstance<WrapperArg.NestedArg>()
+            .flatMap { flatten(it.chain) }
     }
 
     /** 文件里唯一一个 `selectList` 调用（消费行）。 */
