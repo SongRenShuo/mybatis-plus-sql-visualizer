@@ -1482,6 +1482,18 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "灵敏度=删掉 plugin.xml 的 registryKey 或改键名、把消费点改成无参重载、" +
                     "删 en 或 zh 任一侧 standalone 键，对应用例必红。",
             ),
+            GuardEntry(
+                "config/GutterYieldRefreshScopeGuardTest.kt",
+                emptyList(),
+                "T-PerfSweep34 券02 守卫（2026-11-26）：切换「同类插件共存让位」后触发的 gutter 重算" +
+                    "不得退回**无参** `DaemonCodeAnalyzer.restart()`——那是全项目全量重分析（inspection / " +
+                    "annotator / 高亮全部重跑），而触发它的只是一个图标显示开关，成本与意图明显错配。" +
+                    "判据是把 `refreshGutterLineMarkers` 的**方法体**切出来（不是全文扫，避免误伤平台/别处的" +
+                    "合法无参 restart），断方法体内无参 restart 命中为 0、且必须有带实参的 restart 调用。" +
+                    "无「返回违规点集合」的具名判定函数（`bareRestartCount` 返回 Int、`refreshBody` 返回 String），" +
+                    "故 decisionFns 留空；灵敏度=把实现退回无参 restart() → 本类恰 1 红（实施轮实测），" +
+                    "另有合成样本自证用例双向钉住判据（旧形态被识别、修复形态放行）。",
+            ),
         )
     }
 }
