@@ -1,0 +1,13 @@
+diff --git a/src/main/kotlin/cn/song/mybatisplus/visualizer/xml/XmlDirectText.kt b/src/main/kotlin/cn/song/mybatisplus/visualizer/xml/XmlDirectText.kt
+index 4e86d3950..c90af4b76 100644
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/xml/XmlDirectText.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/xml/XmlDirectText.kt
+@@ -22,7 +22,7 @@ import com.intellij.psi.xml.XmlText
+ internal fun directTextOf(tag: XmlTag): String =
+     tag.children
+         .filterIsInstance<XmlText>()
+-        .joinToString("") { decodeXmlTextSegment(it.text) }
++        .joinToString("") { unwrapCdata(it.text) } // REVERSE-PROBE: 摘除实体还原，退回旧拼接口径
+         .trim()
+ 
+ /**

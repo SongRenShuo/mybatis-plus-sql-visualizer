@@ -101,7 +101,7 @@ DOM）、MCP `sqlv_render_sql` 的 mapper 分支（DOM）。
 | hbm 命名查询 | PSI `XmlText.text`（同 `directTextOf`） | **同缺陷**，随主修一起修好 |
 | mapper 语句 / 注解 `<script>` / iBatis / pages / MCP | DOM（`SecureXml.parse`） | 正确，无需改 |
 | 跨命名空间片段传递 | DOM → `serializeChildren` 重新转义 → 再 DOM | 正确（转义-解析往返），无需改 |
-| 独立工作台粘贴（`StandaloneSqlSourceResolver`） | 自写 `replace` 链 | **同类缺口**：不认数字引用（`&#62;`）、CDATA 内会被误解；实现已统一到 [decodeXmlTextSegment] |
+| 独立工作台粘贴（`StandaloneSqlSourceResolver`） | 自写 `replace` 链 | **同类缺口**：不认数字引用（`&#62;`）、CDATA 内会被误解；实现已统一到 `decodeXmlTextSegment` |
 | 配置文件修复（`WorkspaceJsonPropertyRepair`） | 自写单趟解码（含数字引用） | 与本次无关（IDE 配置域），实现本身正确，保留 |
 | 编辑器内补全（`SqlTextAnalysis.stripXmlTags`） | PSI 文档原文 | 需要等长偏移映射，**不得解码**（解码会改变偏移），保持 |
 | PSI 属性值（`id`/`name`/`type`/`entityClass`/`compareValue` 等） | `getAttributeValue` | 承载值均为标识符；动态表达式与 SQL 属性全在 DOM 链消费，无实体面 |
@@ -173,6 +173,53 @@ decodeXmlTextSegment(raw):
 
 ---
 
-## 七、实施记录（收口时回填）
+## 七、实施记录（2026-11-27 收口）
 
-- （待填）改动文件、提交哈希、定向读数、反向验证读数、not run 清单。
+- 提交：`b8e2fcfc7`（master）
+  - `src/main/kotlin/cn/song/mybatisplus/visualizer/xml/XmlDirectText.kt`：新增
+    `decodeXmlTextSegment` / `decodeCharReference`，`directTextOf` 改走实体还原口径
+  - `src/main/kotlin/cn/song/mybatisplus/visualizer/ui/standalone/StandaloneSqlSourceResolver.kt`：
+    整段转义解码收敛到同一实现（同一根因的第三个入口）
+- 测试：
+  - 新增 `src/test/kotlin/.../xml/XmlDirectTextTest.kt`（7 例，先红 5）
+  - `XmlInlineSqlPreviewServiceTest` +2（`<sql id>` 片段端到端、CDATA 字面守卫）
+  - `StandaloneSqlSourceResolverTest` +2（数字字符引用、CDATA 只解一层）
+- 定向读数（修复后，master `b8e2fcfc7`）：`XmlDirectTextTest` 7/0/0、`XmlInlineSqlPreviewServiceTest`
+  11/0/0、`StandaloneSqlSourceResolverTest` 38/0/0、`HbmNamedQueryResolverTest` 8/0/0、
+  `XmlInlineSqlDetectorTest` 19/0/0、`XmlInlineSqlGutterLineMarkerProviderTest` 6/0/0（合计 89 例 0 失败）
+- 反向验证：`dev-support/reverse-probes/xml-entity-decode-disable-decode.patch`（把
+  `directTextOf` 退回 `unwrapCdata`，测试缝保留）——读数见 §八
+- not run：
+  - `testShards` 全量、`verifyGate` / `verifyPlugin` / `buildPlugin`：本次未动构建脚本 / 依赖 /
+    `plugin.xml` EP / 新平台 API 面，按验证三档分层不跑
+  - runIde 沙盒真机点验（需 GUI 操作与用户观察）：**未跑**，列待验证——见 §九
+  - 日志侧（`log/MapperXmlLocator`、`MyBatisNativeWiring`）与补全/注入面只读取 PSI 做定位与高亮，
+    不产出 SQL 文本，未纳入本次验证
+
+## 八、反向验证读数
+
+补丁 `dev-support/reverse-probes/xml-entity-decode-disable-decode.patch`：把 `directTextOf` 的
+`decodeXmlTextSegment(it.text)` 退回 `unwrapCdata(it.text)`（只剥 CDATA 包裹、不做实体还原），
+测试缝原样保留。
+
+`git apply` 后跑锚定两类：
+
+```
+18 tests completed, 6 failed
+```
+
+- 6 红：`XmlDirectTextTest` 5 条（五标准实体与数字引用 / 只解码一次 / 普通文本与 CDATA 混排 /
+  子标签排除 / 比较运算符实体）+ `XmlInlineSqlPreviewServiceTest` 1 条（`<sql id>` 片段端到端）
+- 12 绿是判别面：`CDATA段_字面量不解码`、`未知实体_原样保留` 在摘除实体还原后**仍绿**
+  （这两条咬的是 CDATA 分支与「未知实体保留」分支，与实体还原互不牵连），预览服务其余 10 条
+  （HQL 分派 / 空文本 / 占位符表 / 性能红线）也全绿 ⇒ 红来自「实体还原被摘」而非钝刀
+- `git checkout` 还原后复跑同批：18/0/0（读数见下）
+
+程序化脚本 `reverse_probe.py --patch --base master` 在冷 worktree 上编译超时未跑完（17:0x~17:2x
+仅产出 17 个 class，进程被停），读数以「主仓应用同补丁 + 同锚定类」为准；补丁文件已入库，
+后续可用 `--keep` 复跑。
+
+## 九、待用户确认
+
+1. runIde 沙盒或真机 IDE 打开同形态 `<sql id>` 片段点预览图标，确认面板 SQL 显示 `>=` / `<=`
+   ——本册实施阶段未跑 GUI 点验。

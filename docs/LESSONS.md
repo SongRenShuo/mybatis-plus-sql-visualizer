@@ -1517,6 +1517,23 @@ align 与 valign 都不在），默认 `vertical-align: middle` 下，两列说�
 
 **Seen 1× (2026-11-27)**
 
+### L115 PSI `XmlText.text` 是源文本（实体原样），与 MyBatis 的 DOM 解码语义分叉
+
+**证据**：2026-11-27 用户报「XML 中转义符解析有问题」——`<sql id>` 片段预览的 SQL 里显示
+`WHERE o.update_time &gt;= #{fromTime}`，真机执行必然语法错误。实测（`XmlDirectTextTest` 先红 5 例）：
+`XmlText.text` 对 `&lt;`/`&gt;`/`&amp;`/`&apos;`/`&#62;`/`&#x3C;` 全部原样保留，只有 `&quot;` 被平台
+提前解掉；`<![CDATA[ … ]]>` 也是带包裹的字面全文。mapper 语句链走 DOM（`SecureXml.parse`）本来就
+正确，所以只有「直拼 PSI 文本」的链（`<sql id>` 等通用内嵌 SQL、hbm 命名查询、独立工作台）漏解码
+（`b8e2fcfc7`）。
+
+**正例**：从 PSI 取 XML 文本用于生成 SQL/表达式时按 XML 规则还原——五个标准实体 + 数字字符引用，
+单趟扫描只解一次（`&amp;gt;` 仍是 `&gt;`），CDATA 段保持字面量。排查同类问题时以「产物里还有没有
+`&gt;`」当判据，逐个入口区分「走 DOM」与「走 PSI 原文」。
+**反例**：把 `&lt;`/`&gt;` 原样喂给复制/执行；或用顺序 `replace` 链解码——对 `&amp;gt;` 恰好正确，
+但语义依赖替换顺序，表达不了「只解一次」。
+
+**Seen 1× (2026-11-27)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |

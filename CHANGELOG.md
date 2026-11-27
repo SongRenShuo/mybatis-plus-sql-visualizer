@@ -10,6 +10,8 @@
 
 ### Fixed
 
+- **XML 内嵌 SQL 预览不再把 `&gt;` / `&lt;` 带进产物（T-XmlEntityDecode，`b8e2fcfc7`）**：`<sql id>` 片段、自研框架 XML 载体（`<datasource>` / `<statement>` 等）、hbm 命名查询这三条链原先直接取 IntelliJ PSI 的源文本，XML 实体原样保留——预览面板与「复制 SQL / 执行 SQL」拿到的是 `WHERE o.update_time &gt;= #{fromTime}`，真机执行必然语法错误（用户报障截图形态，编辑器里 `&gt;` 还会被标红）。现在普通文本段按 XML 规则还原：五个标准实体（`&lt;` `&gt;` `&amp;` `&quot;` `&apos;`）加数字字符引用（`&#62;` / `&#x3E;`），单趟扫描只解一次（`&amp;gt;` 仍是 `&gt;`）；CDATA 段保持字面量，与 MyBatis 运行时一致。独立 SQL 预览工作台的「整段网页转义粘贴」解码收敛到同一实现，顺带补上数字引用与 CDATA 保护。mapper 语句与注解 `<script>` 走 DOM 解析，本来就正确，不受影响。
+
 - **两张二维码不再一高一低（T-QrValign，`a7d8063bb`）**：右码此前比左码整体低 7px。上一版按「两个 `<td>` 写同样 width」修，那只管水平轴；真因是 `<td>` 的 `align`/`valign` 都会被平台白名单剥掉（jsoup `Safelist.relaxed` 的 td 只留 abbr/axis/colspan/rowspan/width），默认 `vertical-align: middle` 下两列说明文字行数不同（3 行 vs 2 行）让内容各自居中，图片起点自然错开。现在表格单元格只放图片、说明文字移到表格外的独立段落：两列内容同高，垂直与水平都自然对齐，不再依赖任何会被剥掉的属性。已在 IDE 自带 JBR 25 的 Swing 渲染器（IDE 插件页同款）实测两码顶边齐平。
 
 ## [2026.11.27] - 2026-11-27
