@@ -348,7 +348,90 @@ R7 实测 `[eq, and]`——块内 `ne` 丢了、`and` 只剩空壳。当前实�
 
 ### 修复阶段
 
-（待实施后回填：每步的定向读数、转绿情况、反向验证结果、以及 §六 排查表的逐条结论。）
+#### 车道 C：修 7（L11 / R7）嵌套 lambda 代码块体收集 —— 已完成
+
+范围：只改 `psi/ArgResolver.kt` 的 `resolveNestedLambda`（未动 `WrapperLocator.kt` /
+`BatchOperationConverter.kt` / `QueryWrapperParser.kt` / `SqlPreviewService.kt`；
+`collectCallChain` / `collectChainFromInitializer` / `toWrapperCall` 对外语义未变）。
+
+**实测推翻的一条计划前提（重要，影响 R7 的验收口径）**
+
+计划 §三修 7 与 §二 L11 都写「块内 `x.ne(...)` 的语义没落成条件，实测只剩 `[eq, and]`」。
+实施前用临时探针逐层 dump 证明**这条不成立**：
+
+| 层 | 实测（修复前） |
+|---|---|
+| 外层链 | `[eq, and]` —— `and` 是分组调用，块内条件按设计在它的 `NestedArg` 里 |
+| `and` 的嵌套链 | `[ne, trim]` —— **`ne` 已经在，`trim` 是混进来的脏项** |
+| 解析产物 | `Group(AND, [Simple(status <> 1, op=<>)])` —— `ne` **确实**落成了条件 |
+| SQL 产物 | `WHERE id = 1 AND (status <> 1)` —— 条件完整 |
+
+结论：R7 的 `[eq, and]` 不是「`ne` 丢失」，而是**外层链按设计不含嵌套条件**（同族契约见
+`WrapperLocatorTest.testAndOrNestedLambda:124` 期望外层 `[eq, and, orderByAsc]`）——
+R7 原断言 `callsAtConsumer().containsAll(["eq","ne"])` **测错了层**，永远不可能在外层链上成立。
+真实缺陷只有一半：**非 wrapper 调用被无差别收进嵌套链**。
+
+**修法（§性能硬约束 P1~P7 逐条落地）**
+
+1. 单遍 PSI 子节点遍历 `collectBlockBodyCalls`，边遍历边筛，不做「全量收集 → 逐个 resolve → 过滤」（P1）。
+2. 零成本语法前门 `isParamReference`：qualifier 必须是**裸** `PsiReferenceExpression`
+   （带 `this.`/`holder.` 的引用直接否，**不 resolve**），且 `referenceName` 命中本 lambda 形参名
+   或直接别名（**字符串比较**，无索引查询）；不命中即返回，**不触发任何 resolve**（P1）。
+   效果：`trim()`（无 qualifier）与 `log.info(...)`（名字 `log` 非形参）零 resolve 被挡。
+3. resolve 结论按形参名缓存 `HashMap<String, Boolean>`，同一 lambda 内一个名字最多 resolve 一次（P2）。
+4. 深度防护 `NESTED_LAMBDA_MAX_DEPTH = 5` 在遍历入口先判（`lambdaAncestorDepth`），
+   **早于任何 resolve**；超限直接返回空嵌套链（P4）。
+5. 遍历时**整棵跳过嵌套 lambda 子树**（其条件由 `resolveNestedLambda` 递归为独立 `NestedArg`），
+   避免重复解析与重复计条件（P4）。
+6. 未新增 `ReferencesSearch`（P5）。只取链尾再 `collectCallChain` 回溯整链，链中段不重复计。
+7. 形参直接别名（`Wrapper t = x;`）为纯语法判定（右值是裸引用且名命中形参名），不入 resolve 热路径。
+
+**定向读数**
+
+| 项 | 修复前 | 修复后 |
+|---|---|---|
+| R7 摊平后方法名 | `[eq, and, ne, trim]`（trim 在外层链**和**嵌套链各一份） | `[eq, and, ne]`（trim 不在任何层） |
+| R7 SQL 产物 | `WHERE id = 1 AND (status <> 1)` | `WHERE id = 1 AND (status <> 1)`（不变，本就完整） |
+| 撞名形态 `select("status")` | 进链 → 被当列选择渲染 | 不进链（语法前门挡掉） |
+| `WrapperLocatorTest` | 31 例 0 失败 | 31 例 0 失败 |
+| `SqlPreviewSpecMatrixTest` | 50 例 0 失败 | 50 例 0 失败 |
+| `WrapperToolClassReproTest` | 16 例 9 失败 | 17 例 8 失败（R7 转绿；新增 12b 绿；剩 8 例属车道 A/B 范围） |
+
+整类耗时（同机跑两遍取第二遍，`-Pkotlin.compiler.execution.strategy=in-process`）：
+
+| 类 | 修复前 | 修复后 |
+|---|---|---|
+| `WrapperToolClassReproTest` | 10.594s / 16 例 | 10.278s / 17 例 |
+| `SqlPreviewSpecMatrixTest` | 8.801s / 50 例 | 9.398s / 50 例 |
+| `WrapperLocatorTest` | —（未单记） | 5.182s / 31 例 |
+
+耗时差（+0.6s，同批 98 例整体口径）在噪声量级：断言类本身不触发新的 resolve，
+新增护栏用例只是多跑一次既有链路；后续如需严格证明，可用 `WrapperLocator` 的
+resolve 计数插桩对比，但本轮未做（无现成装置，见 §六之二「性能红线现状」）。
+
+**反向验证（两次，各自贴读数）**
+
+1. 恢复无差别收集 → 临时哨兵 `nested=[ne, trim, like]`，断言 `[ne, like]` **变红**；
+   还原修复后 `nested=[ne, like]` **转绿**。
+2. 恢复无差别收集 → `WrapperToolClassReproTest` 17 例 **10 失败**（R7 与新增 12b 同时变红）：
+   - `testReproNestedLambdaBlockWithHelperCall`：`[eq, and, ne, trim]`，断言 trim 不在链上 → 红
+   - `testReproNestedLambdaBlockCallCollidingWithMpMethod`：`[eq, and, ne, select]` → 红
+   还原修复后回到 17 例 8 失败（且 8 例全是车道 A/B 范围的跨方法形态）。
+
+**新增护栏用例（放在 `WrapperToolClassReproTest`，无临时探针残留）**
+
+- `testReproNestedLambdaBlockWithHelperCall`（改写口径）：摊平嵌套链后断言、并断言 SQL 含 `status <> 1`。
+  配套新增 `flattenedCallsAtConsumer()` / `flatten()` 装置——只看外层链测不出块体收集完整性。
+- `testReproNestedLambdaBlockCallCollidingWithMpMethod`（新增）：块内非 wrapper 调用撞 MP 条件方法名
+  `select("status")`——这是无差别收集**最坏**的一面（被误收的调用真的被渲染成列），修复前必红。
+
+**同类排查表（§六）本车道条目结论**
+
+| 入口 | 结论 |
+|---|---|
+| `resolveNestedLambda` 块体分支 | **已修**（本次） |
+| `collectCallChain` / `collectChainFromInitializer` / `toWrapperCall` | **必须不改**（被 `WrapperLocator` 共用），本次确未改 |
+| `WrapperLocator` / `BatchOperationConverter` / `QueryWrapperParser` / `SqlPreviewService` | 车道 A/B 独占，本车道**未触碰** |
 
 ### 教训预登记
 

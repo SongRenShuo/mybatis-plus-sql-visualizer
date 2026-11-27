@@ -16,9 +16,11 @@ import com.intellij.psi.PsiExpression
 import com.intellij.psi.PsiExpressionList
 import com.intellij.psi.PsiLambdaExpression
 import com.intellij.psi.PsiLiteralExpression
+import com.intellij.psi.PsiLocalVariable
 import com.intellij.psi.PsiMethodCallExpression
 import com.intellij.psi.PsiMethodReferenceExpression
 import com.intellij.psi.PsiNewExpression
+import com.intellij.psi.PsiParameter
 import com.intellij.psi.PsiPolyadicExpression
 import com.intellij.psi.PsiPrefixExpression
 import com.intellij.psi.PsiReferenceExpression
@@ -164,30 +166,153 @@ object ArgResolver {
     // ------------------------------------------------------------------
 
     /**
+     * 嵌套 lambda 的最大祖先层数：超过即不再展开（配合逐层递归构成双保险，防病态嵌套栈溢出）。
+     * 与 `WRAPPER_SUPER_CHAIN_MAX_DEPTH`（类型父链语义）无关，故意独立成常量。
+     */
+    private const val NESTED_LAMBDA_MAX_DEPTH = 5
+
+    /**
      * 解析 `and(w -> w.eq(...).like(...))` 的 Lambda 体为嵌套调用链。
      *
      * 支持两种体：
      *  - 表达式体（方法调用链）：直接收集链
-     *  - 代码块体：收集块内全部方法调用（按源码顺序）
+     *  - 代码块体：只收「qualifier 落在本 lambda 形参（或其直接别名）上的调用」，见 [collectBlockBodyCalls]
      */
     private fun resolveNestedLambda(lambda: PsiLambdaExpression, table: TableInfo?, entityClass: String?): WrapperChain {
-        val body = lambda.body ?: return WrapperChain(WrapperType.NESTED, entityClass, emptyList())
-        val calls = mutableListOf<PsiMethodCallExpression>()
+        val empty = WrapperChain(WrapperType.NESTED, entityClass, emptyList())
+        // 深度防护先于任何 resolve：超限直接放弃展开，深嵌套上不做无效的引用解析
+        if (lambdaAncestorDepth(lambda) > NESTED_LAMBDA_MAX_DEPTH) return empty
+        val body = lambda.body ?: return empty
 
-        when (body) {
+        val calls = when (body) {
             // 表达式体：w.eq(...).like(...)
-            is PsiMethodCallExpression -> calls += collectCallChain(body)
+            is PsiMethodCallExpression -> collectCallChain(body)
 
-            // 代码块体：收集块内所有方法调用
-            else -> PsiTreeUtil.collectElementsOfType(body, PsiMethodCallExpression::class.java)
-                .sortedBy { it.textOffset }
-                .forEach { calls += it }
+            // 代码块体
+            else -> collectBlockBodyCalls(lambda, body)
         }
 
         val wrapperCalls = calls
             .distinctBy { it.textRange.endOffset }
             .map { toWrapperCall(it, table, entityClass) }
         return WrapperChain(WrapperType.NESTED, entityClass, wrapperCalls)
+    }
+
+    /** lambda 的祖先 lambda 层数（顶层 lambda 为 0）。 */
+    private fun lambdaAncestorDepth(lambda: PsiLambdaExpression): Int {
+        var depth = 0
+        var cursor: PsiElement? = lambda.parent
+        while (cursor != null) {
+            if (cursor is PsiLambdaExpression) depth++
+            cursor = cursor.parent
+        }
+        return depth
+    }
+
+    /**
+     * 代码块体 lambda 的条件收集（D264 修 7 / L11）。
+     *
+     * 旧实现对块内**所有**方法调用无差别入链：`trim()` / `log.info(...)` 这类非 wrapper 调用
+     * 也会变成 `WrapperCall`——下游按方法名分派，一旦撞上 `select` / `last` / `apply` 这类
+     * MP 条件名，就会渲染出语义完全错误的 SQL（比丢弃更坏），其余则静默丢弃。
+     *
+     * 现按「qualifier 落在本 lambda 形参（或其直接别名）」筛选，成本口径：
+     *  - 单遍 PSI 子节点遍历边遍历边筛，不做「全量收集 → 逐个 resolve → 过滤」；
+     *  - 语法前门：qualifier 必须是**裸引用**且名字命中本 lambda 形参名（字符串比较），
+     *    不命中立即返回、**不触发 resolve**——`log.info(...)`（名字 `log` 非形参）与
+     *    `trim()`（无 qualifier）都在这一层被挡掉；
+     *  - 命中的名字按名缓存 resolve 结论：同一 lambda 内一个名字最多 resolve 一次；
+     *  - 跳过嵌套 lambda 子树：其条件由 [resolveNestedLambda] 递归解析为独立 NestedArg，
+     *    本层再收一遍会造成重复条件（同族修复见 collectChainFromInitializer 的既有防线）；
+     *  - 只取链尾再回溯整链：`x.eq(a).ne(b)` 的 `eq` 由 [collectCallChain] 补齐，不重复计。
+     */
+    private fun collectBlockBodyCalls(lambda: PsiLambdaExpression, body: PsiElement): List<PsiMethodCallExpression> {
+        val paramByName = lambda.parameterList.parameters
+            .mapNotNull { parameter -> parameter.name?.let { it to parameter } }
+            .toMap()
+        if (paramByName.isEmpty()) return emptyList()
+        val scan = BlockBodyScan(paramByName)
+        scan.visit(body)
+        return scan.chainTails.sortedBy { it.textOffset }.flatMap { collectCallChain(it) }
+    }
+
+    /**
+     * 块体遍历状态：形参名 → resolve 结论缓存、形参直接别名集合、命中的链尾。
+     *
+     * 独立成类只为把可变状态圈在单次 lambda 解析内（不跨 lambda 复用缓存——
+     * 同名形参在不同 lambda 里可以指向不同参数，跨用会误判）。
+     */
+    private class BlockBodyScan(private val paramByName: Map<String, PsiParameter>) {
+
+        /** 命中「qualifier 是形参（或别名）」的链尾调用（源码顺序在调用方排）。 */
+        val chainTails = mutableListOf<PsiMethodCallExpression>()
+
+        /** 形参名 → 该名字的裸引用是否真的解析到本 lambda 形参（每个名字最多 resolve 一次）。 */
+        private val resolvedParams = HashMap<String, Boolean>()
+
+        /** 块内形参直接别名（`Wrapper w2 = x;` 的 `w2`）——纯语法判定，不 resolve。 */
+        private val aliasNames = mutableSetOf<String>()
+
+        /** 单遍子节点遍历：lambda 子树整棵跳过，其余容器递归。 */
+        fun visit(element: PsiElement) {
+            var child = element.firstChild
+            while (child != null) {
+                when {
+                    // 嵌套 lambda：条件归属它自己的 NestedArg，本层不重复收集
+                    child is PsiLambdaExpression -> Unit
+
+                    child is PsiLocalVariable -> {
+                        registerAlias(child)
+                        visit(child)
+                    }
+
+                    child is PsiMethodCallExpression -> {
+                        if (isChainTail(child) && isParamRooted(child)) chainTails += child
+                        // 继续下钻以覆盖调用实参里的 lambda（跳过）与链中段之外的语句容器
+                        visit(child)
+                    }
+
+                    else -> visit(child)
+                }
+                child = child.nextSibling
+            }
+        }
+
+        /** 形参直接别名：`T alias = x;`（右值是裸引用且名字是形参名）。 */
+        private fun registerAlias(variable: PsiLocalVariable) {
+            val initializer = variable.initializer as? PsiReferenceExpression ?: return
+            if (initializer.qualifierExpression != null) return
+            val target = initializer.referenceName ?: return
+            if (target in paramByName) aliasNames += variable.name
+        }
+
+        /** 是否为「另一调用 qualifier 引用」的调用（链中段）——只有链尾回溯整链，避免重复计。 */
+        private fun isChainTail(call: PsiMethodCallExpression): Boolean {
+            val parent = call.parent
+            return !(parent is PsiReferenceExpression && parent.parent is PsiMethodCallExpression)
+        }
+
+        /** 沿链式 qualifier 回溯到链首，判断链首的 qualifier 是否指向本 lambda 形参。 */
+        private fun isParamRooted(call: PsiMethodCallExpression): Boolean {
+            var current: PsiMethodCallExpression = call
+            while (true) {
+                when (val qualifier = current.methodExpression.qualifierExpression) {
+                    is PsiMethodCallExpression -> current = qualifier
+                    is PsiReferenceExpression -> return isParamReference(qualifier)
+                    else -> return false
+                }
+            }
+        }
+
+        /** 零成本前门：非裸引用 / 名字不命中形参名与别名 → 直接否；命中才 resolve，并按名缓存。 */
+        private fun isParamReference(reference: PsiReferenceExpression): Boolean {
+            // 带 qualifier 的引用（`this.x` / `holder.x`）不是形参的直接使用，且无需 resolve
+            if (reference.qualifierExpression != null) return false
+            val name = reference.referenceName ?: return false
+            if (name in aliasNames) return true
+            if (name !in paramByName) return false
+            return resolvedParams.getOrPut(name) { reference.resolve() === paramByName[name] }
+        }
     }
 
     // ------------------------------------------------------------------
