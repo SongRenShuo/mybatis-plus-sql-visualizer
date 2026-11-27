@@ -74,7 +74,10 @@ CSDN 与知乎会自己抓取并转存到各自 CDN；**掘金不会转存**，�
 - 「导入」菜单项文字带 `\u200b`，匹配前要剥零宽字符；`.md` 的 file input 有两个，取最后一个（前一个是「直答知识库」上传器，会永久卡在「上传中」）。
 - 发布设置：封面 file input 的 accept 含 `.jpeg`；话题按正文自动识别；创作声明在 `y≈450` 的下拉里选「包含 AI 辅助创作」。
 
-**掘金（CodeMirror 5 + byte-select）**
+**掘金（bytemd 外壳 + `.CodeMirror` 实例）**
 - 正文 `document.querySelector('.CodeMirror').CodeMirror.setValue(md)`。
 - 标签是 `byte-select`，`input[type=text]` 选不中；先点 `.byte-select__input` 并**确认 `document.activeElement` 就是它**，再输入 `MyBatis`，然后点 `.byte-select__dropdown` 里的 `MyBatis` 选项。焦点没落对时 Ctrl+A 会全选 CodeMirror 正文。
 - 封面 `input.file-input`；「确定并发布」按钮要点可见实例（隐藏模板按钮 `getBoundingClientRect()` 为 0）。
+- **图片不会自动转存**（与 CSDN、知乎不同）。转存办法：`Set-Clipboard -Path <本地图>` → 光标落在正文末尾 → CDP 发 Ctrl+V，掘金会把粘贴的图片上传到 `p0-xtjj-private.juejin.cn` 并插入 markdown；取到该 URL 后把正文里的外链替换掉，最后点「更新 → 确定并更新」。发布的线上页会渲染成 `p3-xtjj-sign.byteimg.com`。
+- 工具栏的图片按钮在无头 CDP 下点不开文件选择框（`Page.setInterceptFileChooserDialog` 也收不到 `fileChooserOpened`，点击会阻塞渲染线程），**剪贴板粘贴是唯一跑通的路径**。
+- 更新后立刻查线上页会看到旧图，是 CDN/页面缓存；用 `?t=<timestamp>` 破除后才看到新地址。
