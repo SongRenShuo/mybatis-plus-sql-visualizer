@@ -171,4 +171,22 @@ val selectChainWarning = (statement as? SelectStatement)
 
 ## 九、实施记录
 
-- 2026-11-28 立项（主控）。代码实施由子代理在独立分支 `t-selchain-guard` + 独立工作树完成，**不合并 master**。
+- 2026-11-28 立项（主控）。代码实施派子代理在独立分支 `t-selchain-guard` + 独立工作树。
+
+- **2026-11-28 销号：本册目标已被 D264 修5 先行实现，不再另行实施。**
+
+  发现过程：派出实施后核查 master CI，发现 D264 车队提交 `d0f904420 feat(preview): D264 修0 拦住 Wrapper 实参的批量兜底 + **修5 未知链方法可见化**`——**同一目标、同一落点**（`QueryWrapperParser` / `SelectStatement` / `SqlPreviewService` 三处），且其实现含本册 §6.3 要求「先枚举后写码」的白名单（`SILENT_METHOD_NAMES`）。子代理已叫停，**零改动**（HEAD 停在基线，无提交）。
+
+  **本册未覆盖 D264 的差异点（唯一一条，值得记）**：D264 记 `unknownMethods: List<String>`（**只记方法名**、按序去重），本册 §2.1 主张记**带实参的调用原文**。后果：`w.statusEq("1").statusEq("2")` 在 D264 下只产出 `["statusEq"]`，面板显示「1 个链方法」，而实际少了两条条件——**计数与内容都不准**。预览按单条链做，严重度低于 UPDATE 的跨段场景，但这是本册唯一未被覆盖的设计点。
+
+  **D264 修5 的四个残留缺口（本册复核后移交，不属本册范围）**：
+  | # | 缺口 | 证据 |
+  |---|---|---|
+  | B | **子查询链的未知方法全丢**：`QueryWrapperParser.kt:510` `new QueryWrapperParser(subTable, …)` 是独立实例，收集器不互通；`and`/`or` 的递归用的是同一实例故会累积，只有子查询这一处丢失 | 主控复核 `:510` 成立 |
+  | C | **UPDATE/DELETE 链未覆盖**：`LambdaUpdateConverter` / `UpdateJoinConverter` / `LambdaDeleteConverter` / `DeleteJoinConverter` 四个转换器**全部零引用** `unknownMethods`；`buildWarning` 守卫是 `(statement as? SelectStatement)`。少条件更新命中行数更多，危险性不亚于 SELECT | 主控 grep 四文件均 0 命中 |
+  | D | **白名单按名全局共享致假阴性**：`MpjQueryConverter.kt:110` 的 `JOIN_METHODS` 只有 `leftJoin`/`innerJoin`/`rightJoin`，但白名单含 `fullJoin`/`union`/`unionAll`/`around`/`from`/`fill` → 这些调用真从 SQL 消失却不报警 | 主控复核 `:110` 成立 |
+  | E | **按「是否识别」而非「是否解析成功」判定**：`last("AND flag = 1")` 走 `parseLimit` 返回 null 被静默丢弃，既不改 SQL 也不进 `unknownMethods` | 主控复核 `:200`/`:623-642` 成立 |
+
+  缺口 A（六个逻辑删除方法 `disableLogicDel`/`enableLogicDel`/`disableSubLogicDel`/`enableSubLogicDel`/`logicDelToOn`/`logicDelToWhere` 会误报）**D264 车道 B 已自行修复**：`9f98d7d9e fix(parser): D264 修5 补静默白名单——逻辑删除控制与 on 不报假警告`（加六个名字 + `on`）。
+
+  → B/C/D/E 四条已整理为交接清单，交由 D264 车队在其集成分支收口；本册不再占实施坑位。

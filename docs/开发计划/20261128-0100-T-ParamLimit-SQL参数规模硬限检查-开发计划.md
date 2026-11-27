@@ -188,4 +188,38 @@ perf.param_limit_exceeded        （英）/ 参数规模超限（中）
 
 ## 九、实施记录
 
-- 2026-11-28 立项（主控）。代码实施由子代理在独立分支 `t-param-limit` + 独立工作树完成，**不合并 master**。
+- 2026-11-28 立项（主控）。代码实施派子代理在独立分支 `t-d272-paramlimit` + 工作树 `mpvs-d272`，**不合并 master**（等用户点名）。
+- **实施完成**（分支 `t-d272-paramlimit`，三笔提交 `f999a0daa` / `1c2790e32` / `a75164afc`）。完整实施记录见分支上同名册的 §9；本册只摘主控复核过的关键读数。
+
+### 9.1 探针读数（§六.3 第一道门）——**推翻了仅靠源码推理会踩的坑**
+
+对 `InExpression.rightExpression` 逐形态实测（JSqlParser 5.3）：
+
+| SQL 形态 | `rightExpression` 实际类型 | 列表在哪 |
+|---|---|---|
+| `id IN (1,2,3)` / `IN (?,?,?)` | `ParenthesedExpressionList` | 右值 |
+| `id IN (SELECT …)` | `ParenthesedSelect` | **无列表** |
+| **`id IN (?,?,?) AND deleted = 0`** | **`AndExpression`** | **左分支** |
+| `a = 1 AND id IN (…)` | `ParenthesedExpressionList` | 右值 |
+| `id IN (…) OR a = 1` | `OrExpression` | 左分支 |
+| `(a,b) IN ((1,2),(3,4))` | `ParenthesedExpressionList` | 右值 |
+
+**关键**：只判 `right is ExpressionList` 会让「`IN (...) AND 其它条件`」这个**最常见的真实批量形态静默漏报**——而它恰恰最可能超 1000 项。实现沿 `AND`/`OR` **向左**解包（语法上 IN 的列表必在段最左）。
+
+### 9.2 主控复核过的三条
+
+| 项 | 复核方式 | 结果 |
+|---|---|---|
+| 双语键数相等 | Python 解析 `k=v` 后求差集 | en 1567 / zh 1567，**双向差集为空** |
+| 方言名表准确 | 直读 `IN_LIST_LIMIT` 源码 | 与 `Dialect.name` 实测字面量一致，含 `DM（达梦）`/`KingBase（人大金仓）` 全角括号、`SQL Server` 中间空格 |
+| 定向测试 | **主控亲自跑** `./gradlew test --tests PerfRulesBatch5Test` | **BUILD SUCCESSFUL**，不采信子代理自报 |
+
+### 9.3 未做（如实登记）
+
+- **未做真机验证**：1000 / 2100 / 65535 三档限值采自官方文档与同类工具共识，**无一份本次实测读数**——这正是达梦与金仓只报 WARN 的直接原因（文案 `perf.param_limit_exceeded_unverified` 自曝「未在真实实例上验证」）。
+- 未跑全量 / `testShards` / `verifyGate` / `verifyPlugin` / `buildPlugin`。
+- 绑定变量总数 65535 维度、MySQL `max_allowed_packet` 维度按 §五 不做。
+
+### 9.4 与既有规则的边界（防重复立项）
+
+仓内已有 `in_clause_overflow` 规则（100 项阈值、无方言上下文、WARN），与本规则**不重叠**：前者管「经验上偏大」，本规则管「方言硬限会炸」。两者并存，互不替代。
