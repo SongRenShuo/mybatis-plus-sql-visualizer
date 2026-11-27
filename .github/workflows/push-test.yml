@@ -138,6 +138,14 @@ jobs:
         with:
           cache-read-only: true
 
+      # T-CiZipFsFlake：只恢复 build job 写入的 IPGP 平台缓存（IDE 布局索引），不写——避免多 job 抢同一个 key。
+      - name: 恢复 IPGP 平台缓存（IDE 布局索引）
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.GRADLE_USER_HOME }}/caches/ipgp-platform-cache
+          key: ipgp-index-${{ runner.os }}-${{ hashFiles('gradle.properties', 'build.gradle.kts', 'buildSrc/**/*.kts', 'gradle/libs.versions.toml') }}
+          restore-keys: ipgp-index-${{ runner.os }}-
+
       - name: 准备测试 demo
         # Demo* 普查用例硬断言 demo 源码存在（clone 到仓库兄弟目录的固定位置）
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File dev-support/test-demo/setup-test-env.ps1 -SkipDb
@@ -217,6 +225,14 @@ jobs:
         uses: gradle/actions/setup-gradle@v5
         with:
           cache-read-only: true
+
+      # T-CiZipFsFlake：只恢复 build job 写入的 IPGP 平台缓存（IDE 布局索引），不写——避免多 job 抢同一个 key。
+      - name: 恢复 IPGP 平台缓存（IDE 布局索引）
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.GRADLE_USER_HOME }}/caches/ipgp-platform-cache
+          key: ipgp-index-${{ runner.os }}-${{ hashFiles('gradle.properties', 'build.gradle.kts', 'buildSrc/**/*.kts', 'gradle/libs.versions.toml') }}
+          restore-keys: ipgp-index-${{ runner.os }}-
 
       - name: 准备测试 demo
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File dev-support/test-demo/setup-test-env.ps1 -SkipDb

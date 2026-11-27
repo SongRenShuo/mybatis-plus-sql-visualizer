@@ -112,6 +112,15 @@ jobs:
         # 缓存 Gradle User Home：verifyPlugin 下载的三版本 IDE 发行版与 verifier-cli 跨轮复用
         uses: gradle/actions/setup-gradle@v5
 
+      # T-CiZipFsFlake：IPGP 平台缓存（IDE 布局索引，实测 <1MB）单独进出缓存——与 Gradle Home 那一坨解耦。
+      # 下游 job 恢复索引后不再逐 job 扫描 database-plugin.jar 里的 plugin.xml 描述符，从源头缩掉
+      # Gradle zip-FS 竞态（ClosedFileSystemException）的暴露面；这里负责写入（只在 build job）。
+      - name: 缓存 IPGP 平台缓存（IDE 布局索引）
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.GRADLE_USER_HOME }}/caches/ipgp-platform-cache
+          key: ipgp-index-${{ runner.os }}-${{ hashFiles('gradle.properties', 'build.gradle.kts', 'buildSrc/**/*.kts', 'gradle/libs.versions.toml') }}
+
       # T-CiMarketSplit（2026-11-05）：build 不再准备测试 demo——它只打包，不跑测试。
       # demo 由 test 各片自己准备（Demo* 普查用例硬断言 demo 源码存在）。省 0.2 分钟且让下游提前起跑。
 
@@ -279,6 +288,14 @@ jobs:
         with:
           cache-read-only: true
 
+      # T-CiZipFsFlake：只恢复 build job 写入的 IPGP 平台缓存（IDE 布局索引），不写——避免多 job 抢同一个 key。
+      - name: 恢复 IPGP 平台缓存（IDE 布局索引）
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.GRADLE_USER_HOME }}/caches/ipgp-platform-cache
+          key: ipgp-index-${{ runner.os }}-${{ hashFiles('gradle.properties', 'build.gradle.kts', 'buildSrc/**/*.kts', 'gradle/libs.versions.toml') }}
+          restore-keys: ipgp-index-${{ runner.os }}-
+
       - name: 下载编译产物
         uses: actions/download-artifact@v8
         with:
@@ -353,6 +370,14 @@ jobs:
         uses: gradle/actions/setup-gradle@v5
         with:
           cache-read-only: true
+
+      # T-CiZipFsFlake：只恢复 build job 写入的 IPGP 平台缓存（IDE 布局索引），不写——避免多 job 抢同一个 key。
+      - name: 恢复 IPGP 平台缓存（IDE 布局索引）
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.GRADLE_USER_HOME }}/caches/ipgp-platform-cache
+          key: ipgp-index-${{ runner.os }}-${{ hashFiles('gradle.properties', 'build.gradle.kts', 'buildSrc/**/*.kts', 'gradle/libs.versions.toml') }}
+          restore-keys: ipgp-index-${{ runner.os }}-
 
       - name: 下载编译产物
         uses: actions/download-artifact@v8
@@ -467,6 +492,14 @@ jobs:
         with:
           cache-read-only: true
 
+      # T-CiZipFsFlake：只恢复 build job 写入的 IPGP 平台缓存（IDE 布局索引），不写——避免多 job 抢同一个 key。
+      - name: 恢复 IPGP 平台缓存（IDE 布局索引）
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.GRADLE_USER_HOME }}/caches/ipgp-platform-cache
+          key: ipgp-index-${{ runner.os }}-${{ hashFiles('gradle.properties', 'build.gradle.kts', 'buildSrc/**/*.kts', 'gradle/libs.versions.toml') }}
+          restore-keys: ipgp-index-${{ runner.os }}-
+
       - name: 下载编译产物
         uses: actions/download-artifact@v8
         with:
@@ -577,6 +610,14 @@ jobs:
         uses: gradle/actions/setup-gradle@v5
         with:
           cache-read-only: true
+
+      # T-CiZipFsFlake：只恢复 build job 写入的 IPGP 平台缓存（IDE 布局索引），不写——避免多 job 抢同一个 key。
+      - name: 恢复 IPGP 平台缓存（IDE 布局索引）
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.GRADLE_USER_HOME }}/caches/ipgp-platform-cache
+          key: ipgp-index-${{ runner.os }}-${{ hashFiles('gradle.properties', 'build.gradle.kts', 'buildSrc/**/*.kts', 'gradle/libs.versions.toml') }}
+          restore-keys: ipgp-index-${{ runner.os }}-
 
       - name: 准备测试 demo
         # testShards 的 Demo* 普查用例硬断言 demo 源码存在（clone 到仓库兄弟目录的固定位置）
@@ -691,6 +732,14 @@ jobs:
         uses: gradle/actions/setup-gradle@v5
         with:
           cache-read-only: true
+
+      # T-CiZipFsFlake：只恢复 build job 写入的 IPGP 平台缓存（IDE 布局索引），不写——避免多 job 抢同一个 key。
+      - name: 恢复 IPGP 平台缓存（IDE 布局索引）
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.GRADLE_USER_HOME }}/caches/ipgp-platform-cache
+          key: ipgp-index-${{ runner.os }}-${{ hashFiles('gradle.properties', 'build.gradle.kts', 'buildSrc/**/*.kts', 'gradle/libs.versions.toml') }}
+          restore-keys: ipgp-index-${{ runner.os }}-
 
       - name: agent 子项目测试
         # agent 子项目不需要 demo 源码与数据库；本腿只验「打进 zip 的 agent jar」的行为面。
