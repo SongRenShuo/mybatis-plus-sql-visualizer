@@ -433,6 +433,15 @@ SqlPreviewServicePreviewTest > testD264WrapperArgButChainUnresolvedRefusesBatchT
 
 第二行即 R10 原始产物逐字复现；探针已移除（`grep "RED PROBE"` 为 0 处），工作树干净。
 
+**收尾复跑未取得读数（如实登记，不当作绿）**
+
+还原探针后的最后一轮同命令复跑，`77 tests completed, 38 failed`，但失败全部由
+`com.intellij.util.indexing.StorageException` / `java.io.EOFException` 触发，随后
+`NoSuchFileException: build/test-results/test/binary/in-progress-results-generic.bin`——
+是另一路会话在同一 build 目录并发跑测试把索引/结果文件踩坏，不是断言失败。
+同机无并发压力的那一轮（四类 77 例 / 0 失败 / `BUILD SUCCESSFUL`）是权威读数；
+**本车道结论以那一轮为准，最后一轮交回收口阶段在无并发条件下复跑**。
+
 **复查修正（第 2 轮，`9f98d7d9e`）：静默白名单漏了 MPJ 逻辑删除控制与 `on`**
 
 修 5 首版的 `SILENT_METHOD_NAMES` 只枚举了「类型互转 / 列结构 / 联表 / 写族 set」，漏掉两类
