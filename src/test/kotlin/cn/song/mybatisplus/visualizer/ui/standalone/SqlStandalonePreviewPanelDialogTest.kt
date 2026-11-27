@@ -27,10 +27,22 @@ class SqlStandalonePreviewPanelDialogTest : BasePlatformTestCase() {
 
     private var panel: SqlStandalonePreviewPanel? = null
 
+    /**
+     * 本用例开始时已存在的登记弹窗（上一例残留）。`awaitDialog` 用它区分「本次新产生」，
+     * 详见 [awaitDialog] 的 L113 说明。
+     */
+    private var baselineDialog: cn.song.mybatisplus.visualizer.ui.SqlPreviewDialog? = null
+
+    override fun setUp() {
+        super.setUp()
+        baselineDialog = SqlPreviewService.activePreviewDialogForTest(project)
+    }
+
     override fun tearDown() {
         runCatching { closeDialog() }
         runCatching { panel?.dispose() }
         panel = null
+        baselineDialog = null
         super.tearDown()
     }
 
@@ -43,14 +55,21 @@ class SqlStandalonePreviewPanelDialogTest : BasePlatformTestCase() {
      * **只认登记事实，不判 `isDisposed`**：headless 测试态没有真实窗口，`DialogWrapper.show()`
      * 返回后弹窗可能立刻处于 disposed（实测 2026-11-18：加 `!isDisposed` 过滤会让 4 条用例全红，
      * 而登记表本身是对的）。真机是否可见由用户 GUI 验收承接。
+     *
+     * **必须排除上一例残留的登记项**（L113，2026-11-27）：`SqlPreviewService.activePreviewDialogs`
+     * 从不删项，`tearDown` 的 `closeDialog()` 只 dispose + clear 面板，槽位仍留着那条已清空的旧弹窗。
+     * 下一例若在异步解析建出新弹窗之前轮询，会把这个残留当成结果——它的面板已被 clear，
+     * 于是 `warning` 永远是空串，等多久都没用。所以这里按「是否本用例新产生」过滤，
+     * 而不是靠加长超时（加长只是把同一个错误轮询得更久）。
      */
     private fun awaitDialog(timeoutMs: Long = 5_000) = run {
+        val stale = baselineDialog
         val deadline = System.currentTimeMillis() + timeoutMs
         var found: cn.song.mybatisplus.visualizer.ui.SqlPreviewDialog? = null
         while (System.currentTimeMillis() < deadline) {
             waitForEdt()
             val candidate = SqlPreviewService.activePreviewDialogForTest(project)
-            if (candidate != null) {
+            if (candidate != null && candidate !== stale) {
                 found = candidate
                 break
             }
@@ -66,11 +85,19 @@ class SqlStandalonePreviewPanelDialogTest : BasePlatformTestCase() {
     }
 
     /**
-     * L90：`awaitDialog()` 拿到弹窗 ≠ 面板的异步装配（编辑器 + 摘要行 + 警示横幅）已经跑完。
-     * 断言「最终会成立的状态」必须轮询到成立；瞬时直读会偶发读到空值（CI 上 961 例只红这 1 例，
-     * 同 src 另一轮全绿——本类 2026-11-20 本地复现同一形态）。
+     * L90：`awaitDialog()` 拿到弹窗 ≠ 面板的可断言状态已经就位。断言「最终会成立的状态」必须轮询。
+     *
+     * **2026-11-27 更正（原注释的「两跳异步压满 5s 窗口」假设已被实测证伪）**：
+     * `SqlPreviewDialog` 的 `init{}` 里就同步调了 `panel.showResult(result)`，warning 是**构造期
+     * 同步写入**的，不存在「等它异步填上」这回事。把上限从 5s 提到 20s 后本地仍红一次，
+     * 诊断消息给出 `panel=true inputLen=63 warning=''`——面板在、输入真的进了编辑器，
+     * 20 秒内 warning 依然为空。所以真因不是超时窗口，而是**偶尔拿到的不是本次该拿的那份结果**
+     * （弹窗单例「关旧开新」与 `tearDown` 的时序竞争：`awaitDialog` 可能命中上一例残留的登记项）。
+     *
+     * 保留轮询上限 20s 只作为兜底，不承担解释责任；诊断消息仍是定位下一跳的主证据。
+     * 真因排查见 docs/LESSONS.md L112 之后的 L113 条（待证据齐后落账）。
      */
-    private fun awaitWarning(dialog: SqlPreviewDialog, timeoutMs: Long = 5_000): String {
+    private fun awaitWarning(dialog: SqlPreviewDialog, timeoutMs: Long = 20_000): String {
         val deadline = System.currentTimeMillis() + timeoutMs
         var last = ""
         while (System.currentTimeMillis() < deadline) {
@@ -130,7 +157,15 @@ class SqlStandalonePreviewPanelDialogTest : BasePlatformTestCase() {
         val dialog = awaitDialog()
         assertNotNull("未识别文本时也必须弹窗（按原文展示）", dialog)
         val warning = awaitWarning(dialog!!)
-        assertTrue("未识别应是信息级说明而非渲染失败：$warning", warning.isNotBlank())
+        // 超时诊断（L90）：把面板是否建出来、输入是否真的进了编辑器一起写进消息——
+        // 只报「warning 为空」无法区分「渲染没跑完」与「弹窗拿到的还是空输入」。
+        assertTrue(
+            "未识别应是信息级说明而非渲染失败：warning='$warning'" +
+                " panel=${dialog.panelForTest() != null}" +
+                " inputLen=${p.inputTextForTest().length}" +
+                " inputHead='${p.inputTextForTest().take(40)}'",
+            warning.isNotBlank(),
+        )
     }
 
     /**
