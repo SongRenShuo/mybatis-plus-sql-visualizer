@@ -691,3 +691,31 @@ Map 条件族实参是 `Map` 不是 Wrapper，不进 `hasWrapperTypedArgument`�
 **无代码语义冲突**：`collectWrapperFlow`（A，跨方法边界）与 `collectBlockBodyCalls`（C，lambda 内部）分属两个文件、无交叉调用，职责正交。
 
 **合并后待验**：A 的定向读数是「R7 仍红（属 C 范围）」，C 修的正是 R7。合并后预期 17 例全绿，需在集成分支上跑一次定向实测确认——**这是本轮唯一还没验证的合并效果**。
+
+### 集成期发现的 A×B 交互缺陷（本轮最有价值的产出）
+
+三车道各自全绿、代码零冲突合并，但**叠加后产生了一个新的错误 SQL 形态**——只有做集成验证才能发现。
+
+**形态**：`mapper.selectList(util.buildQuery(1))`，且 `buildQuery` 是**无 body 的抽象方法**（条件在实现类里，静态不可得）。
+
+**叠加失配过程**：
+1. 车道 A 的修 4（伪条件守卫）把 `buildQuery` 当作「非条件方法」从链上**剔除**；
+2. 于是 `WrapperChain.calls` 变空、`SelectStatement.conditions` 空；
+3. 车道 B 的修 0 守卫条件是 `conditions.isEmpty() && unknownMethods.isNotEmpty()`——
+   而 `unknownMethods` 也空（A 已经把那唯一的方法名剔走了）；
+4. 守卫前提消失 → 放行 → 产出 `SELECT id, status, device_name FROM device_info_entity`（**无 WHERE**）。
+
+**为什么单体测试发现不了**：A 的测试里 `buildQuery` 有 body（能被展开），所以链不空；B 的测试里没有修 4，所以 `buildQuery` 留在链上、`unknownMethods` 非空、守卫正常触发。两边各自都绿。
+
+**修法（集成侧补洞）**：`SqlPreviewService` 的零条件守卫加第二条判据 `conditionlessEmptyChain`——
+`conditions.isEmpty() && chain.calls.isEmpty() && 消费调用实参是 Wrapper 类型`。
+语义：链上空无一物 + 实参仍是 Wrapper = 条件确实全在工具类/被调方法体内，与「有未识别方法」等价危险。
+只在该形态触发；`new LambdaQueryWrapper<>()` 这类用户显式不写条件的空链不受影响（其实参是 new 表达式，非方法调用）。
+
+**验证**：
+- 新增用例 `testD264WrapperFromBodylessMethodNeverProducesConditionlessSql`（`SqlPreviewServicePreviewTest`）；
+- 反向验证：临时关掉 `conditionlessEmptyChain` 判据 → 该用例恰红 1 例、其余 21 例仍绿；恢复后 22 例全绿。
+
+**教训**：多路并行车道的验收不能只看「各自全绿」。本轮的教训是——
+**任何涉及同一语义链（收集 → 解析 → 判定）的多处修复，必须在合并后重新验证该链的端点行为**，
+因为每处修复都可能改变另一处所依赖的前提。

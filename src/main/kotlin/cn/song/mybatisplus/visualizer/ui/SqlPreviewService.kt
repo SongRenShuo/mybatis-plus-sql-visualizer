@@ -446,8 +446,29 @@ class SqlPreviewService(internal val project: Project) {
             // 条件时照常产出（后者由修5的 warning 提示「还有方法没解析」）。
             val conditionlessUnknowns = (statement as? SelectStatement)
                 ?.takeIf { it.conditions.isEmpty() && it.unknownMethods.isNotEmpty() }
-            if (conditionlessUnknowns != null) {
-                val names = conditionlessUnknowns.unknownMethods.joinToString("、") { "`$it`" }
+            // D264 集成期补洞（A×B 交互缺陷）：`mapper.selectList(util.buildQuery(1))` 这种
+            // 「实参是返回 Wrapper 的无 body 方法」形态——A 的修 4 把工具方法名当**伪条件**从链上剔除后，
+            // 链变空、`unknownMethods` 也空，上面那条守卫的前提（链上有未识别方法）随之消失，于是放行
+            // 产出无 WHERE 全表 SQL（实测 `SELECT id, status, device_name FROM device_info_entity`）。
+            // 补一条「链上空无一物 + 实参仍是 Wrapper」：条件确实全在工具类/被调方法体内、静态不可得，
+            // 与「有未识别方法」等价危险，必须一并拒绝。
+            // 只在该形态触发：`new LambdaQueryWrapper<>()` 这种用户显式不写条件的空链仍照常产出
+            // （其实参是 new 表达式而非方法调用，下面的判据取不到 Wrapper 实参）。
+            val conditionlessEmptyChain = (statement as? SelectStatement)?.takeIf { st ->
+                if (st.conditions.isNotEmpty() || located.chain.calls.isNotEmpty()) return@takeIf false
+                val consumerCall = generateSequence(anchor) { it.parent }
+                    .filterIsInstance<PsiMethodCallExpression>()
+                    .firstOrNull() ?: return@takeIf false
+                BatchOperationConverter.hasWrapperTypedArgument(consumerCall)
+            }
+            if (conditionlessUnknowns != null || conditionlessEmptyChain != null) {
+                val names = (conditionlessUnknowns?.unknownMethods ?: emptyList())
+                    .joinToString("、") { "`$it`" }
+                val reason = if (names.isNotEmpty()) {
+                    "链上 $names 无法静态展开，而其余调用不产生任何 WHERE 条件"
+                } else {
+                    "链上没有任何可识别条件（条件可能在工具类或被调方法体内）"
+                }
                 LOG.info("preview: REFUSE_CONDITIONLESS unknown=$names, anchor=${anchor.textRange}")
                 val refused = PreviewResult(
                     sql = "",
@@ -456,9 +477,8 @@ class SqlPreviewService(internal val project: Project) {
                     paramTable = null,
                     wrapperType = located.chain.wrapperType,
                     tableName = table.tableName,
-                    warning = "⚠ 检测到 Wrapper，但无法解析其条件链：链上 $names 无法静态展开，" +
-                        "而其余调用不产生任何 WHERE 条件。为避免输出**缺少 WHERE 的全表 SQL**，" +
-                        "此处不提供预览（条件可能在工具类/被调方法里）。",
+                    warning = "⚠ 检测到 Wrapper，但无法解析其条件链：$reason。" +
+                        "为避免输出**缺少 WHERE 的全表 SQL**，此处不提供预览。",
                     renderedDialect = dialect,
                     dialectDecision = decision,
                 )

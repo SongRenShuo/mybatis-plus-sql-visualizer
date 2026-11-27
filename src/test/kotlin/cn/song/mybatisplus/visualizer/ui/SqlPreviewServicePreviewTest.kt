@@ -601,11 +601,14 @@ class SqlPreviewServicePreviewTest: BasePlatformTestCase() {
         )
         val result = newService().preview(anchor())
         assertNotNull("必须给出结果（而不是静默 return null），否则用户不知道发生了什么", result)
-        assertEquals("SQL 必须为空（拒绝产出）", "", result!!.sql)
-        assertNotNull("必须带明确提示", result.warning)
-        val warning = result.warning!!
-        assertTrue("提示要点明「检测到 Wrapper 实参」：$warning", warning.contains("检测到 Wrapper 实参"))
-        assertTrue("提示要点明方法名：$warning", warning.contains("selectList"))
+        // D264 集成期口径修正：本夹具（`mapper.selectList(FilterUtil.buildQuery(1))`）是车道 A
+        // 修 2 打通的内联「工具方法返回 wrapper」形态。车道 B 写这条时基于未合并的 master，
+        // 该形态解析不出链，所以期望「拒绝产出」；A 合入后能稳定解析出 `WHERE status = ?`，
+        // 原断言会把改进判成错误。改为按 A 修复后的正确行为硬断言（实测稳定，非偶发）。
+        val sql = result!!.sql
+        assertTrue("应产出 SQL（A 修 2 已打通该形态），实际为空。提示：${result.warning}", sql.isNotEmpty())
+        assertTrue("产出 SQL 时必须带 WHERE（不得是无条件全表扫描）：$sql", sql.contains("WHERE"))
+        assertTrue("条件应来自工具方法体内的 eq(status)：$sql", sql.contains("status"))
     }
 
     /**
@@ -643,11 +646,60 @@ class SqlPreviewServicePreviewTest: BasePlatformTestCase() {
         )
         val result = newService().preview(anchor())
         assertNotNull("必须给出结果而不是静默 null（用户要知道发生了什么）", result)
-        assertEquals("零条件 + 未知链方法时必须拒绝产出空 WHERE 的全表 SQL", "", result!!.sql)
-        val warning = result.warning
-        assertNotNull("拒绝时必须给出原因", warning)
-        assertTrue("提示要说明「无法解析其条件链」：$warning", warning!!.contains("无法解析其条件链"))
-        assertTrue("提示要点名未识别的方法：$warning", warning.contains("buildQuery"))
+        // D264 集成期口径修正（同上一例）：`FilterUtil.buildQuery(1)` 的 `return q` 形态是车道 A
+        // 修 2 的目标。A 合入后条件链可解析（实测稳定产出 `WHERE status = ?`），按正确行为硬断言。
+        val sql = result!!.sql
+        assertTrue("应产出 SQL（A 修 2 已打通 `return q` 形态），实际为空。提示：${result.warning}", sql.isNotEmpty())
+        assertTrue("产出 SQL 时必须带 WHERE（不得是无条件全表 SQL）：$sql", sql.contains("WHERE"))
+        assertTrue("条件应来自 buildQuery 体内的 eq(status)：$sql", sql.contains("status"))
+    }
+
+    /**
+     * D264 修0 守卫的真正目标形态：wrapper 来自**无 body 的可解析实体**，条件静态不可得。
+     *
+     * 上面两条用例的形态已被车道 A 修 2 打通（能解析出条件），不再触发拒绝。这一条用
+     * `FilterUtil.buildQuery` 是**接口方法**（无 body）的形态：类型能认出是 Wrapper，
+     * 但方法体不存在、条件无从展开——这正是修 0 该拒绝、且 A 覆盖不到的场景。
+     *
+     * 断言方向：不许产出无 WHERE 的全表 SQL；要么给空 SQL + 明确原因，要么（若将来支持了）
+     * 产出带 WHERE 的 SQL。**绝不允许静默的无条件全表扫描**。
+     */
+    fun testD264WrapperFromBodylessMethodNeverProducesConditionlessSql() {
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query(FilterUtil util) {
+                    mapper.selectList(util.buildQuery(1));
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                    private Integer status;
+                    private String deviceName;
+                }
+
+                abstract static class FilterUtil {
+                    abstract LambdaQueryWrapper<DeviceInfoEntity> buildQuery(Integer status);
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("必须给出结果而不是静默 null（用户要知道发生了什么）", result)
+        val sql = result!!.sql
+        if (sql.isNotEmpty()) {
+            assertTrue("一旦产出 SQL，就必须带 WHERE（不得是无条件全表扫描）：$sql", sql.contains("WHERE"))
+        } else {
+            val warning = result.warning
+            assertNotNull("拒绝产出时必须给明确原因，不能只是空白", warning)
+            assertTrue(
+                "提示要说明条件链不可解析：$warning",
+                warning!!.contains("无法解析") || warning.contains("不可得"),
+            )
+        }
     }
 
     /**
