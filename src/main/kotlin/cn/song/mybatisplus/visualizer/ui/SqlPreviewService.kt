@@ -228,11 +228,29 @@ class SqlPreviewService(internal val project: Project) {
      * 求值，一律 `?` 占位。非 Repository 接口 / 方法名不在名单 / 实体不可解析 → null（交回回落链）。
      */
     fun previewRepositoryDeclaration(method: PsiMethod): PreviewResult? {
+        val result = computeRepositoryDeclaration(method) ?: return null
+        recordHistory(result, method)
+        return result
+    }
+
+    /**
+     * T-PerfSweep34 券01：[previewRepositoryDeclaration] 的**纯计算**半边——不记历史、无副作用。
+     *
+     * 为什么要拆：该链的实体解析会下沉到 `HibernateNamingConfigProbe.projectUsesComponentPath`
+     * （`FilenameIndex.getAllFilesByExt` 索引查询 + `readText` 读盘），而调用它的
+     * `ConvertToSqlAction` 兜底链跑在 `previewAsync` 的 **EDT 回调**里——与 L110 真机 SEVERE
+     * 同链同型（见 `docs/调研报告/20261126-1700-*` §4.1）。调用方需要在 compute 块（BGT +
+     * ReadAction）预计算，回调只消费结果。
+     *
+     * 历史记录刻意**不**跟着前置：预计算可能白算（前序兜底先命中），无条件前置会让历史多记条目。
+     * 所以拆成两半，由调用方在真正要展示时补 [recordPreviewHistory]。
+     */
+    internal fun computeRepositoryDeclaration(method: PsiMethod): PreviewResult? {
         val jpaCrud = JpaCrudOperationConverter.convertRepositoryDeclaration(
             method,
             resolveVariables = effectiveReplaceParams(),
         ) ?: return null
-        val result = PreviewResult(
+        return PreviewResult(
             sql = jpaCrud.sql,
             compactSql = jpaCrud.sql,
             unresolvedParams = jpaCrud.paramSources,
@@ -243,9 +261,27 @@ class SqlPreviewService(internal val project: Project) {
             paramHints = jpaCrud.paramHints,
             batchModel = jpaCrud.batchModel,
         )
-        recordHistory(result, method)
-        return result
     }
+
+    /**
+     * T-PerfSweep34 券01：把历史记录这一步单独暴露给「预计算在 BGT、展示在 EDT」的调用方——
+     * 只有在确认要展示某条预计算结果时才调用它，语义与 [previewRepositoryDeclaration] 内的
+     * 那次记录逐值等价。
+     */
+    internal fun recordPreviewHistory(result: PreviewResult, anchor: PsiElement) {
+        recordHistory(result, anchor)
+    }
+
+    /**
+     * T-PerfSweep34 券01：Repository 声明行兜底的预计算产物——结果 + 记历史用的锚点。
+     *
+     * 两者一起放进 compute 块再传回回调，回调据此补记历史并展示（顺序语义与
+     * [previewRepositoryDeclaration] 一致：先记录、后展示由调用方保证）。
+     */
+    internal class RepositoryDeclarationProbe(
+        val anchor: PsiElement,
+        val result: PreviewResult,
+    )
 
     /** Wrapper 的 owner 是调用所在源码文件，不是实体类文件，也不是把 Java/Kotlin 当成 SQL PSI。 */
     fun resolveWrapperSourceContext(anchor: PsiElement): PreviewSourceContext {

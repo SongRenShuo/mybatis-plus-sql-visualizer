@@ -164,3 +164,54 @@ D256 链方法启发缓存（调研报告 §4.5）列为**观察项不进本计�
 | 券03 EXPLAIN 前热 cacheOnly（P3） | `ca1a38a3b` | 预热补传 cacheOnly，与预览主链对齐 |
 
 券01 的修复横跨四个提交，本身说明了本项目 EDT 链的复发形态：**同一能力多条入口，改了一处还有下一处**。本期把这条写进了方法论（调研报告 §七.6）：新增 gutter/预览入口须自查是否落在 `previewAsync` 的 EDT 回调里。
+
+## 六、实施记录（2026-11-26）
+
+分支 `t-perfsweep34`（从 master `51354919a` 起）。五券按批次全部落地，逐券独立成笔。
+
+| 券 | 提交 | 改动文件 | 定向读数 |
+|---|---|---|---|
+| 券01 Repository 兜底 EDT 链 | `3e43473` | `ConvertToSqlAction.kt` / `SqlPreviewService.kt` / `ConvertToSqlActionTest.kt` | 8 类 59 例全绿 |
+| 券05 nonModal 回填 | `3e52b13` | `MissingFragmentDialog.kt` | 无新增（模态语义 headless 不可覆盖，靠真机） |
+| 券02 让位重算收窄 | `56162ea` | `PluginSettingsPanel.kt` | 无新增（见下方「未做项」） |
+| 券04 provider 判定顺序 | `a33d99a` | 4 个 provider | 5 类 25 例全绿（含 F36 单次查找守卫 4 例） |
+| 券03 ctx 预热额度 | `0b581d5` | `XmlSqlGutterLineMarkerProvider.kt` | GutterWarmSchedulerTest 9 例全绿 |
+
+### 券01 的实施要点（与计划的两处偏差）
+
+**偏差一：新增 `RepositoryDeclarationProbe` 而不是裸传 `PreviewResult`。** 计划写的是「算出 `PreviewResult?` 装进 holder」，实施时发现 `previewRepositoryDeclaration` 内部含 `recordHistory`——无条件前置会让「前序兜底先命中」的白算也写进历史。因此拆成 `computeRepositoryDeclaration`（纯计算）+ `recordPreviewHistory`（展示时补记）两半，holder 装 `RepositoryDeclarationProbe(anchor, result)`。
+
+**偏差二：守卫从三条加到四条。** 反向验证时实测：只删掉 compute 块里的接线调用、保留 helper 函数，前三条断言**全绿**——helper 留着但没人调，等于把 Repository 声明行兜底静默关掉，而守卫看不出来。补第四条「compute 块必须真的接线 `repositoryDeclaration.set(probeRepositoryDeclaration(...))`」，重做反向验证：删接线 → 红（BUILD FAILED），恢复 → 绿。这条是本计划「P-3 待验证前提」之外新发现的坑，与 `pitfall-fake-green-test-assertions` 同族。
+
+### 未做项与理由
+
+- **券02 结构守卫已补（`7d6359b`）**：初次实施时我以为「`restart(psi)` 与 `restart()` 的差别在实参上，正则钉无参会误伤平台其它合法调用」——这个理由只在**全文扫描**时成立。改为把 `refreshGutterLineMarkers` 的**方法体切片**出来判据（与 F36 的 `GutterProviderSingleLookupGuardTest` 同一手法）就不误伤了：该方法的唯一职责就是本次重算，里面出现无参 `restart()` 即为退回旧形态。守卫 `GutterYieldRefreshScopeGuardTest` 含三条判据 + 判据自证；反向验证确认会红。
+
+- **同笔自查修了一处真缺陷**：初次实现的 `PsiManager.findFile` 在 EDT 上裸调、缺读动作。仓内既有惯例（`ChooseDataSourceTakeover`、`DataSourceSelector`）都包 `ReadAction.compute`；裸调靠 EDT 恰好持读权限侥幸通过，平台加断言即为新的非法访问源。已包上。这类问题单测看不见、只在真机 log 暴露，与 L110 同型。
+- **真机读数全部未取**（§四 T0 四项）：本批为代码级实施，未起沙盒。券01 的 SlowOperations 前后对照、券02 的 Apply 墙钟、券03 的暖态 P50/P95 均待真机采样。
+
+### 真机验收（2026-11-27，runIde 沙盒 IU-2024.3.7.1，插件 2026.11.26-beta.2）
+
+沙盒从本工作树起，日志确认 `Loaded custom plugins: MyBatis SQL Visualizer (2026.11.26-beta.2)`——加载的是含五券改动的构建。夹具：`jpa-hibernate-demo`（Repository 声明行）+ `mybatis-plus-demo`（mapper XML）。两个工程都完成索引（`exit dumb mode`）后才开始操作。
+
+| 券 | 场景 | 读数 | 判定 |
+|---|---|---|---|
+| 券01 | 光标停 `UserWriteRepository.deleteAllInBatch()` 声明行，按 `Alt+Shift+Q` | 预览渲染正确（`DELETE FROM user`，全表删除红警示，3 行 SQL）；调用栈确认走 `tryRepositoryDeclarationFallback` → `ConvertToSqlAction.kt:570`，即修改后「只消费 probe」那一行；`SlowOperations` 全程 0 | **通过** |
+| 券03 | 同一工程连续打开 4 个 mapper XML（UserMapper / OrderMapper / DepartmentMapper / RoleMapper），每个等 9s（覆盖预热 5s 延迟窗） | `ctx warm done` 恰好 **2** 次，仅 UserMapper.xml 与 OrderMapper.xml；第 3、4 个文件无预热行 → 额度封顶生效 | **通过**（修前会预热 4 次） |
+| 券03 副产 | 暖态单次成本 | `ctx warm done in 115ms` / `in 76ms` | **P-3 的定额依据到手**：冷态 13280ms → 暖态 76~115ms，差两个数量级，取额度 2 合理 |
+| 券02 / 券04 | — | 无客观可采读数：券02 的收益是「Apply 后不卡」的主观停顿，券04 无行为变化 | 未取，维持代码级验证结论 |
+| L110 回归 | — | 本轮未触及 `tryMapperXmlMethodFallback` 链（`c5685aee8` 是前批修复、配结构守卫） | 未单独验，风险低 |
+
+**全日志摘要**：`SlowOperations` 0 次、`Plugin to blame: MyBatis SQL Visualizer` 0 次、`Last Action: cn.song.mybatisplus.visualizer.ConvertToSql` 0 次。对照面：L110 记录的同一条回调在修前真机连报两条 SEVERE。
+
+**未做 A/B 对照**：券01 的「修前会报 SEVERE」没有在本轮重跑。理由是修前形态需要改生产代码 + 重启沙盒（约 5 分钟），而修前形态已有 L110 的真机 SEVERE 原始记录（`Plugin to blame: MyBatis SQL Visualizer version: 2026.11.26-beta.2` + 完整栈）作证。要严格闭环可另起一次对照，本轮未做。
+
+**GUI 自动化踩坑（供后续沙盒验收参考）**：
+- 本机沙盒存在 **1.5x DPI 缩放**：`mss` 截图给的是物理像素，而朴素 `mouse_event` 按逻辑坐标落点会偏移约 1/3（实测点 (1410,704) 落在 (≈940,470)，正好是 1/1.5）。必须先 `SetProcessDpiAwareness(2)` 再发鼠标事件。
+- 键盘 `keybd_event` 用 VK 码始终有效；但 `SendInput` 的 UNICODE 路径对 IDE 输入框无效（字符打不进去）。输入文本一律走 VK 码：字母用大写 ASCII 值配 Shift 表达大小写，`:` 用 VK_OEM_1+Shift，`\` 用 VK_OEM_5，`.` 用 VK_OEM_PERIOD。
+- 窗口需先 `ShowWindow(SW_RESTORE)` + 模拟一次 Alt 按放再 `SetForegroundWindow`，否则前台锁定会拒绝。
+- 胶水脚本落在 `build/perf11-shots/perf11_input.py` 与 `perf11_open.py`（build 目录，不入库）。
+
+### 环境事故记录
+
+实施过程中工作区根目录被整体改名、主仓 `.git` 一度消失，首个工作树与其未提交改动全部丢失（分支从未提交过，reflog 无痕迹）。规格文档（调研报告 + 本计划）已在 master，据此逐券重做；重建时改为「每券完成即提交」，五笔提交均为重做产物。事故本身属环境层，与代码无关。

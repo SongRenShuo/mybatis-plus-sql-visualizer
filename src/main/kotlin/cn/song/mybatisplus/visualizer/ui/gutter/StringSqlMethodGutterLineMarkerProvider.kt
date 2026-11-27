@@ -54,16 +54,18 @@ import javax.swing.Icon
 class StringSqlMethodGutterLineMarkerProvider : LineMarkerProvider {
 
     override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? {
-        // F36（T-PerfSweep16）：组显隐门前置——组关时 hasStringSqlCall 方法体扫描重活零触达
-        // （原门在重活判定之后，组关省不掉重活）；单次取 state，总闸与组显隐共用
-        // （原双路径每到达元素 3 次 app 级查找收敛为 1 次）
-        val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
-        if (gutterState != null && !gutterState.showGutterIcon) return null
-        if (!GutterGroups.enabledFor(javaClass, gutterState)) return null // R2 分组显隐
-        // LineMarker 框架只传递 leaf 元素：锚点为方法定义名 PsiIdentifier
+        // LineMarker 框架只传递 leaf 元素：锚点为方法定义名 PsiIdentifier。
+        // T-PerfSweep34 券04：最便宜的 O(1) 类型早退提到**设置读取之前**——Java 文件里绝大多数
+        // leaf 不是 PsiIdentifier（更不是方法名），原顺序让它们每个都先付一次 `PluginSettings`
+        // 应用级服务查找 + runCatching。组显隐门仍前置于重活（hasStringSqlCall 方法体扫描）之前，
+        // F36「组关时重活零触达」的语义不变。
         if (element !is PsiIdentifier) return null
         val method = element.parent as? PsiMethod ?: return null
         if (method.nameIdentifier !== element) return null
+        // F36（T-PerfSweep16）：单次取 state，总闸与组显隐共用（每到达元素 3 次 app 级查找收敛为 1 次）
+        val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
+        if (gutterState != null && !gutterState.showGutterIcon) return null
+        if (!GutterGroups.enabledFor(javaClass, gutterState)) return null // R2 分组显隐
         val body = method.body ?: return null
 
         if (!hasStringSqlCall(body)) return null

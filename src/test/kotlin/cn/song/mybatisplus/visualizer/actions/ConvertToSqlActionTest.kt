@@ -470,6 +470,55 @@ class ConvertToSqlActionTest : BasePlatformTestCase() {
         )
     }
 
+    // ---------- T-PerfSweep34 券01：Repository 声明行兜底的 EDT 链（2026-11-26） ----------
+
+    /**
+     * 结构守卫（与 [testMapperXml兜底锚点解析不在EDT回调链] 同族，源文本断言）。
+     *
+     * L110 只修了兜底链第一条（Mapper XML），第 8 条 `tryJpaFallback` 的第 5 步
+     * （Repository 声明行）仍在 EDT 回调里同步跑 `previewRepositoryDeclaration`——该链会查
+     * `FilenameIndex` 并 `readText` 读配置文件（见 `HibernateNamingConfigProbe.projectUsesComponentPath`），
+     * 与 L110 是同一回调、同一类操作。
+     *
+     * 钉四件事：①`previewRepositoryDeclaration`（会记历史的整链入口）不得出现在本文件；
+     * ②纯计算入口 `computeRepositoryDeclaration` 只许出现在 `probeRepositoryDeclaration` 辅助函数里；
+     * ③**compute 块必须真的接线**（`repositoryDeclaration.set(probeRepositoryDeclaration(...))` 至少一次，
+     * 且落在 compute lambda 内）——只留 helper 但不调用，等于把兜底悄悄关掉，这一条正是防止
+     * 「反向验证空绿」的形态（T-PerfSweep34 实施期实测：只删调用点时前三条仍全绿）；
+     * ④回调链必须消费预解析产物 `repositoryDeclaration.get()`。
+     */
+    fun testRepository声明兜底解析不在EDT回调链() {
+        val source = java.io.File(
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/actions/ConvertToSqlAction.kt",
+        ).readText()
+        assertEquals(
+            "回调链不得直调 previewRepositoryDeclaration（那会在 EDT 上查索引 + 读配置）",
+            0,
+            Regex("previewRepositoryDeclaration\\(").findAll(source).count(),
+        )
+        assertEquals(
+            "纯计算只能在 probeRepositoryDeclaration 辅助函数里出现一次（BGT + ReadAction）",
+            1,
+            Regex("computeRepositoryDeclaration\\(").findAll(source).count(),
+        )
+        val helperAt = source.indexOf("private fun probeRepositoryDeclaration(")
+        val computeAt = source.indexOf("computeRepositoryDeclaration(")
+        assertTrue("辅助函数必须存在（helper=$helperAt）", helperAt > 0)
+        assertTrue("计算只能落在辅助函数体内（helper=$helperAt compute=$computeAt）", computeAt > helperAt)
+        // ③ compute 块必须真的调用 helper（helper 存在但没人调 = 兜底被静默关掉）
+        val probeCalls = Regex("repositoryDeclaration\\.set\\(probeRepositoryDeclaration\\(")
+            .findAll(source).count()
+        assertTrue(
+            "compute 块必须接线 probeRepositoryDeclaration（实际 $probeCalls 处）——" +
+                "只留 helper 不调用等于把 Repository 声明行兜底静默关掉",
+            probeCalls >= 1,
+        )
+        assertTrue(
+            "回调链必须消费预解析结果（形参 repositoryDeclaration.get()）",
+            source.contains("tryJpaFallback(service, project, element, repositoryDeclaration.get(), sourceLocation)"),
+        )
+    }
+
     // ---------- T-MapperPreviewDedupAndAnnotationShortcut：注解方法按方法定位（2026-11-26） ----------
 
     /**

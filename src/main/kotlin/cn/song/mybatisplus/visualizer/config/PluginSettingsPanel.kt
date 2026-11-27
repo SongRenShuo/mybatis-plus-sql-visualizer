@@ -1376,14 +1376,28 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /**
      * T-MapperNavYieldBothSides：让位开关变化后立即重算已打开文件的 gutter。
      * 此前 daemon 不会因设置变更自动重跑，用户要重开文件才看到图标变化（2026-11-25 真机反馈）。
+     *
+     * T-PerfSweep34 券02（2026-11-26 第十一期性能调研 §4.2）：原实现对 `openProjects` 里**每个**
+     * 项目调无参 `DaemonCodeAnalyzer.restart()`——那是**全项目全量重分析**（inspection / annotator /
+     * 高亮全部重跑），而触发它的只是一个 gutter 显示开关，成本与意图明显错配。改为**按文件**重分析：
+     * 只遍历每个项目真正打开着的编辑器文件，逐个 `restart(psi)`（同仓既有形态见
+     * `SqlPreviewPanelExecution.kt` 的 `restart(psi)`）。影响面从「全项目所有文件」收到「打开着的文件」。
      */
     private fun refreshGutterLineMarkers() {
         ApplicationManager.getApplication().invokeLater({
             ProjectManager.getInstance().openProjects.forEach { proj ->
-                if (!proj.isDisposed) {
-                    runCatching {
-                        @Suppress("DEPRECATION")
-                        DaemonCodeAnalyzer.getInstance(proj).restart()
+                if (proj.isDisposed) return@forEach
+                runCatching {
+                    val analyzer = DaemonCodeAnalyzer.getInstance(proj)
+                    val psiManager = com.intellij.psi.PsiManager.getInstance(proj)
+                    com.intellij.openapi.fileEditor.FileEditorManager.getInstance(proj).openFiles.forEach { vf ->
+                        // `PsiManager.findFile` 需要读动作（仓内既有惯例见 ChooseDataSourceTakeover
+                        // 与 DataSourceSelector 的同款调用，均包 ReadAction.compute）。裸调靠 EDT
+                        // 恰好持读权限侥幸通过——平台一旦加断言就是新的非法访问源。
+                        val psi = com.intellij.openapi.application.ReadAction.compute<com.intellij.psi.PsiFile?, Throwable> {
+                            psiManager.findFile(vf)
+                        }
+                        if (psi != null) analyzer.restart(psi)
                     }
                 }
             }
