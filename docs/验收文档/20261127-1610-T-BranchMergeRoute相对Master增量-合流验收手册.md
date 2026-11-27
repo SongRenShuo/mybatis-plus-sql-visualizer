@@ -251,7 +251,9 @@
 | 编译面 | `compileKotlin` + `compileTestKotlin` + `:sql-visualizer-agent:compileJava` 全绿 | 本机 gradle |
 | 定向测试 | `test --tests "cn.song.mybatisplus.visualizer.convention.*"` → 34 类 / 141 例 / 0 失败 0 错误 0 跳过 | JUnit XML 汇总 |
 | 双仓推送 | Gitee + GitHub 均 OK（`push-all.ps1`，`x-access-token:***@`） | 脚本输出 |
-| 分支 CI | `build-plugin.yml` `mode=gate`，run [#45963297818](https://github.com/SongRenShuo/mybatis-plus-sql-visualizer/actions/runs/45963297818)（`workflow_dispatch` @ `merge-master-acceptance-doc`） | `gh run list` |
+| 分支 CI 第 1 轮 | `build-plugin.yml` `mode=gate`，run [#45963297818](https://github.com/SongRenShuo/mybatis-plus-sql-visualizer/actions/runs/45963297818)：`build` ✓ 5m13s、`agenttest` ✓ 3m2s、`verify×3` ✓、`marketplace×3` ✓、`test (fast)` ✓、shard 1/2/4/5 ✓，**`test (3)` ✗ 1 例** | `gh run view` |
+| 该红点根因与修复 | `AgentManagerPremainTest.test回连_建会话_写幂等表_置在线态` 用裸 HELLO（master `95ecbea44` 2026-11-21 新增），撞本支 `0495ade42`（T-SAF-02 令牌身份门）→ 会话建不起来。改走带令牌的 `writeHello`，定向 16 例全绿；教训入账 `LESSONS L120` | `bbc37e1fe` |
+| 分支 CI 第 2 轮 | 修复后重 dispatch：[#45966781755](https://github.com/SongRenShuo/mybatis-plus-sql-visualizer/actions/runs/45966781755)（本手册撰写时运行中，结论以该 run 为准） | `gh run list` |
 | UI 真机走查 | **未做**——本手册即走查脚本，按 §四 执行后回填 §七 | — |
 | WS 通道令牌 | **未覆盖**：T-SAF-02 的 HELLO 令牌回带只接在 TCP 路径；WS（T4-1）由 IDE 主动连 loopback 端口，监听端只绑 `127.0.0.1`，无令牌校验 | `EventBus.start` 注释 + 本手册待办 |
 | 全量分片 / 三目标门禁 | 以 CI run 的 `testShard1..5` + `verifyGate` 为准，本机不重跑 | CI 日志 |
