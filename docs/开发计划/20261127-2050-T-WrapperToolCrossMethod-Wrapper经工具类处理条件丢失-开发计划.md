@@ -122,9 +122,15 @@ R10 实测产物 `SELECT id, status, device_name FROM device_info_entity`（**�
 
 ### 修 3：重新赋值不切断前段（R4/R8）
 
-`filterCallsToAnchorSegment` 的语义是「按条件生命周期分段」，本身是对的；问题在于 `w = decorate(w)` 这种**自引用赋值**被当成了「生命周期重置」。修法：自引用赋值（RHS 里引用了 LHS 同一个变量）不记为分段点，而是视为**链的延续**（RHS 内部的条件并入当前段）。
+`filterCallsToAnchorSegment` 的语义是「按条件生命周期分段」，本身是对的；问题在于 `w = decorate(w)` 这种**自引用赋值**被当成了「生命周期重置」。
 
-同时必须修**跨文件偏移比较**：展开调用的 `textRange.startOffset` 来自 helper 文件，却被拿去与调用方的 `assignmentOffsets` 比大小 → 段过滤结果随机（`WrapperLocator.kt:1049` vs `:1351`）。需引入 `(文件, offset)` 复合键。
+**修法边界（极重要）**：只放行「RHS 里引用了 LHS **同一个变量**」的自引用赋值，**不能放宽到所有赋值**。原因：`PreviewStmtTypeScopeTest` 有两处硬断言钉住了分段语义——
+- `:168` 断言 `allConsumptions` 精确等于 `["update","delete"]`；
+- `:218` / `:226` 用 `assertFalse` 断言「delete 段不带 status 条件」「声明段不带 order_no 条件」。
+
+若把「所有赋值都不切段」，复用 wrapper 的语料（`w = new LambdaQueryWrapper<>()` 后继续追加）会把两段条件合并，这两条 `assertFalse` 立刻变红，且用户侧会出现**错误 SQL**（DELETE 带上 UPDATE 段的条件）。
+
+同时必须修**跨文件偏移比较**：展开调用的 `textRange.startOffset` 来自 helper 文件，却被拿去与调用方的 `assignmentOffsets` 比大小 → 段过滤结果随机（`WrapperLocator.kt:1049` vs `:1351`）。需引入 `(文件, offset)` 复合键，并保留 `second`（逻辑锚点）到分段之后。
 
 
 ### 修 4：非条件方法不得静默入链（R5 的伪条件面）
@@ -234,7 +240,7 @@ R7 实测 `[eq, and]`——块内 `ne` 丢了、`and` 只剩空壳。当前实�
 | `isWrapperFactoryCall` | 工厂调用判定 | 不含工具方法 → R5 伪条件来源 | 修 4 的门 |
 | `collectExtendingChain` | 链式延续收集 | P1 绿，天然正确 | 待回归确认 |
 | `resolveNestedLambda` 块体分支（`ArgResolver.kt:181-185`） | 无差别全收 | **实测已红**（`[eq, and]`，内层 `ne` 丢失） | 必须改 |
-| `WrapperAnchorDetector` 锚点集合 | gutter 图标 | 工具类内链首不在用户文件 → 天然不受影响 | 待确认 |
+| `WrapperAnchorDetector` 锚点集合 | gutter 图标 | 锚点侧**完全不调 `buildChain`**（只调 `detectWrapperTypeDeep`/`isWrapperVariable`/`isMpjJoinConsumerCall`），所以「只改 `buildChain`」时天然不受影响。**但 join 消费族锚点契约已是「变量声明 + 调用行」2~3 枚**（`ab6c7110a` 翻转过），不再是我初稿写的 1 枚 | 待确认：只要不碰锚点侧即无风险 |
 | `SqlPreviewService` 批量路径 | 批量模板 | 不共用本逻辑 | V2 已核实：`BATCH_OPERATIONS` 是闭集映射，`buildQuery` 不在其中 |
 | `ArgResolver.toWrapperCall` | 单个调用 → 条件 | 收到非条件方法会静默降级 | 修 4 |
 | `ExpressionEvaluator` 三元/方法调用（`:50`、`:202-214`） | 值级降级为 `?` | 本轮不改（改值不影响「少条件」主诉） | 登记为已知 |
@@ -245,18 +251,51 @@ R7 实测 `[eq, and]`——块内 `ne` 丢了、`and` 只剩空壳。当前实�
 
 ## 六之二、破损风险清单（改这个文件会影响谁）
 
-| 风险 | 受影响对象 | 破约方式 | 等级 |
-|---|---|---|---|
-| 递归展开无深度/环防护 | `WrapperLocator` 全链 | 互递归 helper 导致栈溢出 / 无限循环（热路径在 EDT 上会直接卡死 IDE） | **高** |
-| 递归展开使条件重复 | 所有 Wrapper 预览 | `distinctBy(endOffset)` 在递归后不够，同一 `ne` 可能渲染两遍 | **高** |
-| 自引用赋值不切段改动过宽 | `WrapperReuseRepro` 语料 | `w = new LambdaQueryWrapper<>()` 也被当成「延续」，复用场景两段条件合并 → 错误 SQL | **高** |
-| 修 5 改到渲染行为 | `QueryWrapperParserTest.未知方法_安全忽略`（`:520-532`） | 该用例断言「未知方法不影响条件条数」；只加可见性则保持绿，若顺带改了渲染就变红 | 中 |
-| 防误伤用例被破坏 | `WrapperLocatorTest.testPlainMethodChainNotMisdetected`（`:863-878`） | 递归展开若无类型门，`helper.applyFilter(Object w)` 会被当成 wrapper 链 → 该用例变红 | 中 |
-| 选择区候选数变化 | `WrapperLocatorTest.testSqlCandidatesInRangeCollectsAndDeduplicates`（`:880-916`） | 断言**恰好 3 个**候选；修 2 让工具类返回形态成为候选后可能变 4 | 中 |
-| 锚点数量契约 | `WrapperAnchorDetectorJpaAndWholeFileTest`（`:191-337`） | 断言 `selectJoinList` 等「只有变量声明 1 个锚点」；本轮若扩锚点集合会破约 | 中 |
-| 性能红线 | `WrapperLocator` 热路径（gutter 每次重绘） | `looksLikeWrapperName` 前门是为 O(1) 设计的；递归展开引入 resolve 成本，可能违反既有限制 | 中 |
-| 缓存键不含展开深度 | `WrapperCache` | 缓存按「文件戳 + resolveVariables + 配置签名」失效；若展开行为随设置变化而未入键，会读到旧结果 | 低 |
-| 深度上限值选择 | 用户四层封装 + 两层工具类 | 上限过低仍在深层丢条件；过高则性能与误收风险上升 | 低 |
+> **先纠正一条我自己写错的前提**：§六 初稿写「`selectJoinList` 期望只有变量声明 1 个锚点」——**错**。该契约已被 `ab6c7110a`（D256 M2）翻转，实测 `WrapperAnchorDetectorJpaAndWholeFileTest.kt:355-359` 期望 `setOf("wrapper", "selectJoinList")`（2 枚）。做风险评估时若沿用旧契约，会误判「锚点侧天然不受影响」。
+
+### 高
+
+| 风险 | 受影响对象 | 破约方式 |
+|---|---|---|
+| **递归入口前移破坏类型门** | `WrapperLocatorTest.testPlainMethodChainNotMisdetected`（`:863`，断言 `:877`） | 一旦把递归展开的入口放到 `isWrapperVariable` 类型门**之前**，或改用「实参是引用 / 方法名像 build/get」这类**语法启发**，`helper.applyFilter(w)`（`helper` 不可 resolve、`w` 是 `Object`）就不再返回 null，防误伤契约直接破。**纯 resolve 版递归不破**——这条用例真正钉住的是「展开必须挂在类型门之后」 |
+| **候选判定走语法启发** | `WrapperLocatorTest.testSqlCandidatesInRangeCollectsAndDeduplicates`（`:880`，断言 `:911`、顺序 `:913-915`） | 为返回值形态扩展 `isSqlCandidate`（`:156-158`）或 `isMpjJoinConsumerCall`（`:178-192`）时若退化成语法判定，第 4 个调用 `helper.applyFilter(w)` 会被计入 → 恰好 3 变 4；或 `sqlCandidatesInRange` 的 `distinctBy{startOffset}` 被顺手改成路径去重 → 超过 3 |
+| **去重结构 + 锚点丢失** | 本任务 R1/R4/R8（`:114-117`、`:153-156`、`:523-526`） | 沿用「`distinctBy(endOffset)` + 排序后 `.map{it.first}` 丢掉 `second`」结构时，**同一调用被多条路径展开会重复/漏/乱序**；且 `second`（逻辑锚点）在 `:1103` 就被丢掉，导致 `filterCallsToAnchorSegment` 拿跨文件偏移去比 |
+| **join 消费族锚点集合** | `WrapperAnchorDetectorJpaAndWholeFileTest`（`:322`、`:357`；另有 `:215/:250/:284`） | 任何「顺手统一锚点/让位」的改动都会增删调用行锚点，集合断言是硬约束。**正确做法：只改 `buildChain` 内部，不碰 `WrapperAnchorDetector`**（锚点侧只调 `detectWrapperTypeDeep`/`isWrapperVariable`/`isMpjJoinConsumerCall`，完全不调 `buildChain`） |
+| **自引用赋值不切段会破既有分段契约** | `PreviewStmtTypeScopeTest`（`:168` 精确 `["update","delete"]`；`:218`/`:226` 的 `assertFalse`） | 为支持 `w = helper(w)` 而改分段语义时，`:218/:226` 断言「delete 段不带 status / 声明段不带 order_no」会破。**修 3 必须只放行「RHS 引用 LHS 同一变量的自引用赋值」，不能放宽到所有赋值** |
+
+### 中
+
+| 风险 | 受影响对象 | 破约方式 |
+|---|---|---|
+| 链上多一个调用 | `WrapperLocatorTest` 共 **11 处**精确方法名列表（`:61/:106/:152/:367/:413/:441/:524/:685/:727/:761/:833`） | 任何「额外调用入链」（消费调用、伪工厂名、helper 内非条件调用）都会让列表多一元素 |
+| 消费调用被当 helper 展开 | `CustomWrapperServicePreviewTest`（`:101`/`:123` 期望 `["eq","in"]`） | `expandHelperCalls` 的触发条件 `call.argumentList.expressions.any { it === ref }`（`:1092`）**对消费调用同样成立**；若改造把消费调用也入链，2 元素变 3 元素（多出 `selectJoinList`） |
+| helper 展开条数/顺序 | `SqlPreviewServiceOfficialApiTest`（`:660`/`:702`/`:1051`） | WHERE 子句文本直接由条数与顺序决定，多重展开会多出 `AND ...` |
+| 规则 4 被卷入 | `WrapperAnchorDetectorTest`（8 处集合）、`WrapperAnchorDetectorNegativeTest`（5 处空集） | 若改动碰到 `isWrapperVariable` 规则 4（`ReferencesSearch`+链方法名闭集），负例可能亮图标 |
+| 真实 demo 行号普查 | `ui/gutter/DemoMpChainAnchorCensusTest.kt:86` | 锚点面任何漂移都红（且依赖 demo 目录存在） |
+| 缓存跨文件失效缺口 | `WrapperCache.kt:76` + `LocatedWrapper.kt:63` | 现无任何用例覆盖，改完不红但**用户可见**：改了工具类文件仍出旧 SQL |
+
+### 低
+
+| 风险 | 说明 |
+|---|---|
+| `PsiSnapshotTest` / `WrapperCacheTest` / `WrapperCacheLruTest` | 与链展开无耦合（`PsiSnapshotTest:3-10` 根本不 import `WrapperLocator`；缓存用例用合成 compute）。只有改 `WrapperCache` 键/容量（`:101` 钉 512）才会红 |
+| `convention` 包守卫 / gutter 热路径守卫 | 扫描面**不含** `WrapperLocator.kt`——不会因递归变红。代价：**性能红线失去自动守卫**，只能靠 review 保证「递归只留在 `buildChain` 的预览路径」 |
+| `EdgeCaseTest:100`（1000 次 < 500ms） | 只测 `SqlGenerator`，与收集层无关 |
+| `WrapperTypeSuperChainTest:228-272`（深度上限 8） | 仅当复用 `WRAPPER_SUPER_CHAIN_MAX_DEPTH` 作 helper 递归上限时会语义混淆 → **必须新增独立常量**，我已在修 1 里写明用 `WRAPPER_CROSS_METHOD_MAX_DEPTH = 5` |
+| 行数预算 | master 无 `GiantFileBudgetTest`，`WrapperLocator.kt` 现 2029 行，新增递归不触发预算门 |
+
+### 最小破约面建议（实施者的硬约束）
+
+1. 递归与返回值形态**只改 `buildChain` 内部**（`expandHelperCalls:966-981`、`expandFactoryCalls:1578-1594`、`findFactoryReturnChain:1619-1624`、`filterCallsToAnchorSegment:1343-1356`），**不碰** `isWrapperVariable` / `isSqlCandidate` / `isMpjJoinConsumerCall` / `WrapperAnchorDetector`。这样能保住 §六之二 里全部锚点类与候选类断言。
+2. 去重键换成 **`containingFile` + 调用表达式身份 + 展开路径** 三元组，并**保留 `second`（逻辑锚点）直到 `filterCallsToAnchorSegment` 之后**——否则跨文件坐标错位无解。
+3. `expandFactoryCalls → resolveFactoryArgumentChain`（`:1602-1613`）**当前已有自发递归且无深度/环防护**，是一条现成的栈溢出通道，修 1 必须一并收口。
+
+### 性能红线的现状（必须知道）
+
+**没有任何测试断言 `WrapperLocator` 的 resolve 次数/调用次数/耗时。** M10 §2.4 的红线只是文档约束（`docs/开发计划/20260812-1844-代码左侧预览SQL图标-开发计划.md:92-102`），源码侧只有 KDoc 说明（`WrapperAnchorDetector.kt:24-27`、`SqlGutterLineMarkerProvider.kt:34-39`）。
+
+真实的性能风险点是：`isWrapperVariable` 已在 gutter 热路径上被调用 4 处（`WrapperAnchorDetector.kt:113/228/309/335`），其内部 `detectWrapperTypeDeep` 会 resolve、规则 4 会 `ReferencesSearch` + `hasMpCrudReceiver`。**若递归展开被植入这条链而不是只留在 `buildChain`，gutter daemon 成本会结构性上升，且没有任何测试会告诉你。** 这是「只改 `buildChain`」这条约束的真正理由。
+
 
 
 ---
@@ -279,9 +318,11 @@ R7 实测 `[eq, and]`——块内 `ne` 丢了、`and` 只剩空壳。当前实�
 
 | 项 | 为什么不能拖 | 出处 |
 |---|---|---|
-| `(文件, offset)` 复合去重/分段键 | 跨文件展开后 `distinctBy(endOffset)` 与 `startOffset` 比较全部失效，条件会在去重/分段两处悄悄消失 | `WrapperLocator.kt:1101`、`:496`、`:609`、`:1049` vs `:1351` |
-| `WrapperCache` 失效维度加 helper 文件 | 缓存键只有锚点文件的 `modificationStamp`，改了工具类仍出旧 SQL；用户会以为修复没生效 | `WrapperCache.kt:82-84`；可仿 `LocatedWrapper.kt:56-64` 的单文件校验扩成多文件 |
-| 入口识别四处对齐 | 若新增「工具方法返回 wrapper = 链首」，`isChainHeadCall`/`isSqlCandidate`/`initializerHeadIsWrapper`/`hasWrapperArgument` 必须一起认，否则「能预览没图标」或「图标点开走另一条路」 | `WrapperAnchorDetector.kt:131-135`、`:156-158`、`:268-285`、`:300-315` |
+| `(文件, offset)` 复合去重/分段键 | 跨文件展开后 `distinctBy(endOffset)` 与 `startOffset` 比较全部失效，条件会在去重/分段两处悄悄消失。**且 `second`（逻辑锚点）在 `:1103` 就被 `.map{it.first}` 丢掉**，必须保留到分段之后 | `WrapperLocator.kt:1101`、`:496`、`:609`、`:1103`、`:1049` vs `:1351` |
+| `WrapperCache` 失效维度加 helper 文件 | 缓存键只有锚点文件的 `modificationStamp`，改了工具类仍出旧 SQL；用户会以为修复没生效。现无任何用例覆盖，改完不红但用户可见 | `WrapperCache.kt:76`；可仿 `LocatedWrapper.kt:63` 的单文件校验扩成多文件 |
+| 入口识别四处对齐 | 若新增「工具方法返回 wrapper = 链首」，`isChainHeadCall`/`isSqlCandidate`/`initializerHeadIsWrapper`/`hasWrapperArgument` 必须一起认，否则「能预览没图标」或「图标点开走另一条路」。⚠ 但这四处一动就会破 `testPlainMethodChainNotMisdetected` 与 `testSqlCandidatesInRangeCollectsAndDeduplicates`（见 §六之二 高区）——**若本轮不做修 2，就别动这四处** | `WrapperAnchorDetector.kt:131-135`、`:156-158`、`:268-285`、`:300-315` |
+
+> **第六条硬约束（来自第四轮破约核查）**：递归与返回值形态**只改 `buildChain` 内部**。`isWrapperVariable` 已在 gutter 热路径被调用 4 处（`WrapperAnchorDetector.kt:113/228/309/335`），且**没有任何测试会告诉你它的成本上升了**——因为 `convention` 包下所有热路径守卫的扫描面都不含 `WrapperLocator.kt`。
 
 ---
 
@@ -303,6 +344,7 @@ R7 实测 `[eq, and]`——块内 `ne` 丢了、`and` 只剩空壳。当前实�
 | 第 1 轮（解析链） | 完整职责地图；`QueryWrapperParser:252` 静默丢弃；if/三元/循环/switch 能力边界；核心四文件零 Logger | L9 机制成立但影响面推断过宽 → P5 修正 |
 | 第 2 轮（测试基座） | 金样矩阵装置（`SqlPreviewSpecMatrixTest`）；平台类禁用 `testFast --tests`；demo 钉定快照 `fcb1faf` 不含 `custom-wrapper-demo` | 装置边界写入 §五之二；V7 记为已证伪 |
 | 第 3 轮（穷尽落点） | 跨文件偏移比较 / 跨文件去重 / 多 return 无过滤 / 缓存失效维度 / 批量兜底无守卫 / 入口识别三处重复实现 | 全部写入 §四 与 §七；其中「无 WHERE 错误 SQL」用 R10 产物实测确认 |
+| 第 4 轮（破约风险） | 11 处精确方法名列表、候选数断言、锚点集合断言、热路径守卫扫描面不含 `WrapperLocator` | **纠正了我 §六 初稿的一处错**：`selectJoinList` 锚点契约不是 1 枚，实测 `WrapperAnchorDetectorJpaAndWholeFileTest.kt:355-359` 期望 `setOf("wrapper","selectJoinList")`；另确认 `PreviewStmtTypeScopeTest:168/218/226` 会因「放宽分段」而红 |
 
 ### 修复阶段
 
@@ -312,6 +354,8 @@ R7 实测 `[eq, and]`——块内 `ne` 丢了、`and` 只剩空壳。当前实�
 
 - **用例首版三处假红**：跨包 `addClass` 静态导入、`MyWrapper` 未造 MP 基类桩、`addClass` API 在该测试 SDK 不存在——都被我误当成插件缺陷。教训：新语料先确认「装置本身能解析」，否则红的是自己。
 - **侦察结论必须用实测校验**：侦察报告断言「`QueryWrapperParser:252` 未知方法必丢」，P5 实测 `statusEq` 能出 `status` 条件——机制对、影响面推断错。已在 §一 就地修正，未删原文。
+- **旧契约会被当成前提写进计划**（第四次复发的同类错）：我凭 D256 计划册的旧描述把「`selectJoinList` 只有 1 个锚点」当成现状，实际 `ab6c7110a` 已翻成 2 枚。教训：**引用契约前先读测试断言本身，不读别人（包括过去的自己）的计划册描述**。
+- **破约风险清单必须由独立的一路专门核查**：前四轮侦察里，只有专门指派「查破约」的那一轮发现了 11 处精确方法名列表与热路径守卫扫描面的缺口——主线侦察天然倾向于查「缺陷在哪」，不查「改了会破什么」。
 
 ---
 
