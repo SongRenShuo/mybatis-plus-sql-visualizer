@@ -49,7 +49,14 @@ function Get-LogDir {
 function Test-RaceInLog {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return $false }
-    return [bool](Select-String -LiteralPath $Path -Pattern 'ClosedFileSystemException' -SimpleMatch -Quiet)
+    # 主签名：Gradle zip FS 被关闭（ClosedFileSystemException 栈 + 随后的 bundled plugin 解析失败）。
+    if (Select-String -LiteralPath $Path -Pattern 'ClosedFileSystemException' -SimpleMatch -Quiet) { return $true }
+    # 次签名（2026-11-27 run 45976887970 实证）：同一竞态的**无栈形态**——异常行没进日志，只剩
+    # 「Could not find bundled plugin with ID ... com.intellij.database」。两个限定词必须同时在，
+    # 避免把其它依赖解析失败误判成竞态（判错会把真实失败也重跑掩饰）。
+    $bundled = Select-String -LiteralPath $Path -Pattern 'Could not find bundled plugin with ID' -SimpleMatch -Quiet
+    $database = Select-String -LiteralPath $Path -Pattern 'com.intellij.database' -SimpleMatch -Quiet
+    return [bool]($bundled -and $database)
 }
 
 function Test-TestFailureInLog {
@@ -87,9 +94,10 @@ function Get-IpgpCacheArg {
 # 删 transforms 等于让每个 job 重解包 ~4.7GB，只有在 L1 无效（同一错误第二次出现）时才该付这笔钱。
 function Get-RaceLadder {
     return @(
-        'L1 停 daemon + 清项目侧 IPGP 缓存',
-        'L2 追加删 transformed/idea* 重解包',
-        'L3 干净工作树（仅 CI）'
+        'L1 清项目 .gradle/configuration-cache',
+        'L2 追加清 IPGP 布局索引（项目侧 + 共享）',
+        'L3 追加删 transformed/idea* 重解包',
+        'L4 干净工作树（仅 CI）'
     )
 }
 
@@ -118,14 +126,25 @@ function Invoke-SelfTest {
     Assert-True (-not (Test-TestFailureInLog $compileFailLog)) '编译失败不得判为测试失败'
     Assert-True (-not (Test-TestFailureInLog $raceLog)) '竞态不得判为测试失败'
 
-    # 愈合分级：三级、顺序固定、L1 不碰 transforms（删 transforms=重解包 4.7GB，只在 L1 无效时付）
+    # 愈合分级：四级、顺序固定、transforms 只在 L3 才删（删它=重解包 ~4.7GB）
     $ladder = @(Get-RaceLadder)
-    Assert-True ($ladder.Count -eq 3) "愈合分级为三级（实得 $($ladder.Count)）"
+    Assert-True ($ladder.Count -eq 4) "愈合分级为四级（实得 $($ladder.Count)）"
     Assert-True ($ladder[0] -like 'L1 *') '第一级是 L1'
-    Assert-True ($ladder[1] -like 'L2 *') '第二级是 L2'
-    Assert-True ($ladder[2] -like 'L3 *') '第三级是 L3'
+    Assert-True ($ladder[3] -like 'L4 *') '第四级是 L4'
+    Assert-True ($ladder[0] -match 'configuration-cache') 'L1 先清项目配置缓存（最便宜）'
     Assert-True ($ladder[0] -notmatch 'transformed') 'L1 不得删 transforms（成本硬约束）'
-    Assert-True ($ladder[1] -match 'transformed') 'L2 才是删 transforms 的那一级'
+    Assert-True ($ladder[1] -notmatch 'transformed') 'L2 也不删 transforms（只清索引）'
+    Assert-True ($ladder[2] -match 'transformed') 'L3 才是删 transforms 的那一级'
+
+    # 竞态次签名：只有 bundled plugin + database 两个限定词同时在才算竞态
+    $bundledLog = Join-Path $tmp 'bundled-only.log'
+    Set-Content -LiteralPath $bundledLog -Encoding UTF8 `
+        -Value "Could not find bundled plugin with ID: 'com.intellij.database'. See https://jb.gg/ij-plugin-dependencies."
+    Assert-True (Test-RaceInLog $bundledLog) '无栈形态（bundled plugin + database）判为竞态'
+    $unrelatedLog = Join-Path $tmp 'unrelated-dep.log'
+    Set-Content -LiteralPath $unrelatedLog -Encoding UTF8 `
+        -Value "Could not find bundled plugin with ID: 'com.intellij.jcef'."
+    Assert-True (-not (Test-RaceInLog $unrelatedLog)) '别家 bundled plugin 解析失败不得判为竞态'
 
     # IPGP 缓存参数：只在 CI + 有 GRADLE_USER_HOME 时生效（本机不得被改道）
     Assert-True ($null -eq (Get-IpgpCacheArg -GradleUserHome 'D:\.gradle' -IsCi $false)) '非 CI 不注入 IPGP 缓存参数'
@@ -197,12 +216,31 @@ function Invoke-Attempt {
     return [pscustomobject]@{ Code = $LASTEXITCODE; Log = $log; Label = $Label }
 }
 
+function Clear-ConfigCache {
+    # 配置期竞态会把「解析失败」这一拍留在配置缓存里：run 45976887970 的 test(fast) 第二次尝试 13 秒
+    # 同错复现，且日志紧接失败就是 `Configuration cache entry stored`——不清它，重跑只是重放坏状态。
+    $p = Join-Path $repoRoot '.gradle\configuration-cache'
+    if (Test-Path -LiteralPath $p) {
+        Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "已清理项目配置缓存：$p"
+    }
+}
+
 function Clear-ProjectIdeCache {
+    # 项目侧（IPGP 默认位置，本机/未改道时用）与共享侧（CI 上 caching.path 已指到 GRADLE_USER_HOME，
+    # 2026-11-27 起）**都要清**——只清项目侧等于没清（run 45976887970 的 L1 就是这样白跑）。
     foreach ($rel in @('.intellijPlatform\layoutIndex', '.intellijPlatform\extracted-plugins')) {
         $p = Join-Path $repoRoot $rel
         if (Test-Path -LiteralPath $p) {
             Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue
             Write-Host "已清理项目侧缓存：$p"
+        }
+    }
+    if ($env:GRADLE_USER_HOME) {
+        $shared = Join-Path $env:GRADLE_USER_HOME 'caches/ipgp-platform-cache'
+        if (Test-Path -LiteralPath $shared) {
+            Remove-Item -LiteralPath $shared -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Host "已清理共享侧 IPGP 缓存：$shared"
         }
     }
 }
@@ -233,33 +271,45 @@ if ($first.Code -eq 0) { exit 0 }
 
 $last = $first
 if (Test-RaceInLog $first.Log) {
-    # ---- 竞态愈合 L1：停 daemon + 清项目侧 IPGP 缓存（不动 transforms）----
-    Write-Host '::warning::命中 Gradle zip 文件系统竞态（ClosedFileSystemException，非代码缺陷）：L1 停 daemon + 清项目侧 IPGP 缓存后重跑'
+    # ---- L1：清项目配置缓存（最便宜，也最常够——配置期失败会被记进 configuration-cache）----
+    Write-Host '::warning::命中 Gradle zip 文件系统竞态（ClosedFileSystemException / bundled plugin 无栈形态，非代码缺陷）：L1 停 daemon + 清项目配置缓存后重跑'
     & ./gradlew.bat --stop 2>&1 | Out-Null
-    Clear-ProjectIdeCache
+    Clear-ConfigCache
     $second = Invoke-Attempt -ExtraArgs @('--max-workers=1') -Label '竞态恢复 L1'
     if ($second.Code -eq 0) { exit 0 }
     $last = $second
 
     if (Test-RaceInLog $second.Log) {
-        # ---- L2：还命中才付重解包的代价 ----
-        Write-Host '::warning::竞态 L1 未恢复：L2 追加删 transformed/idea*（重解包 ~4.7GB）后重跑'
+        # ---- L2：清 IPGP 布局索引本体（项目侧 + 共享侧）----
+        Write-Host '::warning::竞态 L1 未恢复：L2 追加清 IPGP 布局索引（项目侧 + 共享侧）后重跑'
         & ./gradlew.bat --stop 2>&1 | Out-Null
-        Clear-TransformedIdeCaches
+        Clear-ConfigCache
+        Clear-ProjectIdeCache
         $third = Invoke-Attempt -ExtraArgs @('--max-workers=1') -Label '竞态恢复 L2'
         if ($third.Code -eq 0) { exit 0 }
         $last = $third
 
         if (Test-RaceInLog $third.Log) {
-            if (-not $env:GITHUB_ACTIONS) {
-                Write-Host '本机执行：跳过干净工作树重试（git clean -xdf 会抹掉工作树，仅 CI 上允许）'
-            } else {
-                Write-Host '::warning::竞态 L2 未恢复：L3 退到干净工作树（git clean -xdf，保留 .local）重跑'
-                & ./gradlew.bat --stop 2>&1 | Out-Null
-                git clean -xdf -e .local 2>&1 | Select-Object -Last 5
-                $fourth = Invoke-Attempt -ExtraArgs @('--max-workers=1') -Label '竞态恢复 L3 干净工作树'
-                if ($fourth.Code -eq 0) { exit 0 }
-                $last = $fourth
+            # ---- L3：重解包（~4.7GB，最贵的本地级）----
+            Write-Host '::warning::竞态 L2 未恢复：L3 追加删 transformed/idea*（重解包 ~4.7GB）后重跑'
+            & ./gradlew.bat --stop 2>&1 | Out-Null
+            Clear-ConfigCache
+            Clear-TransformedIdeCaches
+            $fourth = Invoke-Attempt -ExtraArgs @('--max-workers=1') -Label '竞态恢复 L3'
+            if ($fourth.Code -eq 0) { exit 0 }
+            $last = $fourth
+
+            if (Test-RaceInLog $fourth.Log) {
+                if (-not $env:GITHUB_ACTIONS) {
+                    Write-Host '本机执行：跳过干净工作树重试（git clean -xdf 会抹掉工作树，仅 CI 上允许）'
+                } else {
+                    Write-Host '::warning::竞态 L3 未恢复：L4 退到干净工作树（git clean -xdf，保留 .local）重跑'
+                    & ./gradlew.bat --stop 2>&1 | Out-Null
+                    git clean -xdf -e .local 2>&1 | Select-Object -Last 5
+                    $fifth = Invoke-Attempt -ExtraArgs @('--max-workers=1') -Label '竞态恢复 L4 干净工作树'
+                    if ($fifth.Code -eq 0) { exit 0 }
+                    $last = $fifth
+                }
             }
         }
     }
