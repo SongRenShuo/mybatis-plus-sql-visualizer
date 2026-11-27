@@ -296,6 +296,24 @@ R7 实测 `[eq, and]`——块内 `ne` 丢了、`and` 只剩空壳。当前实�
 
 真实的性能风险点是：`isWrapperVariable` 已在 gutter 热路径上被调用 4 处（`WrapperAnchorDetector.kt:113/228/309/335`），其内部 `detectWrapperTypeDeep` 会 resolve、规则 4 会 `ReferencesSearch` + `hasMpCrudReceiver`。**若递归展开被植入这条链而不是只留在 `buildChain`，gutter daemon 成本会结构性上升，且没有任何测试会告诉你。** 这是「只改 `buildChain`」这条约束的真正理由。
 
+### 性能硬约束（用户 2026-11-27 明确要求「不要出现性能问题」）
+
+实施时必须逐条满足，并在报告里给出**定量对照**：
+
+| # | 约束 | 为什么 |
+|---|---|---|
+| P1 | 递归/ReferencesSearch 新增**只许留在 `buildChain` 预览路径**，绝不可进入 `isWrapperVariable` / `detectWrapperTypeDeep` / `WrapperAnchorDetector` 调用链 | 后者在 gutter 每次重绘的 daemon 里执行 |
+| P2 | 深度上限判断必须**早于** resolve：先看 `depth >= MAX` 再决定是否处理节点 | 避免为注定要剪掉的节点付索引代价 |
+| P3 | visited 集合必须**早于**任何 resolve 建立 | 避免同一方法被反复 resolve |
+| P4 | 去重的语法前门（qualifier 是否裸引用等）必须零成本，**命中后**才 resolve；同一作用域内 resolve 结果需缓存 | 把 O(n × resolve) 拉回 O(n) |
+| P5 | 禁止「先 `collectElementsOfType` 全量收集、再逐个 resolve 过滤」的写法 | 递归化后会放大成 O(n²)。现有 `expandHelperCalls:973` 与 `resolveNestedLambda:182` 都是这种写法，改造时必须一并纠正 |
+| P6 | `ReferencesSearch` 是索引级操作，是最大风险源：新增前必须论证「无法用 resolve/parent 链替代」 | 索引级操作在 daemon 里代价高 |
+| P7 | 报告必须贴整类耗时对照（修复前 vs 修复后） | 性能无自动门禁，只能定量核对 |
+
+**验收阈值**：任一相关测试类整类耗时**上升超过 30%** → 视为引入性能问题，必须优化后重提。
+
+**取舍原则**：若为性能必须收窄覆盖面，**选择「少展开一层」而不是「变慢」**，并在报告里明确说明取舍。
+
 
 
 ---
