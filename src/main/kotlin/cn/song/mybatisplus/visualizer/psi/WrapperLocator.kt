@@ -2388,6 +2388,12 @@ object WrapperLocator {
         "and", "or", "nested", "not", "func", "last", "set", "select", "selectAll", "distinct",
         "selectCount", "selectSum", "selectMax", "selectMin", "selectAvg",
         "eqSql", "gtSql", "geSql", "ltSql", "leSql", "inSql", "notInSql", "apply", "comment",
+        // D264 集成期补全（CI 分片实测回归）：UPDATE 族的其余官方赋值方法。
+        // 缺了它们，修 4 的 `isPseudoConditionCall` 会把 `setSql`/`setIncrBy`/`setDecrBy`/`setIfExists`
+        // 当伪条件剔除——`LambdaUpdateConverter` 明明支持（见其 :21/:96/`:59`），但收集阶段就丢了，
+        // 产物退化成 `SET status = 2`（少了 `updated_at = now()`）或整段 SET 为空。
+        // 白名单必须与 converter 的能力面同源，不能只列「看起来像条件」的那些。
+        "setSql", "setIncrBy", "setDecrBy", "setIfExists",
     )
 
     /**
