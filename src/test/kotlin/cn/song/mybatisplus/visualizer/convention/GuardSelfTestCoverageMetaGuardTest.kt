@@ -1467,6 +1467,26 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "灵敏度=删掉 plugin.xml 的 registryKey 或改键名、把消费点改成无参重载、" +
                     "删 en 或 zh 任一侧 standalone 键，对应用例必红。",
             ),
+            // ---- T-SyncK2JMaster181 补登（master 冻结 tip 自身未收口的同款缺口） ----
+            GuardEntry(
+                "ui/gutter/MapperPreviewProviderOrderGuardTest.kt",
+                emptyList(),
+                "T-MapperPreviewOrder 守卫（预览图标与跳转图标的同行顺序）：判定内核内联于两例——" +
+                    "①plugin.xml 里 MapperMethodPreviewLineMarkerProvider 的注册顺序必须早于跳转 provider" +
+                    "（预览在左、跳转在右）；②生产源的图标列位置常量与 ajax 下拉形态一致。" +
+                    "无「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
+                    "灵敏度=调转 plugin.xml 两行顺序必红。" +
+                    "（**master f06828c2d 侧未登记本件，属上游未收口；k2j 本轮补登**）",
+            ),
+            GuardEntry(
+                "psi/BatchOperationJoinGuardTest.kt",
+                emptyList(),
+                "D256-M3 join 消费族错误 SQL 守卫（T-ServiceJoinWrapperPreview 的守卫面）：判定内核内联于" +
+                    "用例——批量操作/联表链的入口必须先过守卫再查注册表（`selectJoinList` 族不在注册表，" +
+                    "守卫放在查表后就永不执行）。无「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
+                    "灵敏度=把守卫挪到注册表查询之后必红。" +
+                    "（master 侧此件已登记，k2j 本轮随车道 B 移植补齐）",
+            ),
         )
     }
 }
