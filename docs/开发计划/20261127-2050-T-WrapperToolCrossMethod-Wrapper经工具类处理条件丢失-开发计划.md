@@ -660,6 +660,35 @@ Map 条件族实参是 `Map` 不是 Wrapper，不进 `hasWrapperTypedArgument`�
 > 另有两轮因并发争用失败在构建阶段（`engine-jar/compileKotlin` 产物被删、`prepareTestSandbox`
 > 拷贝 `panweidb-jdbc-2.0.0.jar` 撞文件锁），均与代码无关，重试即过。如实登记，不当作绿。
 
+**性能定量（用户追加硬约束：必须自己量，不能凭「看起来没变慢」）**
+
+专用探针（临时类，测完即删、未入仓）测「同一条链、基底完全相同、仅尾部多 4 个未识别方法」的单次
+`parse` 边际成本（30k 预热 + 5 轮交替各 300k 次取最小值）：
+
+```
+D264PERF baseline_ns=2130 plus4UnknownCalls_ns=2075 delta_ns=-55 pct=-2.6
+```
+
+结论：**落在测量噪声底内**（负值即噪声；4 次 `LinkedHashSet.add` 的期望成本量级为几十纳秒）。
+
+类级耗时用**交叉 A/B**（同一条命令交替跑 4 次，`else` 分支一开一关）排除平台预热漂移：
+
+```
+AB off tests=16 fail=9 time=25.533   ← 首跑含沙箱/索引预热，非稳态
+AB on  tests=16 fail=9 time=15.398
+AB off tests=16 fail=9 time=13.085   ← 稳态
+AB on  tests=16 fail=9 time=13.300   ← 稳态
+```
+
+稳态 13.085s vs 13.300s（+1.6%，绝对 0.2s，与相邻两跑抖动同量级），**未出现 >30% 上升**，
+无需回头优化。纯逻辑类 `QueryWrapperParserTest` 30 例本身 0.015~0.147s（差异由 JVM 预热决定，
+与本次改动无关，同命令连跑两次即 0.128→0.147）。`WrapperToolClassReproTest` 的 9 例失败与改动前
+**逐条一致**（收集层，属车道 A/C），本轮未新增失败。
+
+**取舍口径**：本轮**没有**为了性能砍任何提示。所有判据要么是「已在循环里的顺手操作」
+（else 分支一次 add），要么是「一个调用的实参数次类型文本判定」（`detectWrapperTypeDeep` 的
+名字前门 + 父链类级缓存）；不含 `ReferencesSearch`、不含额外列表遍历、`WrapperChain` 契约未动。
+
 ### 教训预登记
 
 - **用例首版三处假红**：跨包 `addClass` 静态导入、`MyWrapper` 未造 MP 基类桩、`addClass` API 在该测试 SDK 不存在——都被我误当成插件缺陷。教训：新语料先确认「装置本身能解析」，否则红的是自己。
