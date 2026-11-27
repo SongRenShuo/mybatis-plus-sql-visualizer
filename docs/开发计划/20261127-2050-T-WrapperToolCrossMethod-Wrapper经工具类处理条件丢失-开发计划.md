@@ -21,7 +21,7 @@
   -Pkotlin.compiler.execution.strategy=in-process
 ```
 
-### 权威读数（2026-11-27 21:12 实测，14 tests / 8 failed）
+### 权威读数（2026-11-27 21:32 实测，16 tests / 9 failed）
 
 | # | 用例 | 用户形态 | 期望 | 实测 | 判定 |
 |---|---|---|---|---|---|
@@ -30,17 +30,23 @@
 | R2 | `testReproHelperDelegatesToAnotherAndReturns` | 工具类纯透传到另一方法 | `[eq, ne]` | `[eq]` | **红，透传层整段丢** |
 | R3 | `testReproHelperLocalAlias` | 工具类内局部别名 `target = w` 再追加 | `[eq, ne]` | `[eq]` | **红，别名上的条件丢** |
 | R4 | `testReproHelperReturnsWrapperAndReassigned` | 工具类返回 wrapper，调用方 `w = decorate(w)` | `[eq, ne]` | **`[ne]`** | **红，且 `eq` 反被切掉（比丢条件更糟）** |
-| R5 | `testReproHelperBuildsAndReturnsWrapper` | 工具类构造并返回（`return q` 裸变量） | `[eq, isNotNull]` | **`[buildQuery]`** | **红，把工具方法名当成条件方法 → 产出伪条件** |
+| R5 | `testReproHelperBuildsAndReturnsWrapper` | 工具类构造并返回（`return q` 裸变量） | `[eq, isNotNull]` | **`[buildQuery]`** | **红，把工具方法名当成条件方法** |
 | R6 | `testReproHelperResultConsumedInline` | `mapper.selectList(FilterUtil.buildQuery(1))` 内联消费 | `[eq]` | **定位不到链（null）** | **红，整条链不可预览** |
-| R7 | `testReproNestedLambdaBlockWithHelperCall` | 嵌套 lambda **代码块体**内追加条件 | 含 `eq`+`ne`，不含 `trim` | **`[eq, and]`** | **红，块内 `ne` 完全丢失**（只留 `and` 壳） |
+| R7 | `testReproNestedLambdaBlockWithHelperCall` | 嵌套 lambda **代码块体**内追加条件 | 含 `eq`+`ne`，不含 `trim` | **`[eq, and]`** | **红，块内 `ne` 完全丢失** |
 | R8 | `testReproOrderDependenceProbe` | 与 R4 同语料，仅调整类声明顺序 | `[eq, ne]` | **`[]`** | **红，整条链全空**——位置机制冲突的直接证据 |
+| **R10** | **`testReproBareVariableReturnProducesConditionlessSql`** | **产物级**：`return q` 形态下用户实际看到的 SQL | 含 `WHERE` 与 `status` | **`SELECT id, status, device_name FROM device_info_entity`（无 WHERE）** | **红——不是「少了条件」，是整条 WHERE 消失** |
 | P1 | `testReproHelperInternalChainedCall` | 工具类内单句链式 `w.ne().like()` | `[eq, ne, like]` | 同期望 | 绿 |
 | P2 | `testReproHelperCalledTwiceWithDifferentArgs` | 两个不同工具类各调一次 | `[ne, like]` | 同期望 | 绿 |
 | P3 | `testReproHelperAbstractWrapperParameter` | 形参声明为 `Wrapper<T>` 基类型 | `[eq, ne]` | 同期望 | 绿（**证明与形参类型无关**） |
 | P4 | `testReproStaticImportHelper` | 静态导入裸调 | `[eq, ne]` | 同期望 | 绿（装置限制已排除，见 V3） |
-| P5 | `testReproCustomChainMethodDroppedByParser` | 自研子类新增链方法 `w.statusEq(1)` | SQL 含 `status` | SQL 含 `status` | **绿——自研链方法实际能正确解析**（与侦察报告 L9 的推断相反，见下方修正） |
+| P5 | `testReproCustomChainMethodDroppedByParser` | 自研子类新增链方法 `w.statusEq(1)` | SQL 含 `status` | SQL 含 `status` | **绿——自研链方法实际能正确解析**（修正侦察 L9 的影响面推断） |
+| P6 | `testReproToolMethodNameCollidesWithMpCondition` | 工具方法名与 `select` 撞名 | 工具方法不进链，内部 `ne` 要进 | 同期望 | 绿（`FilterUtil.select(w)` 的 qualifier 是 `FilterUtil` 非 `w`，撞名风险在该形态下不成立） |
 
-> **对侦察结论 L9 的修正（重要）**：侦察报告称「`QueryWrapperParser:252` 无 else 分支，未知方法静默丢弃」，机制描述正确，但**不能推论「自研链方法一定丢」**。P5 实测显示 `statusEq` 能让 SQL 产出 `status` 条件——说明链方法在其方法体内对 `eq` 的调用被收集进了链（`collectExtendingChain` 沿 qualifier 回溯时把 `statusEq` 之后的调用也收了）。因此 L9 是**真实存在但影响面待定**的机制，不是「所有自定义方法必丢」。实施时以 P5 为界：**能解析的不改，确认丢的才补可见性**。
+> **R10 是本次最重要的单条读数**：它把问题从「少了一部分条件」升级为「整条 WHERE 消失」，且**无任何提示**。用户看到 `SELECT id, status, device_name FROM device_info_entity` 会以为这条查询本来就没有过滤条件——这是「静默错误 SQL」，比报错严重得多。
+
+> **对侦察结论 L9 的修正（重要）**：侦察报告称「`QueryWrapperParser:252` 无 else 分支，未知方法静默丢弃」，机制描述正确，但**不能推论「自研链方法一定丢」**。P5 实测显示 `statusEq` 能让 SQL 产出 `status` 条件——说明链方法在其方法体内对 `eq` 的调用被收集进了链。因此 L9 是**真实存在但影响面待定**的机制，不是「所有自定义方法必丢」。实施时以 P5 为界：**能解析的不改，确认丢的才补可见性**。
+
+> **对侦察结论「撞名会渲染成错误条件」的修正**：侦察担心 `select`/`last`/`apply` 撞名会导致工具调用被渲染成列/片段。P6 实测该形态下不成立（qualifier 不同即可区分）。但**若工具方法被调用在 wrapper 自身（`w.last(...)` 形式）**，风险仍在——这属待验证前提 V9。
 
 ### 三条最有价值的判据
 
@@ -87,26 +93,39 @@
 
 ## 三、修法方向（供实施者取舍，非最终方案）
 
+### 修 0（最高优先，最坏面）：拦住「实参是 Wrapper 但链定位失败」的批量兜底
+
+R10 实测产物 `SELECT id, status, device_name FROM device_info_entity`（**无 WHERE**）证明：链定位失败后落到批量模板，会产出**静默的错误 SQL**。这比丢条件严重——用户会误以为该查询本就没有过滤条件。
+
+- 位置：`SqlPreviewService.preview` 的批量分支之前（约 `:603` 处），以及 `BatchOperationConverter.convert` 的注册表分支（`:240`/`:249`）。
+- 判据：实参表达式**静态可见是 Wrapper 类型**（复用 `detectWrapperTypeDeep` 或形参类型判定），但 `WrapperLocator` 四顺位全失败 → **拒绝产出**，改为明确提示「检测到 Wrapper，但无法解析其条件链」。
+- 同型先例可照抄：`BatchOperationConverter.isJoinFamilyRejected`（`:321-322`，在 `convert:240` 最前一律 return null）——「宁可无预览，不可输出错误 SQL」的既有口径。
+- 注意：`selectList/selectMaps/selectObjs` 目前**没有**等价守卫，join 族才有。这是本修要补的缺口。
+
 ### 修 1：把「单层展开」升级为「带深度与循环防护的递归展开」
 
 - 位置：`expandHelperCalls`。
 - 语义：helper 体内对形参的调用展开后，若该调用本身又是「把 wrapper 传给另一个方法」，继续展开，直到无新调用或命中深度上限。
 - 防护（必须同时具备，缺一不可）：
-  - **深度上限**：复用现有常量风格，新增 `HELPER_EXPAND_MAX_DEPTH`（建议 5，覆盖现实的 2~3 层封装且不失控）。
-  - **环检测**：按 `PsiMethod` 身份建 visited 集合（`a → b → a` 的自递归/互递归必须能终止）。
-  - **去重**：现有 `distinctBy { textRange.endOffset }` 在递归后不够——同一调用可能经多条路径进入，需按「调用表达式身份 + 展开路径」去重，否则同一条 `ne` 会渲染两遍。
+  - **深度上限**：新增 `WRAPPER_CROSS_METHOD_MAX_DEPTH = 5`（与既有 `ExpressionEvaluator.MAX_TRACE_DEPTH=5`、`SqlStringConcatenator.MAX_METHOD_FOLLOW_DEPTH=3` 同量级）。**不要复用** `WRAPPER_SUPER_CHAIN_MAX_DEPTH=8`——那是类型链语义，混用会互相牵制。
+  - **visited 防环**：按 `PsiMethod`（被展开的 helper）与 `PsiVariable`（return 裸变量时）身份建 `MutableSet`，照 `collectSuperChain:1884-1885` 的写法（先判上限再 `visited.add`）。**现状 `expandFactoryCalls:1612` 的自递归无任何防护**（靠「实参嵌套有限」侥幸不爆），一旦扩成返回链递归，`a(){return b(w);} b(){return a(w);}` 会栈溢出。
+  - **去重**：现有 `distinctBy { textRange.endOffset }` 在递归后不够——必须改成 `(文件, offset)` 复合键，否则跨文件时两条不同调用可能因 endOffset 相同被误去重（条件永久消失）。
 - 别名（L2）：展开时把 helper 体内的**局部变量**也纳入追踪——`target = w` 视为 `w` 的别名（仅限直接赋值，不追多层别名变换，避免过度推断）。
 
 ### 修 2：让「返回值形态」进入链构建
 
 两个子形态，修法不同：
 
-- **R2/R5（工具类返回 wrapper 裸变量）**：`findFactoryReturnChain` 增加「return 表达式是 `PsiReferenceExpression` 且 resolve 到的是**方法体内的局部 wrapper 变量**」分支——递归走该局部变量的 `buildChain` 收集逻辑（同样需要深度+环防护）。
+- **R2/R5/R10（工具类返回 wrapper 裸变量）**：`findFactoryReturnChain` 增加「return 表达式是 `PsiReferenceExpression` 且 resolve 到**方法体内的局部 wrapper 变量**」分支——递归走该局部变量的 `buildChain` 收集逻辑（同样需要深度+环防护）。
 - **R6（内联消费）**：`findWrapperFactoryCall` 增加「实参里的方法调用返回 Wrapper 类型」识别，把该调用当作伪工厂链首。
+- **多 return 规则**：照 `SqlStringConcatenator.kt:480-492`——多分支文本不一致即放弃（不猜分支），并排除嵌套 lambda/内部类的 return（`:483-484` 有现成写法）。现状 `findChildOfType(body, PsiReturnStatement)` 取第一个 return 且无任何过滤。
 
-### 修 3：重新赋值不切断前段（R4）
+### 修 3：重新赋值不切断前段（R4/R8）
 
 `filterCallsToAnchorSegment` 的语义是「按条件生命周期分段」，本身是对的；问题在于 `w = decorate(w)` 这种**自引用赋值**被当成了「生命周期重置」。修法：自引用赋值（RHS 里引用了 LHS 同一个变量）不记为分段点，而是视为**链的延续**（RHS 内部的条件并入当前段）。
+
+同时必须修**跨文件偏移比较**：展开调用的 `textRange.startOffset` 来自 helper 文件，却被拿去与调用方的 `assignmentOffsets` 比大小 → 段过滤结果随机（`WrapperLocator.kt:1049` vs `:1351`）。需引入 `(文件, offset)` 复合键。
+
 
 ### 修 4：非条件方法不得静默入链（R5 的伪条件面）
 
@@ -146,13 +165,29 @@ R7 实测 `[eq, and]`——块内 `ne` 丢了、`and` 只剩空壳。当前实�
 
 | 消费者 | 读什么 | 本次症状 | 是否需同步改 |
 |---|---|---|---|
-| gutter 变量声明锚点 | `WrapperAnchorDetector.anchorElement` | 声明行图标可能正常（锚点只看声明），但点开预览少条件 | 不改锚点，改链 |
-| gutter 链首锚点 | 同上 | 工具类内链首不出现在用户文件里 | 不改 |
+| gutter 变量声明锚点 | `WrapperAnchorDetector.anchorElement` | 声明行图标可能正常（锚点只看声明），但点开预览少条件 | **需部分同步**：锚点不产出条件，但若新增「工具方法返回 wrapper = 链首」，`isChainHeadCall`、`isSqlCandidate`、`initializerHeadIsWrapper`、`hasWrapperArgument` 四处都要一起认，否则「能预览没图标」或「图标点开是另一条路」 |
 | `WrapperLocator.locateWithTable` | `buildChain` 三顺位 | 主战场 | **改**（修 1/2/3） |
-| 预览服务 `SqlPreviewService.preview` | 路径 1（wrapper 链）→ 路径 2（批量） | 路径 1 少条件；路径 2 不适用 | 不改（吃上游修复） |
-| 选择区多 SQL（Ctrl+Shift+…） | `isSqlCandidate` | 工具类返回形态的链首不入选 | 随修 2 自然覆盖，需补用例 |
-| `BatchOperationConverter` | 批量方法模板 | 若工具方法名被误当批量方法 | 需核查（见待验证 V2） |
-| 其他 ORM（EasyQuery/xbatis/JPA） | 各自 entry 判定 | 不共用本链收敛逻辑 | 本次不改，但需在计划里明确「同类缺口是否存在」 |
+| `SqlPreviewService.preview` | 路径 1（wrapper 链）→ 路径 2（批量） | 路径 1 少条件；链定位失败时**落到批量兜底产出无 WHERE SQL** | **需加拦截**：在批量分支前拦住「实参是 Wrapper 但链定位失败」，否则上游修好前会静默产出错误 SQL |
+| `BatchOperationConverter` | 批量方法模板 | D1/B1 形态下出 `SELECT 全列 FROM 表`（可能带 `deleted=0`，但无业务条件） | **需加守卫，不需同步展开**。join 族已有 `isJoinFamilyRejected:321` 先例可照抄；`selectList/selectMaps/selectObjs` 目前**无等价守卫** |
+| `ArgResolver.resolveNestedLambda` | lambda 体内链 | **旁路**：lambda 体内跨方法调用完全不经 `WrapperLocator` 的展开 | **需改**（修 7），否则修好 `expandHelperCalls` 后 lambda 内仍丢 |
+| `QueryWrapperParser` | `WrapperChain.calls` | 未知方法落 `else` 静默 | **不在 converter 补展开**（无 PSI 上下文），但要补可见性（修 5） |
+| `XmlEwResolver` | `${ew.customSqlSegment}` | 失败时 `?: return emptyMap()` **无 warning**，片段静默变空 | 跟随上游，建议同时补 warning |
+| `actions/ConvertToSqlAction` | `sqlCandidatesInRange` | D1 形态当前不入候选 | 随 `isSqlCandidate` 变化自动生效，需补用例 |
+| `ChainStateDetector` / `WrapperCompletionContributor` | 补全用链首识别 | **另有 2~3 份重复实现**（与 `factoryWrapperType` 平行） | 仅影响补全；规则变更需对齐，否则「能补全不能预览」 |
+| EasyQuery / Mds / Querydsl converter | 各自 `collectSegments` | **三份同构拷贝**，注释自称与 `collectExtendingChain` 同构 | 不共用 MP 链，本次不改；但其 `MAX_CHAIN_DEPTH=32` 是「跨层回溯要有上限」的现成范式 |
+| `KtWrapperDetector` | .kt 行级正则 | `locateWithTable` 对 kt 直接 return null | **范围外**，计划须写明 |
+| `WrapperCache` | 缓存 `locateWithTable` 结果 | **键只有锚点文件的 `modificationStamp`**；helper 文件被改不会失效 | **必须补**：跨方法展开后，被展开方法所在文件也要进失效维度，否则改了工具类仍出旧 SQL |
+
+### 三个此前从未踩过的新维度（第三路侦察补充）
+
+| 维度 | 问题 | 证据 |
+|---|---|---|
+| **跨文件偏移比较** | 展开调用的 `textRange.startOffset` 来自 helper 文件，却拿去与调用方的 `assignmentOffsets` 比大小 → 段过滤结果随机 | `WrapperLocator.kt:1049` vs `:1351`、`:1349-1355` |
+| **跨文件去重** | `distinctBy { textRange.endOffset }` **不含文件判定**；helper 在别文件时，两条不同调用的 endOffset 可能相同 → 误去重，条件永久消失 | `WrapperLocator.kt:1101`、`:496`、`:609` |
+| **多 return 无一致性校验** | `findChildOfType(body, PsiReturnStatement)` 只取第一个 return，且**不排除嵌套 lambda/内部类的 return**；多分支文本不一致时也不放弃，直接取第一个 | `WrapperLocator.kt:1619-1624`。对照 `SqlStringConcatenator.kt:480-492` 有「多 return 文本不一致即放弃」+ `:483-484` 排除嵌套的现成规则 |
+
+**这三条决定了修 1/2 不能只改「展开逻辑」**：必须同时引入 `(文件, offset)` 复合键、把 helper 文件纳入缓存失效维度、并按 `SqlStringConcatenator` 的规则处理多 return。否则主逻辑改对了，条件仍会在去重/分段/缓存三处悄悄消失。
+
 
 ---
 
@@ -168,6 +203,8 @@ R7 实测 `[eq, and]`——块内 `ne` 丢了、`and` 只剩空壳。当前实�
 | V6 | `distinctBy(endOffset)` 换成身份去重后，不改变 P1/P2 两条已绿用例的收集结果 | 直接跑本类 P1/P2 | 去重口径改动引入重复条件 |
 | **V7** | **demo 的钉定快照里有本次语料** | **已核实不成立**：`dev-support/test-demo/demo-revision.txt` 钉 `fcb1faf`，而 `custom-wrapper-demo` 模块是 `946fa5d0` 才引入的，快照里没有 | runIde 点验前必须先推 demo 仓 + 更新 `demo-revision.txt`，否则全新克隆看不到用例 |
 | **V8** | **R8（类顺序探针）的红不是测试装置噪声** | 已两次实测（`[ne]` vs `[]`），差异只来自类声明顺序 | 若为噪声，修 3 的动机需重新评估 |
+| **V9** | **工具方法名在 wrapper 自身上撞名（`w.last(...)` / `w.select(...)`）时是否被渲染成错误条件** | P6 只测了 `FilterUtil.select(w)` 形态（不成立）；`w.last(...)` 形态未测 | 若成立，修 4 需覆盖「wrapper 自身调用的未知方法」而不只是「实参位置的工具调用」 |
+| **V10** | **批量兜底在 D1 形态下真的产出无 WHERE SQL** | 侦察推断 + R10 产物实测（`return q` 形态）已间接证明；但 `mapper.selectList(FilterUtil.buildQuery(1))` 走的是**批量分支**而非 wrapper 链分支，路径不同 | 若是，`SqlPreviewService` 必须加「实参是 Wrapper 但链定位失败」的拦截，优先级等同修 4 |
 
 ## 五之二、复现装置的位置与边界（实施者必读）
 
@@ -226,16 +263,25 @@ R7 实测 `[eq, and]`——块内 `ne` 丢了、`and` 只剩空壳。当前实�
 
 ## 七、实施顺序建议（风险从低到高）
 
-1. **修 4 先行**（伪条件守卫）：独立、风险低、立刻消除「产出错误 SQL」这个最坏面。
-2. **修 5**（解析层可见性）：只加 `unknownMethods` 与红字提示，不改条件条数，`QueryWrapperParserTest.未知方法_安全忽略` 应保持绿。先做这条，用户能立刻看到「少了什么」，也给我们取证线索。
-3. **修 3**（自引用赋值不切段）：修 R4/R8 那一对位置冲突，局部改动，配 `WrapperReuseRepro` 回归。
-4. **修 7**（嵌套 lambda 块体）：R7 已红，判据与修 1 同源，可在修 1 之后顺手做。
-5. **修 1**（递归展开 + 别名追踪）：主战场，配深度/环防护。
-6. **修 2**（返回值形态）：面最大，最后做。
-7. **修 6**（if 分支 / 多 return）：可独立，也可登记为已知未修。
-8. 八条 REPRO 用例逐条转绿，作为回归护栏留在仓里。
+1. **修 0 先行**（批量兜底拦截）：消除「无 WHERE 错误 SQL」这个最坏面。R10 已实测证明该产物存在。
+2. **修 4**（伪条件守卫）：独立、风险低，消除「工具方法名被当条件」。
+3. **修 5**（解析层可见性）：只加 `unknownMethods` 与红字提示，不改条件条数，`QueryWrapperParserTest.未知方法_安全忽略` 应保持绿。用户能立刻看到「少了什么」，也给我们取证线索。
+4. **修 3**（自引用赋值不切段 + 跨文件偏移复合键）：修 R4/R8 那一对位置冲突。
+5. **修 7**（嵌套 lambda 块体）：R7 已红，判据与修 1 同源，可在修 1 之后顺手做。
+6. **修 1**（递归展开 + 别名追踪 + 深度/环防护 + 复合去重键）：主战场。
+7. **修 2**（返回值形态 + 多 return 规则）：面最大，最后做。
+8. **修 6**（if 分支 / 多 return）：可独立，也可登记为已知未修。
+9. 九条 REPRO 用例逐条转绿，作为回归护栏留在仓里。
 
-> 顺序理由：修 4/5 都是「让问题可见或不再更坏」，不引入递归风险；修 3 是单点语义修正；修 7/1/2 才涉及递归与位置模型，风险递增。
+> 顺序理由：修 0/4/5 都是「让问题可见或不再更坏」，不引入递归风险；修 3 是单点语义修正；修 7/1/2 才涉及递归与位置模型，风险递增。
+
+### 必须与主逻辑同批交付的三件事（否则修了也白修）
+
+| 项 | 为什么不能拖 | 出处 |
+|---|---|---|
+| `(文件, offset)` 复合去重/分段键 | 跨文件展开后 `distinctBy(endOffset)` 与 `startOffset` 比较全部失效，条件会在去重/分段两处悄悄消失 | `WrapperLocator.kt:1101`、`:496`、`:609`、`:1049` vs `:1351` |
+| `WrapperCache` 失效维度加 helper 文件 | 缓存键只有锚点文件的 `modificationStamp`，改了工具类仍出旧 SQL；用户会以为修复没生效 | `WrapperCache.kt:82-84`；可仿 `LocatedWrapper.kt:56-64` 的单文件校验扩成多文件 |
+| 入口识别四处对齐 | 若新增「工具方法返回 wrapper = 链首」，`isChainHeadCall`/`isSqlCandidate`/`initializerHeadIsWrapper`/`hasWrapperArgument` 必须一起认，否则「能预览没图标」或「图标点开走另一条路」 | `WrapperAnchorDetector.kt:131-135`、`:156-158`、`:268-285`、`:300-315` |
 
 ---
 
@@ -245,10 +291,18 @@ R7 实测 `[eq, and]`——块内 `ne` 丢了、`and` 只剩空壳。当前实�
 
 | 项 | 读数 |
 |---|---|
-| 插件侧复现类 | `WrapperToolClassReproTest`，14 例，**6 绿 / 8 红**（2026-11-27 21:12） |
+| 插件侧复现类 | `WrapperToolClassReproTest`，16 例，**7 绿 / 9 红**（2026-11-27 21:32） |
 | demo 侧语料 | `custom-wrapper-demo` 新增 `WrapperFilters.java` + `WrapperToolClassQueryService.java`（七形态），`mvnd -o -DskipTests clean compile` 通过（18 源文件） |
 | demo 提交 | `ee14d44`「test(demo): Wrapper 经工具类处理复现语料（D264）」 |
-| 定向命令 | `./gradlew test --tests "cn.song.mybatisplus.visualizer.psi.WrapperToolClassReproTest" -Pkotlin.compiler.execution.strategy=in-process`（约 1.5~2 分钟） |
+| 定向命令 | `./gradlew test --tests "cn.song.mybatisplus.visualizer.psi.WrapperToolClassReproTest" -Pkotlin.compiler.execution.strategy=in-process`（约 1~2 分钟） |
+
+### 三轮侦察的关键增量（都已用实测校验）
+
+| 轮次 | 侦察给出 | 我的实测校验结果 |
+|---|---|---|
+| 第 1 轮（解析链） | 完整职责地图；`QueryWrapperParser:252` 静默丢弃；if/三元/循环/switch 能力边界；核心四文件零 Logger | L9 机制成立但影响面推断过宽 → P5 修正 |
+| 第 2 轮（测试基座） | 金样矩阵装置（`SqlPreviewSpecMatrixTest`）；平台类禁用 `testFast --tests`；demo 钉定快照 `fcb1faf` 不含 `custom-wrapper-demo` | 装置边界写入 §五之二；V7 记为已证伪 |
+| 第 3 轮（穷尽落点） | 跨文件偏移比较 / 跨文件去重 / 多 return 无过滤 / 缓存失效维度 / 批量兜底无守卫 / 入口识别三处重复实现 | 全部写入 §四 与 §七；其中「无 WHERE 错误 SQL」用 R10 产物实测确认 |
 
 ### 修复阶段
 
@@ -263,7 +317,8 @@ R7 实测 `[eq, and]`——块内 `ne` 丢了、`and` 只剩空壳。当前实�
 
 ## 九、验收口径
 
-- `WrapperToolClassReproTest` 14 例：8 条 REPRO 转绿，6 条 PASS 保持绿。
+- `WrapperToolClassReproTest` 16 例：9 条 REPRO 转绿（尤其 **R10 产物级**必须从「无 WHERE」变为含完整条件），7 条 PASS 保持绿。
 - `WrapperLocatorTest` / `WrapperAnchorDetector*Test` / `CustomWrapperServicePreviewTest` / `WrapperTypeSuperChainTest` / `QueryWrapperParserTest` 全绿（无回归）。
 - demo 项目 `custom-wrapper-demo` 七形态在 runIde 沙盒逐个点验，预览 SQL 条件完整。
-- 反向验证：任取一条 REPRO 用例，临时关掉对应修复分支，必须变红，贴两次读数。
+- **反向验证**：任取一条 REPRO 用例，临时关掉对应修复分支，必须变红，贴两次读数。
+- **最坏面专项**：确认 R10 形态在修复前/后各拍一次产物（`SELECT ... FROM ... [无 WHERE]` vs `... WHERE ...`），作为「静默错误 SQL 已消除」的证据。

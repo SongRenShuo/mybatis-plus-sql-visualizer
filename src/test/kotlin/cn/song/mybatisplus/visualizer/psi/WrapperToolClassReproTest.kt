@@ -646,6 +646,91 @@ class WrapperToolClassReproTest : BasePlatformTestCase() {
         )
     }
 
+    /**
+     * REPRO-14：**产物级**验证——`return q` 裸变量形态下，用户看到的 SQL 到底是什么。
+     *
+     * R5 只断言了「链上收集到 `buildQuery`」，但用户真正看到的是 SQL 文本。
+     * 若 `buildQuery` 在解析层被静默丢弃，产物就是**无 WHERE 的 SELECT**——
+     * 这比「条件少了一部分」更危险：用户会以为查询没有过滤条件。
+     *
+     * 断言方向刻意写成「SQL 里不得出现无条件扫描」：修复前必红（证明缺陷），修复后转绿。
+     */
+    fun testReproBareVariableReturnProducesConditionlessSql() {
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<DeviceInfoEntity> w = FilterUtil.buildQuery(1);
+                    mapper.selectList(w);
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                    private Integer status;
+                    private String deviceName;
+                }
+
+                static class FilterUtil {
+                    static LambdaQueryWrapper<DeviceInfoEntity> buildQuery(Integer status) {
+                        LambdaQueryWrapper<DeviceInfoEntity> q = new LambdaQueryWrapper<>();
+                        q.eq(DeviceInfoEntity::getStatus, status);
+                        q.isNotNull(DeviceInfoEntity::getDeviceName);
+                        return q;
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+        val sql = sqlAtConsumer()
+        assertTrue("产物不得是无条件的全表 SELECT（条件被静默丢弃）：\n$sql", sql.contains("WHERE"))
+        assertTrue("应含 status 条件：\n$sql", sql.contains("status"))
+    }
+
+    /**
+     * REPRO-15：**工具方法名与 MP 条件方法撞名**（`select` / `last` / `apply`）。
+     *
+     * 侦察指出（`QueryWrapperParser.kt:170/172/186/200/204/96`）：若工具方法恰好叫
+     * `select`/`last`/`apply`，解析器会**真的把它渲染成列/片段/条件**，
+     * 比丢弃更坏——用户会看到一条语义完全错误的 SQL，且毫无提示。
+     *
+     * 这条钉住「撞名不得被当成条件」：`w.last(...)` 若来自工具类包装，不应生成 LIMIT。
+     */
+    fun testReproToolMethodNameCollidesWithMpCondition() {
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<>();
+                    w.eq(DeviceInfoEntity::getId, 1L);
+                    FilterUtil.select(w);
+                    mapper.selectList(w);
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                    private Integer status;
+                }
+
+                static class FilterUtil {
+                    static void select(LambdaQueryWrapper<DeviceInfoEntity> w) {
+                        w.ne(DeviceInfoEntity::getStatus, 1);
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+        val calls = callsAtConsumer()
+        // 工具方法 select 不应作为「列选择」语义进链；其内部 ne 才是真条件
+        assertTrue("工具方法 select 不应被当成列选择语义：$calls", "select" !in calls)
+        assertTrue("工具类内部的 ne 应被收集：$calls", "ne" in calls)
+    }
+
     // ------------------------------------------------------------------
     // 装置
     // ------------------------------------------------------------------
