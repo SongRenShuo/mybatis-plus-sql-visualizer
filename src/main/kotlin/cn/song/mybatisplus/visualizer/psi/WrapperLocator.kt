@@ -11,6 +11,7 @@ import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaMetadataReader
 import cn.song.mybatisplus.visualizer.util.NamingStrategy
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
 import com.intellij.psi.PsiAssignmentExpression
@@ -55,6 +56,43 @@ import java.util.WeakHashMap
  * 当前实现聚焦 Java PSI（项目示例为 Java 代码）；Kotlin 文件支持列入后续里程碑。
  */
 object WrapperLocator {
+
+    /**
+     * D264 修 4：链内出现「非条件方法」时的留痕通道。
+     *
+     * 只在预览链路（[buildChain] 等 `private` 收集函数）里写，不进 gutter 热路径；
+     * 留痕的意义是让「某个调用被判定为伪条件而剔除」这件事可被查证——
+     * 计划 §二 L16 指出核心四文件原本零 Logger，本轮在此开一个口子（仅 debug）。
+     */
+    private val LOG = Logger.getInstance(WrapperLocator::class.java)
+
+    /**
+     * D264 修 1：跨方法展开（helper 递归 / return 裸变量 / 参数链递归）的**独立**深度上限。
+     *
+     * 与 [WRAPPER_SUPER_CHAIN_MAX_DEPTH]（类型父链语义，8）刻意分开：两者语义不同，
+     * 复用会让类型链的调整牵制条件展开深度（计划 §六之二「低」区已点名）。
+     * 量级对齐 [cn.song.mybatisplus.visualizer.psi.ExpressionEvaluator.MAX_TRACE_DEPTH] = 5。
+     */
+    private const val WRAPPER_CROSS_METHOD_MAX_DEPTH = 5
+
+    /**
+     * D264：链上一条调用 + 它在**锚点文件坐标系**里的逻辑位置。
+     *
+     * 跨方法展开出来的调用，其 `textRange` 属于 helper 文件，与调用方的赋值点偏移**不可比**——
+     * 这正是 R4 实测 `[ne]`、R8 实测 `[]`（同语料只因类声明顺序不同而结果不同）的根因。
+     * 因此所有排序与重新赋值分段一律用 [orderOffset]/[subOrder]（锚点文件的逻辑坐标），
+     * 不用调用自身的源码偏移。
+     *
+     * @param orderOffset 逻辑位置：本地调用取其自身 `endOffset`，展开调用取**helper 调用点**的 `endOffset`
+     * @param subOrder    同一逻辑位置内的展开顺序（helper 体内「自上而下 + 递归就地插入」的序号）
+     * @param path        展开路径留痕（`调用点@offset>helper方法名/...`），仅用于排障与去重诊断
+     */
+    private class ChainCallEntry(
+        val call: PsiMethodCallExpression,
+        val orderOffset: Int,
+        val subOrder: Int,
+        val path: String,
+    )
 
     /**
      * 从锚点元素定位并解析 Wrapper 调用链。
@@ -539,14 +577,48 @@ object WrapperLocator {
      */
     private fun findWrapperFactoryCall(anchor: PsiElement): PsiMethodCallExpression? {
         PsiTreeUtil.collectElementsOfType(anchor, PsiMethodCallExpression::class.java)
-            .firstOrNull { isWrapperFactoryCall(it) }
+            .firstOrNull { isWrapperFactoryCall(it) || isWrapperReturningToolCall(it) }
             ?.let { return it }
         var current: PsiElement? = anchor
         while (current != null) {
-            if (current is PsiMethodCallExpression && isWrapperFactoryCall(current)) return current
+            if (current is PsiMethodCallExpression &&
+                (isWrapperFactoryCall(current) || isWrapperReturningToolCall(current))
+            ) {
+                return current
+            }
             current = current.parent
         }
         return null
+    }
+
+    /**
+     * D264 修 2（R6 形态）：调用是否为「返回 Wrapper 的工具方法」——`mapper.selectList(FilterUtil.buildQuery(1))`
+     * 的内联消费，工具调用本身不落变量、方法名也不在工厂名集合内，旧逻辑四顺位全落空 → 整链不可预览。
+     *
+     * 判定必须靠**返回类型**（不是方法名启发）：返回类型经 [detectWrapperTypeDeep] 认作 Wrapper 才算。
+     * 这条只在 [findWrapperFactoryCall]（预览路径）里用，不进 [isSqlCandidate]/[isChainHeadCall]
+     * 等入口判定——那四处一动就会破 `testPlainMethodChainNotMisdetected` 与候选数断言（计划 §六之二 高区）。
+     */
+    private fun isWrapperReturningToolCall(call: PsiMethodCallExpression): Boolean {
+        if (isWrapperFactoryCall(call)) return false
+        val returnType = runCatching { call.type }.getOrNull() ?: return false
+        return detectWrapperTypeDeep(returnType) != null
+    }
+
+    /**
+     * D264 修 2（R2/R5/R10 形态）：`w = FilterUtil.decorate(w, 1)` / `LambdaQueryWrapper<X> w = FilterUtil.buildQuery(1)`
+     * 的工具调用展开——把工具方法体里的条件链（含 `return q` 裸变量）并进主链。
+     *
+     * 与 [expandFactoryCalls] 的差别只在**入口判定**：那条路要求 qualifier 为 null（裸调用），
+     * 这条路接受带 qualifier 的工具调用（`FilterUtil.buildQuery(...)`），靠返回类型确认。
+     * 内部完全复用同一套 return 链解析与深度/环防护。
+     */
+    private fun expandWrapperToolCall(call: PsiMethodCallExpression): List<PsiMethodCallExpression> {
+        if (!isWrapperReturningToolCall(call)) return emptyList()
+        val method = call.resolveMethod() ?: return emptyList()
+        val visited = mutableSetOf<PsiMethod>()
+        if (!visited.add(method)) return emptyList()
+        return findFactoryReturnChain(method, 0, visited)
     }
 
     /**
@@ -565,7 +637,11 @@ object WrapperLocator {
         anchor: PsiElement? = null,
         preferredConsumption: ConsumptionKind? = null,
     ): LocatedWrapper? {
-        val wrapperType = factoryWrapperType(factoryCall) ?: return null
+        // D264 修 2（R6）：`mapper.selectList(FilterUtil.buildQuery(1))` —— 工厂调用实为「返回 Wrapper 的工具方法」，
+        // 类型从**返回类型**取（方法名不在工厂名集合里，factoryWrapperType 会返回 null）
+        val toolCall = isWrapperReturningToolCall(factoryCall)
+        val wrapperType = if (toolCall) detectWrapperTypeDeep(factoryCall.type) else factoryWrapperType(factoryCall)
+        wrapperType ?: return null
         // 实体类优先取显式类型实参（`Wrappers.<MerchantEntity>lambdaQuery()`），失败时用类名按命名策略兜底；
         // 服务链（`service.lambdaQuery()`，无类型实参）回退到调用表达式返回类型（LambdaQueryChainWrapper<T>），
         // 仍失败时从链内首个「首参方法引用」推断（T-M15-01）；
@@ -608,6 +684,9 @@ object WrapperLocator {
             }
             .distinctBy { it.textRange.endOffset }
             .sortedBy { it.textRange.endOffset }
+            // D264 修 2（R6）：工具方法返回 Wrapper 且内联消费时，链在**工具方法体内**（`return q` / `return w.eq()`），
+            // 把该链展开前置——否则 `mapper.selectList(buildQuery(1))` 整条链为空
+            .let { local -> if (toolCall) expandWrapperToolCall(factoryCall) + local else local }
 
         // 链式终结点（Q17/U07-④⑤/U11-⑤，T-M15-01）：`service.lambdaQuery()...one()` / `service.lambdaUpdate()...remove()`。
         // 终结点是链的消费方法（非 Wrapper 操作），从链中剔除并记录消费语义。
@@ -953,31 +1032,142 @@ object WrapperLocator {
     // ------------------------------------------------------------------
 
     /**
-     * M19.6（2026-08-13 用户实测）：wrapper 作为实参传入自定义 helper 方法
+     * D264 修 1：wrapper 作为实参传入自定义 helper 方法
      * （`applyBusinessOpenInfoFilter(wrapper, dto)`，清单 P16 "wrapper 作为方法入参就地修改"形态）——
-     * 展开方法体内对该形参的**直接链式调用**并入主链（helper 内追加的 apply/in/eq 等条件参与 SQL 生成）。
+     * 展开方法体内对该形参的链式调用并入主链，并**递归**跟进到更深的方法边界。
      *
-     * 规则：
-     *  - 仅收集链首 qualifier resolve 到对应形参的调用（`wrapper.apply(...)` / `wrapper.in(...)`）；
-     *  - lambda 体内调用（`wrapper.and(w -> w.eq(...))`）的 w 是 lambda 参数，不在此收集（由 NestedArg 解析）；
-     *  - 只展开一层（helper 内不再递归传参）；
-     *  - 展开调用的逻辑位置由调用方锚定在 helper **调用点**之后（文件偏移可能早于主链）。
+     * 相比 M19.6 的「只展开一层」，本次补三件事（用户反馈「跳转到其他方法就被舍弃」）：
+     *  - 递归：helper 体内把 wrapper 继续传给另一个方法时，跟进那个方法体（`applyStatus → applyTenantScope`）；
+     *  - 别名：helper 体内 `target = w` 的直接赋值视为形参别名（只跳一层，不追多层变换）；
+     *  - 防护：深度上限 [WRAPPER_CROSS_METHOD_MAX_DEPTH] + 方法身份 visited 门，互递归 helper 有限步终止。
+     *
+     * 成本口径（M10 性能红线）：只被 [buildChain]（预览路径）调用；每次展开对方法体做一次
+     * `collectElementsOfType`，visited 门保证同一方法体只遍历一次，故总遍历次数上界 = 不同方法数。
+     * 不引入 `ReferencesSearch`，递归链不进入 gutter 热路径。
+     *
+     * @param callSiteOffset 调用点在**锚点文件**里的逻辑位置（展开结果全部锚定在此，不取 helper 内偏移）
      */
-    private fun expandHelperCalls(call: PsiMethodCallExpression, ref: PsiReferenceExpression): List<PsiMethodCallExpression> {
-        val method = call.resolveMethod() ?: return emptyList()
-        val body = method.body ?: return emptyList()
+    private fun expandHelperCalls(
+        call: PsiMethodCallExpression,
+        ref: PsiReferenceExpression,
+        callSiteOffset: Int,
+    ): List<ChainCallEntry> {
         val paramIndex = call.argumentList.expressions.indexOfFirst { it === ref }
         if (paramIndex < 0) return emptyList()
+        val method = call.resolveMethod() ?: return emptyList()
         val param = method.parameterList.getParameter(paramIndex) ?: return emptyList()
-        val result = mutableListOf<PsiMethodCallExpression>()
-        PsiTreeUtil.collectElementsOfType(body, PsiMethodCallExpression::class.java)
-            .forEach { inner ->
-                val chain = ArgResolver.collectCallChain(inner)
-                val head = chain.firstOrNull() ?: return@forEach
-                val headQualifier = head.methodExpression.qualifierExpression as? PsiReferenceExpression
-                if (headQualifier?.resolve() === param) result += chain
+        val out = mutableListOf<ChainCallEntry>()
+        collectWrapperFlow(
+            method = method,
+            wrapperVar = param,
+            depth = 0,
+            visitedMethods = mutableSetOf(),
+            visitedVars = mutableSetOf(),
+            callSiteOffset = callSiteOffset,
+            path = "${call.methodExpression.referenceName ?: "?"}@$callSiteOffset",
+            out = out,
+        )
+        return out
+    }
+
+    /**
+     * D264 修 1：在 `method` 方法体内收集「wrapper 变量 [wrapperVar] 上发生的条件调用」，
+     * 并对「把 wrapper 继续传给另一个方法」的调用递归展开。
+     *
+     * 三条收集规则：
+     *  1. 链首 qualifier resolve 到 [wrapperVar]（或其别名）→ 收集整条链（`w.eq(a).like(b)` 全收）；
+     *  2. [wrapperVar] 出现在某调用的**直接实参**里 → 递归展开该调用的对应形参；
+     *  3. 其它调用（`log.info(...)` / 纯计算）不收集——伪条件的过滤另由 [isPseudoConditionCall] 兜底。
+     *
+     * lambda 体内的调用不在本函数收（由 [ArgResolver.resolveNestedLambda] 负责），
+     * 否则 `w.and(x -> x.eq(...))` 会被重复计入。
+     *
+     * @param depth 当前深度（被展开方法的层数，入口 = 0）；达到上限后不再递归
+     * @param visitedMethods 已展开方法（**PsiMethod 身份**，不是名字——避免重载/同名误共享）
+     * @param visitedVars 已展开的裸变量（return 形态用；与 [visitedMethods] 同款身份门）
+     */
+    private fun collectWrapperFlow(
+        method: PsiMethod,
+        wrapperVar: PsiVariable,
+        depth: Int,
+        visitedMethods: MutableSet<PsiMethod>,
+        visitedVars: MutableSet<PsiVariable>,
+        callSiteOffset: Int,
+        path: String,
+        out: MutableList<ChainCallEntry>,
+    ) {
+        // 环防护：add 的返回值即门——重入直接返回，方法体遍历次数严格等于「不同 method 数」
+        if (!visitedMethods.add(method)) return
+        if (depth >= WRAPPER_CROSS_METHOD_MAX_DEPTH) return
+        val body = method.body ?: return
+
+        val aliases = directAliasesOf(body, wrapperVar)
+        val bodyCalls = PsiTreeUtil.collectElementsOfType(body, PsiMethodCallExpression::class.java)
+            .filter { PsiTreeUtil.getParentOfType(it, PsiLambdaExpression::class.java) == null }
+            .sortedBy { it.textRange.startOffset }
+
+        val emitted = mutableSetOf<PsiMethodCallExpression>()
+        val bodyPath = "$path/${method.name}"
+        for (bodyCall in bodyCalls) {
+            if (bodyCall in emitted) continue
+            // ① wrapper 变量（或别名）上的条件链
+            val head = ArgResolver.collectCallChain(bodyCall).firstOrNull()
+            val headQualifier = head?.methodExpression?.qualifierExpression as? PsiReferenceExpression
+            val headTarget = headQualifier?.let { runCatching { it.resolve() }.getOrNull() }
+            if (headTarget != null && isFlowTarget(headTarget, wrapperVar, aliases)) {
+                collectExtendingChain(bodyCall).forEach { wrapperCall ->
+                    if (emitted.add(wrapperCall)) {
+                        out += ChainCallEntry(wrapperCall, callSiteOffset, out.size, bodyPath)
+                    }
+                }
+                continue
             }
-        return result
+            // ② wrapper 继续传给另一个方法 → 递归（先判深度，再 resolve）
+            val argIndex = bodyCall.argumentList.expressions.indexOfFirst { arg ->
+                val target = (arg as? PsiReferenceExpression)?.let { runCatching { it.resolve() }.getOrNull() }
+                target != null && isFlowTarget(target, wrapperVar, aliases)
+            }
+            if (argIndex >= 0) {
+                if (depth + 1 >= WRAPPER_CROSS_METHOD_MAX_DEPTH) continue
+                val nested = bodyCall.resolveMethod() ?: continue
+                val nestedParam = nested.parameterList.getParameter(argIndex) ?: continue
+                collectWrapperFlow(
+                    method = nested,
+                    wrapperVar = nestedParam,
+                    depth = depth + 1,
+                    visitedMethods = visitedMethods,
+                    visitedVars = visitedVars,
+                    callSiteOffset = callSiteOffset,
+                    path = bodyPath,
+                    out = out,
+                )
+            }
+        }
+    }
+
+    /** D264 修 1：`target` 是否就是 [wrapperVar] 本身或其**直接**别名（身份比较）。 */
+    private fun isFlowTarget(target: PsiElement, wrapperVar: PsiVariable, aliases: List<PsiVariable>): Boolean {
+        if (target === wrapperVar) return true
+        return aliases.any { it === target }
+    }
+
+    /**
+     * D264 修 1：方法体内由 [wrapperVar] **直接**赋值的局部别名（`W target = w;` / `target = w;`）。
+     * 只跳一层——`target2 = target` 这种多层别名变换不追，避免过度推断把无关变量卷进链。
+     */
+    private fun directAliasesOf(body: PsiElement, wrapperVar: PsiVariable): List<PsiVariable> {
+        val aliases = mutableListOf<PsiVariable>()
+        PsiTreeUtil.collectElementsOfType(body, PsiLocalVariable::class.java).forEach { local ->
+            val init = local.initializer as? PsiReferenceExpression ?: return@forEach
+            if (runCatching { init.resolve() }.getOrNull() === wrapperVar) aliases += local
+        }
+        PsiTreeUtil.collectElementsOfType(body, PsiAssignmentExpression::class.java).forEach { assign ->
+            val rhs = assign.rExpression as? PsiReferenceExpression ?: return@forEach
+            if (runCatching { rhs.resolve() }.getOrNull() !== wrapperVar) return@forEach
+            val lhs = (assign.lExpression as? PsiReferenceExpression)?.let { runCatching { it.resolve() }.getOrNull() }
+            if (lhs is PsiVariable) aliases += lhs
+        }
+        return aliases
     }
 
     /**
@@ -1023,13 +1213,18 @@ object WrapperLocator {
         }
         val constructorAlias = extractConstructorAlias(variable.initializer)
 
-        val callElements = mutableListOf<Pair<PsiMethodCallExpression, Int>>()
+        val callElements = mutableListOf<ChainCallEntry>()
         // T-PreviewStmtTypeScope：消费识别产物是**证据清单**（档位 + 方法名 + 行号 + 语句区间），四个标志
         // 由 [decideConsumption] 按锚点位置单点决定，见循环内注释。
         val consumptions = mutableListOf<WrapperConsumption>()
         // T-PreviewStmtTypeScope：重新赋值点（赋值 LHS 是该变量）——wrapper 被重新赋值即开启一段新的
         // 条件生命周期，[filterCallsToAnchorSegment] 据此只收锚点所在段的链上调用。
         val assignmentOffsets = mutableListOf<Int>()
+        // D264 修 3：`w = decorate(w, ...)` 这类**自引用赋值**（RHS 引用了 LHS 同一个变量）不是生命周期重置——
+        // 它是对同一 wrapper 的继续加工，若按重置切段会把此前的 eq 全滤掉（R4 实测从 [eq,ne] 变 [ne]）。
+        // 只放行自引用赋值，不放宽到所有赋值：`w = new LambdaQueryWrapper<>()` 必须仍然切段
+        // （PreviewStmtTypeScopeTest:168/218/226 钉住「delete 段不得带 update 段条件」）。
+        val selfRefAssignments = mutableSetOf<Int>()
         // XB（M44）：DeleteChain 变量分步形态（`DeleteChain c = DeleteChain.of(mapper, X.class); c.eq(...)`）
         // → DELETE 语义（XbatisConverter 按 deleteConsumed 分派）；删除语义来自链类型本身而非引用消费，
         // 按变量声明位置记为证据（锚点在声明语句内即命中）。
@@ -1040,12 +1235,24 @@ object WrapperLocator {
         // R12 T-PaginationSim：连同 searchCount 标志一并解析（D3=A，默认 true 对齐 MP Page 默认）
         var pageLimit: LimitClause? = null
         var pageSearchCount = true
+        val anchorFile = variable.containingFile
 
         // 1. 初始化表达式中的链式调用；若链首为工厂方法调用（baseJoinWrapper()），展开其方法体内的 wrapper 链（P03）；
-        //    Wrappers 静态工厂调用（Wrappers.<T>lambdaQuery()）不是 Wrapper 操作，从链中剔除
+        //    Wrappers 静态工厂调用（Wrappers.<T>lambdaQuery()）不是 Wrapper 操作，从链中剔除。
+        //    D264 修 2：`LambdaQueryWrapper<X> w = FilterUtil.buildQuery(1)` 这类「工具方法返回 wrapper」
+        //    的初始化（qualifier 非 null，expandFactoryCalls 够不着）改走 [expandWrapperToolCall]。
         variable.initializer?.let { init ->
             val initCalls = ArgResolver.collectChainFromInitializer(init).dropWhile { isWrapperFactoryCall(it) }
-            expandFactoryCalls(initCalls).forEach { callElements += it to it.textRange.endOffset }
+            val toolChain = (init as? PsiMethodCallExpression)
+                ?.takeIf { isWrapperReturningToolCall(it) }
+                ?.let { expandWrapperToolCall(it) }
+            val expanded = if (toolChain != null && toolChain.isNotEmpty()) toolChain else expandFactoryCalls(initCalls)
+            val anchorOffset = initCalls.firstOrNull()?.textRange?.endOffset
+            expanded.forEach { call ->
+                // 跨文件展开（工厂方法在别的文件）锚定在调用点；本地链沿用自身偏移（与赋值点同坐标系）
+                val offset = if (call.containingFile === anchorFile) call.textRange.endOffset else anchorOffset
+                callElements += ChainCallEntry(call, offset ?: 0, callElements.size, "init")
+            }
         }
 
         // 2. 变量引用上的方法调用（分步写法）+ 消费识别（`service.remove(wrapper)` / `service.count(wrapper)` 等）
@@ -1055,7 +1262,9 @@ object WrapperLocator {
             // T-PreviewStmtTypeScope：重新赋值点记录（`w = new LambdaQueryWrapper<>()` 的 LHS 引用）
             val parent = refExpression.parent
             if (parent is PsiAssignmentExpression && parent.lExpression === refExpression) {
-                assignmentOffsets += refExpression.textRange.startOffset
+                val offset = refExpression.textRange.startOffset
+                assignmentOffsets += offset
+                if (assignmentRhsReferences(parent, variable)) selfRefAssignments += offset
             }
             consumerCallOf(refExpression)?.let { consumptionOf(refExpression, it)?.let { evidence -> consumptions += evidence } }
             // T-M29-02：分页消费（`service.page(page, wrapper)` / `mapper.selectPage(page, wrapper)`）
@@ -1078,53 +1287,69 @@ object WrapperLocator {
             val qualifier = call.methodExpression.qualifierExpression
             val isDirect = qualifier === refExpression
             if (isDirect) {
-                collectExtendingChain(call).forEach { callElements += it to call.textRange.endOffset }
+                val anchorOffset = call.textRange.endOffset
+                collectExtendingChain(call).forEach { wrapperCall ->
+                    callElements += ChainCallEntry(wrapperCall, anchorOffset, callElements.size, "direct")
+                }
             }
             val isLambdaConverted = qualifier is PsiMethodCallExpression &&
                 qualifier.methodExpression.referenceName == "lambda" &&
                 qualifier.methodExpression.qualifierExpression === refExpression
             if (isLambdaConverted) {
-                callElements += call to call.textRange.endOffset
+                callElements += ChainCallEntry(call, call.textRange.endOffset, callElements.size, "lambda")
             }
-            // M19.6（2026-08-13 用户实测）：wrapper 作为**实参**传入自定义 helper 方法
-            // （`applyBusinessOpenInfoFilter(wrapper, dto)`，清单 P16 "wrapper 作为方法入参就地修改"）——
-            // 展开方法体内对该形参的链式调用；展开调用**锚定在 helper 调用点**（逻辑顺序，而非文件偏移）
+            // M19.6（2026-08-13 用户实测）/ D264 修 1：wrapper 作为**实参**传入自定义 helper 方法
+            // （`applyBusinessOpenInfoFilter(wrapper, dto)`，清单 P16）——递归展开方法体内对该形参的链式调用；
+            // 展开调用一律**锚定在 helper 调用点**（逻辑顺序，源码偏移可能属于别的文件）
             if (call.argumentList.expressions.any { it === refExpression }) {
-                expandHelperCalls(call, refExpression).forEach { callElements += it to call.textRange.endOffset }
+                callElements += expandHelperCalls(call, refExpression, call.textRange.endOffset)
             }
         }
 
-        // 合并去重（注意：链式调用表达式的 textOffset 可能相同——都从 new 起始，
-        // 必须用 endOffset 区分）；按**逻辑顺序**排序：主链按源码偏移，跨方法展开的调用
-        // 锚定其 helper 调用点（M19.6），组内按自身源码偏移
+        // 合并去重：D264 起按 **（文件, 调用表达式）** 身份去重——`distinctBy(endOffset)` 不含文件判定，
+        // 跨文件展开时两条不同调用可能因 endOffset 相同而互相挤掉（条件永久消失）。
+        // 展开路径（[ChainCallEntry.path]）刻意不进键：同一 helper 对同一变量调两次时，方法体内的调用
+        // 表达式是同一个 PSI 元素，按路径分会重复计入（V6 要求 P1/P2 的收集结果不变）。
         val sortedCalls = callElements
-            .distinctBy { it.first.textRange.endOffset }
-            .sortedWith(compareBy({ it.second }, { it.first.textRange.endOffset }))
-            .map { it.first }
+            .distinctBy { Triple(it.call.containingFile, it.call.textRange.startOffset, it.call.textRange.endOffset) }
+            .sortedWith(compareBy({ it.orderOffset }, { it.subOrder }))
 
         // M19.6（2026-08-13 用户实测）：wrapper.clear() 截断——MP 语义清空全部条件；
         // 按源码顺序遇 clear() 丢弃此前已收集的调用（clear 自身不入链）
-        val truncatedCalls = mutableListOf<PsiMethodCallExpression>()
-        for (call in sortedCalls) {
-            if (call.methodExpression.referenceName == CLEAR_METHOD) {
+        val truncatedCalls = mutableListOf<ChainCallEntry>()
+        for (entry in sortedCalls) {
+            if (entry.call.methodExpression.referenceName == CLEAR_METHOD) {
                 truncatedCalls.clear()
             } else {
-                truncatedCalls += call
+                truncatedCalls += entry
             }
         }
 
-        // P15（T-M15-05）：if/else 互斥分支——排序后（源码序）同一 if 语句内的调用只保留第一个分支
-        // （then），避免 `if (x) { w.eq(...) } else { w.in(...) }` 合并成 AND 双条件
-        val seenIfStatements = mutableSetOf<PsiIfStatement>()
-        val dedupedCalls = truncatedCalls.filter { call ->
-            val enclosingIf = PsiTreeUtil.getParentOfType(call, PsiIfStatement::class.java, false)
-            enclosingIf == null || seenIfStatements.add(enclosingIf)
+        // D264 修 4：伪条件守卫——非条件/非结构/非工厂方法不得静默入链（R5 的 `[buildQuery]`：
+        // 工具方法名被 ArgResolver 当成 wrapper 条件方法，属「宁可不识别，不可出错误 SQL」的违例）。
+        // 自研链方法（`w.statusEq(...)`）的 qualifier 解析到 wrapper 变量，属真条件，放行。
+        val conditionCalls = truncatedCalls.filter { entry ->
+            if (isPseudoConditionCall(entry.call)) {
+                LOG.debug("D264 剔除伪条件调用: ${entry.call.text} @${entry.call.containingFile?.name}")
+                false
+            } else {
+                true
+            }
         }
+
+        // P15（T-M15-05）/ D264 修 6：if/else 互斥分支——同一 if 语句内只保留**锚点所在分支**的调用
+        // （锚点不在该 if 内时沿用源码序第一分支的既有口径）。同分支内的多个调用必须全部保留——
+        // 旧实现是「同一 if 只留源码序第一个调用」，会杀掉 `if (x) { w.eq(a); w.ne(b); }` 的 ne。
+        val dedupedCalls = dedupeIfBranches(conditionCalls, anchor)
 
         // T-PreviewStmtTypeScope：重新赋值分段——锚点落在哪一段条件生命周期，就只收那一段的链上调用
         // （demo 语料 WrapperReuseRepro：重新赋值行的锚点若收全量，DELETE 会带上 update 段的 user_id/status）
-        val segmentCalls = filterCallsToAnchorSegment(dedupedCalls, assignmentOffsets, anchorOffsetOf(anchor))
-        val wrapperCalls = segmentCalls.map { ArgResolver.toWrapperCall(it, table, entityClass?.name, resolveVariables) }
+        val segmentCalls = filterEntriesToAnchorSegment(
+            dedupedCalls,
+            assignmentOffsets.filter { it !in selfRefAssignments },
+            anchorOffsetOf(anchor),
+        )
+        val wrapperCalls = segmentCalls.map { ArgResolver.toWrapperCall(it.call, table, entityClass?.name, resolveVariables) }
         // T-PreviewStmtTypeScope M2（D-2）：从全部消费证据里按锚点位置选一条决定语句类型；
         // D-3 的强制档位（面板切换）优先于 D-2。
         val deciding = decideConsumption(consumptions, anchorOffsetOf(anchor), preferredConsumption)
@@ -1355,6 +1580,130 @@ object WrapperLocator {
         }
     }
 
+    /**
+     * D264 修 3：[filterCallsToAnchorSegment] 的条目版——分段判据用**逻辑位置**（[ChainCallEntry.orderOffset]）
+     * 而不是调用自身的源码偏移。
+     *
+     * 为什么必须分开：跨方法展开出来的调用，`textRange` 属于 helper 文件（可能在另一个文件），
+     * 拿它与调用方的 `assignmentOffsets` 比大小毫无意义——R4 实测 `[ne]`、R8 实测 `[]`
+     * （同语料只因类声明顺序不同结果就变）就是这套位置机制互相打架的直接后果。
+     *
+     * 比较基准是 [ChainCallEntry.orderOffset]（**锚点文件**坐标系），不是调用自身的 `textRange`：
+     * 跨文件展开出来的调用，其 textRange 属于 helper 文件，与调用方赋值点偏移不可比
+     * （R4 实测 `[ne]`、R8 实测 `[]` 就是这套位置机制打架的直接后果）。
+     */
+    private fun filterEntriesToAnchorSegment(
+        entries: List<ChainCallEntry>,
+        assignmentOffsets: List<Int>,
+        anchorOffset: Int?,
+    ): List<ChainCallEntry> {
+        if (assignmentOffsets.isEmpty() || anchorOffset == null) return entries
+        val segmentStart = assignmentOffsets.filter { it <= anchorOffset }.maxOrNull()
+        return if (segmentStart != null) {
+            entries.filter { it.orderOffset > segmentStart }
+        } else {
+            val firstAssignment = assignmentOffsets.minOrNull() ?: return entries
+            entries.filter { it.orderOffset < firstAssignment }
+        }
+    }
+
+    /**
+     * D264 修 3：赋值表达式是否为**自引用**（`w = decorate(w, 1)` 的 RHS 引用了 LHS 的同一个变量）。
+     *
+     * 只认「RHS 子树里出现解析到 [variable] 的引用」，且排除 LHS 自身那次引用。
+     * 用于把这类赋值从「生命周期重置点」里摘出来——它是对同一 wrapper 的继续加工，
+     * 而不是换了一个新 wrapper。`w = new LambdaQueryWrapper<>()`（RHS 无线索）仍然算重置。
+     */
+    private fun assignmentRhsReferences(assign: PsiAssignmentExpression, variable: PsiVariable): Boolean {
+        val rhs = assign.rExpression ?: return false
+        return PsiTreeUtil.collectElementsOfType(rhs, PsiReferenceExpression::class.java).any { ref ->
+            runCatching { ref.resolve() }.getOrNull() === variable
+        }
+    }
+
+    /**
+     * D264 修 6：if/else 互斥分支去重——同一 if 语句内保留**锚点所在分支**的调用，
+     * 同分支内的多个调用全部保留。
+     *
+     * 规则：
+     *  - 锚点落在该 if 的某一分支内 → 只保留那一分支的调用（`if (x) { w.eq(a); w.ne(b); }` 两条都留）；
+     *  - 锚点不在该 if 内 → 沿用旧口径（源码序第一分支），保住
+     *    `SqlPreviewServiceUpdateTest.testIfElseBranchesKeepFirstBranchOnly` 的既有语义；
+     *  - 无外层 if 的调用不受影响。
+     */
+    private fun dedupeIfBranches(
+        entries: List<ChainCallEntry>,
+        anchor: PsiElement?,
+    ): List<ChainCallEntry> {
+        if (entries.isEmpty()) return entries
+        // 锚点所在的分支链：从锚点向上每个 if 语句，记「锚点落在 then 还是 else」。
+        val anchorBranchOfIf = mutableMapOf<PsiIfStatement, Boolean>()
+        var cursor: PsiElement? = anchor
+        while (cursor != null) {
+            val ifStmt = cursor as? PsiIfStatement
+            val anchorElement = anchor
+            if (ifStmt != null && anchorElement != null) {
+                val thenBranch = ifStmt.thenBranch
+                val elseBranch = ifStmt.elseBranch
+                if (thenBranch != null && PsiTreeUtil.isAncestor(thenBranch, anchorElement, true)) {
+                    anchorBranchOfIf[ifStmt] = true
+                } else if (elseBranch != null && PsiTreeUtil.isAncestor(elseBranch, anchorElement, true)) {
+                    anchorBranchOfIf[ifStmt] = false
+                }
+            }
+            cursor = cursor.parent
+        }
+        val chosenBranch = mutableMapOf<PsiIfStatement, Boolean>()
+        return entries.filter { entry ->
+            val enclosingIf = PsiTreeUtil.getParentOfType(entry.call, PsiIfStatement::class.java, false)
+                ?: return@filter true
+            val wantThen = anchorBranchOfIf[enclosingIf] ?: chosenBranch.getOrPut(enclosingIf) {
+                // 锚点不在该 if 内：旧口径——源码序第一分支（then 有调用即选 then）
+                entries.any { candidate ->
+                    val owner = PsiTreeUtil.getParentOfType(candidate.call, PsiIfStatement::class.java, false)
+                    owner === enclosingIf && enclosingIf.thenBranch != null &&
+                        PsiTreeUtil.isAncestor(enclosingIf.thenBranch, candidate.call, true)
+                }
+            }
+            val branch = if (wantThen) enclosingIf.thenBranch else enclosingIf.elseBranch
+            branch != null && PsiTreeUtil.isAncestor(branch, entry.call, true)
+        }
+    }
+
+    /**
+     * D264 修 4：伪条件守卫——链内调用既不是已知条件/结构方法、也不在工厂方法名集合内时，
+     * 判定为**不能进链**（R5 的 `[buildQuery]` 就是这类：工具方法名被当成条件方法渲染）。
+     *
+     * 例外（都属真条件，必须放行）：
+     *  - qualifier resolve 到 wrapper 变量本身或 wrapper 类型的表达式 → 自研链方法
+     *    （`w.statusEq(1)`，P5 实测其方法体内的 eq 已能落条件），按条件处理；
+     *  - 链式延续里的中间方法名由 [CONDITION_CHAIN_METHOD_NAMES] 覆盖（`and`/`or`/`nested`/`func` 等）。
+     */
+    private fun isPseudoConditionCall(call: PsiMethodCallExpression): Boolean {
+        val name = call.methodExpression.referenceName ?: return true
+        if (name in CONDITION_CHAIN_METHOD_NAMES) return false
+        if (name in JOIN_CHAIN_METHOD_NAMES) return false
+        if (name in wrapperFactoryMethodNames) return false
+        if (name in MPJ_STRUCTURE_METHOD_NAMES) return false
+        // 自研链方法：qualifier 是 Wrapper 类型（变量声明类型 / 表达式类型均可判定）
+        val qualifier = call.methodExpression.qualifierExpression ?: return false
+        val qualifierType = runCatching { qualifier.type }.getOrNull()
+        return detectWrapperTypeDeep(qualifierType) == null
+    }
+
+    /**
+     * MPJ / MP 结构方法（既非条件也非工厂，但属于链结构，必须允许入链——
+     * 剔除它们会把 `selectAs` / `leftJoin` / `selectFilter` 这类真结构从链里挖掉）。
+     */
+    private val MPJ_STRUCTURE_METHOD_NAMES: Set<String> = setOf(
+        "selectAs", "selectAsClass", "selectCollection", "selectAssociation",
+        "selectFilter", "selectFunc", "selectIgnore", "selectString", "selectMaps", "selectObjs",
+        "selectLen", "allEq", "setEntity", "eqOrIsNull", "applyFunc",
+        "groupByStr", "orderByStr", "first", "lambda",
+        "leftJoin", "rightJoin", "innerJoin", "fullJoin", "join", "on",
+        "of", "create", "execute", "updateAndNull", "getOptional", "paging", "cursor",
+    )
+
     /** 消费档位优先级（与 SqlPreviewService 分派顺序同源：count > exists > update > delete > page）。 */
     private val CONSUMPTION_PRIORITY: List<ConsumptionKind> = listOf(
         ConsumptionKind.COUNT, ConsumptionKind.EXISTS, ConsumptionKind.UPDATE_ENTITY,
@@ -1573,10 +1922,18 @@ object WrapperLocator {
      * 通过 [PsiMethodCallExpression.resolveMethod] 找到方法定义，解析其 `return` 表达式中的 wrapper 链，
      * 返回「工厂内部链 + 续链」的完整调用列表。
      *
+     * D264 修 2：入口显式带上深度与 visited（原来自递归无任何防护——两个方法互相 return 对方调用
+     * 会直接栈溢出，而这是 EDT 预览热路径）。深度先判后 resolve，visited 先建后 resolve。
+     *
      * 非工厂调用（new 构造链）或解析失败时原样返回。
      */
-    private fun expandFactoryCalls(calls: List<PsiMethodCallExpression>): List<PsiMethodCallExpression> {
+    private fun expandFactoryCalls(
+        calls: List<PsiMethodCallExpression>,
+        depth: Int = 0,
+        visited: MutableSet<PsiMethod> = mutableSetOf(),
+    ): List<PsiMethodCallExpression> {
         if (calls.isEmpty()) return calls
+        if (depth >= WRAPPER_CROSS_METHOD_MAX_DEPTH) return calls
         val first = calls.first()
         val qualifier = first.methodExpression.qualifierExpression
         val isFactoryCall = qualifier == null && first.methodExpression.referenceName != null &&
@@ -1584,12 +1941,14 @@ object WrapperLocator {
         if (!isFactoryCall) return calls
 
         val method = first.resolveMethod() ?: return calls
-        val factoryChain = findFactoryReturnChain(method)
+        // 环防护：add 的返回值即门——互递归方法第二次进入直接原样返回
+        if (!visited.add(method)) return calls
+        val factoryChain = findFactoryReturnChain(method, depth, visited)
         if (factoryChain.isEmpty()) return calls
         // P03 3 级链（T-M15-05）：工厂方法 return 链首的 qualifier 是**方法参数**
         // （`applyWithdrawFilters(baseWithdrawQueryWrapper(), dto)` 中 return `wrapper.like(...)`）时，
         // 把调用点对应实参（baseWithdrawQueryWrapper()）的初始链递归展开并前置
-        val argumentChain = resolveFactoryArgumentChain(first, method)
+        val argumentChain = resolveFactoryArgumentChain(first, method, depth, visited)
         return argumentChain + factoryChain + calls.drop(1)
     }
 
@@ -1599,8 +1958,13 @@ object WrapperLocator {
      * 是方法参数 wrapper —— 取调用点对应位置的实参（baseWithdrawQueryWrapper()），
      * 若实参本身是工厂调用则递归展开其 return 链（参数链前置到方法内部链之前）。
      */
-    private fun resolveFactoryArgumentChain(call: PsiMethodCallExpression, method: PsiMethod): List<PsiMethodCallExpression> {
-        val returnChain = findFactoryReturnChain(method)
+    private fun resolveFactoryArgumentChain(
+        call: PsiMethodCallExpression,
+        method: PsiMethod,
+        depth: Int = 0,
+        visited: MutableSet<PsiMethod> = mutableSetOf(),
+    ): List<PsiMethodCallExpression> {
+        val returnChain = findFactoryReturnChain(method, depth, visited)
         val headCall = returnChain.firstOrNull() ?: return emptyList()
         val headQualifier = headCall.methodExpression.qualifierExpression as? PsiReferenceExpression ?: return emptyList()
         val param = headQualifier.resolve() as? PsiParameter ?: return emptyList()
@@ -1608,19 +1972,82 @@ object WrapperLocator {
         if (paramList.parent !== method.parameterList.parent) return emptyList()
         val arg = call.argumentList.expressions.getOrNull(paramList.getParameterIndex(param)) ?: return emptyList()
         val argCall = arg as? PsiMethodCallExpression ?: return emptyList()
-        // 递归展开实参工厂；过滤掉工厂调用自身（其 return 链并入）
-        return expandFactoryCalls(listOf(argCall)).filter { it !== argCall }
+        // 递归展开实参工厂；过滤掉工厂调用自身（其 return 链并入）。深度 +1，visited 透传（跨层防环）
+        return expandFactoryCalls(listOf(argCall), depth + 1, visited).filter { it !== argCall }
     }
 
     /**
      * 解析工厂方法体 `return` 表达式中的 wrapper 构造链。
      * 如 `return new MPJLambdaWrapper<>().selectAll(...).leftJoin(...)` → [new, selectAll, leftJoin]。
+     *
+     * D264 修 2 的三项补强：
+     *  - **裸变量 return**（R5/R10 形态 `return q;`）：`q` resolve 到方法体内的局部 wrapper 变量时，
+     *    递归收集该变量自身的链（`q.eq(...)` / `q.isNotNull(...)`），而不是把 `return q` 当空链
+     *    ——旧实现让 `buildQuery` 这种工具方法名被当条件方法送进解析器（`[buildQuery]` 伪条件）；
+     *  - **多 return 规则**（照 `psource/SqlStringConcatenator.concatMethodReturn`）：多个分支 return 的
+     *    文本不一致时放弃（不猜分支），一致才采用；收集时排除嵌套 lambda / 内部类的 return；
+     *  - **深度 + 环防护**：`a(){return b(w);} b(){return a(w);}` 这种互递归在 [visitedMethods] 处终止。
      */
-    private fun findFactoryReturnChain(method: PsiMethod): List<PsiMethodCallExpression> {
+    private fun findFactoryReturnChain(
+        method: PsiMethod,
+        depth: Int = 0,
+        visitedMethods: MutableSet<PsiMethod> = mutableSetOf(),
+    ): List<PsiMethodCallExpression> {
         val body = method.body ?: return emptyList()
-        val returnStatement = PsiTreeUtil.findChildOfType(body, PsiReturnStatement::class.java) ?: return emptyList()
-        val expr = PsiTreeUtil.getChildOfType(returnStatement, PsiExpression::class.java) ?: return emptyList()
-        return ArgResolver.collectChainFromInitializer(expr)
+        // 只收本方法自身的 return：排除嵌套方法 / lambda 体内的（`SqlStringConcatenator:483-484` 同款写法）
+        val returns = PsiTreeUtil.collectElementsOfType(body, PsiReturnStatement::class.java)
+            .filter { PsiTreeUtil.getParentOfType(it, PsiMethod::class.java) === method }
+            .filter { PsiTreeUtil.getParentOfType(it, PsiLambdaExpression::class.java, true) == null }
+        if (returns.isEmpty()) return emptyList()
+        val chains = returns.mapNotNull { stmt ->
+            val expr = stmt.returnValue ?: return@mapNotNull null
+            collectReturnChain(expr, depth, visitedMethods)
+        }
+        if (chains.isEmpty()) return emptyList()
+        // 多 return 一致性：按「方法名序列」比对，不一致即放弃（不猜哪条分支）
+        val signatures = chains.map { chain -> chain.map { it.methodExpression.referenceName } }.distinct()
+        if (signatures.size != 1) {
+            LOG.debug("D264 多 return 分支不一致，放弃展开: ${method.name} -> $signatures")
+            return emptyList()
+        }
+        return chains.first()
+    }
+
+    /**
+     * D264 修 2：单个 return 表达式的链收集。
+     *
+     *  - 链式形态（`return new W().eq(...)` / `return Wrappers.lambdaQuery()...`）→ [ArgResolver.collectChainFromInitializer]；
+     *  - 裸变量形态（`return q;`）→ q 是方法体内局部 wrapper 变量时，收集该变量上的全部条件调用
+     *    （初始化链 + 变量引用上的链式调用，都按 `LexicographicOrder` 排序）；
+     *  - 其余（`return null` / 字面量）→ 空。
+     */
+    private fun collectReturnChain(
+        expr: PsiExpression,
+        depth: Int,
+        visitedMethods: MutableSet<PsiMethod>,
+    ): List<PsiMethodCallExpression>? {
+        if (expr !is PsiReferenceExpression) return ArgResolver.collectChainFromInitializer(expr)
+        val target = runCatching { expr.resolve() }.getOrNull() as? PsiVariable ?: return emptyList()
+        if (detectWrapperTypeDeep(target.type) == null) return emptyList()
+        // 裸变量 return：收集该变量自身的链。深度先判，resolve 在后（visited 复用方法集合，变量也在内）
+        if (depth + 1 >= WRAPPER_CROSS_METHOD_MAX_DEPTH) return emptyList()
+        val collected = mutableListOf<PsiMethodCallExpression>()
+        target.initializer?.let { init ->
+            collected += ArgResolver.collectChainFromInitializer(init).dropWhile { isWrapperFactoryCall(it) }
+        }
+        runCatching {
+            ReferencesSearch.search(target).forEach { ref ->
+                val refExpression = ref.element as? PsiReferenceExpression ?: return@forEach
+                val call = generateSequence(refExpression.parent) { it.parent }
+                    .filterIsInstance<PsiMethodCallExpression>()
+                    .firstOrNull() ?: return@forEach
+                if (call.methodExpression.qualifierExpression === refExpression) {
+                    collected += collectExtendingChain(call)
+                }
+            }
+        }
+        return collected.distinctBy { Triple(it.containingFile, it.textRange.startOffset, it.textRange.endOffset) }
+            .sortedBy { it.textRange.endOffset }
     }
 
     // ------------------------------------------------------------------

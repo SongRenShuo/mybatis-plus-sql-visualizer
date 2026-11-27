@@ -244,22 +244,23 @@ R7 实测 `[eq, and]`——块内 `ne` 丢了、`and` 只剩空壳。当前实�
 
 | 入口 | 机制 | 初始判断 | 实施时确认 |
 |---|---|---|---|
-| `expandHelperCalls` | 实参型 helper 单层 | 必须改（修 1） | 待实施 |
-| `expandFactoryCalls` / `findFactoryReturnChain` | initializer 工厂链 | 必须改（修 2） | 待实施 |
-| `resolveFactoryArgumentChain` | 工厂方法参数链递归 | 已有递归（`expandFactoryCalls` 自调），但同样无深度/环防护 | 待核查 |
-| `filterCallsToAnchorSegment` | 重新赋值分段 | 必须改（修 3） | 待实施 |
-| `QueryWrapperParser` 未知方法分支（`:252`） | 解析层静默丢弃 | 必须改（修 5，只加可见性） | 待实施 |
-| `isWrapperFactoryCall` | 工厂调用判定 | 不含工具方法 → R5 伪条件来源 | 修 4 的门 |
-| `collectExtendingChain` | 链式延续收集 | P1 绿，天然正确 | 待回归确认 |
-| `resolveNestedLambda` 块体分支（`ArgResolver.kt:181-185`） | 无差别全收 | **实测已红**（`[eq, and]`，内层 `ne` 丢失） | 必须改 |
-| `WrapperAnchorDetector` 锚点集合 | gutter 图标 | 锚点侧**完全不调 `buildChain`**（只调 `detectWrapperTypeDeep`/`isWrapperVariable`/`isMpjJoinConsumerCall`），所以「只改 `buildChain`」时天然不受影响。**但 join 消费族锚点契约已是「变量声明 + 调用行」2~3 枚**（`ab6c7110a` 翻转过），不再是我初稿写的 1 枚 | 待确认：只要不碰锚点侧即无风险 |
-| `SqlPreviewService` 批量路径 | 批量模板 | 不共用本逻辑 | V2 已核实：`BATCH_OPERATIONS` 是闭集映射，`buildQuery` 不在其中 |
-| `ArgResolver.toWrapperCall` | 单个调用 → 条件 | 收到非条件方法会静默降级 | 修 4 |
-| `ExpressionEvaluator` 三元/方法调用（`:50`、`:202-214`） | 值级降级为 `?` | 本轮不改（改值不影响「少条件」主诉） | 登记为已知 |
-| if 分支去重（`WrapperLocator.kt:1116-1122`） | 同 if 只留首个 | 同分支多调用被误杀 | 修 6 |
-| 多个 return（`WrapperLocator.kt:1621`） | 只取第一个 | 分支 return 丢失 | 修 6 |
-| Kotlin 侧（`KtWrapperDetector`） | .kt 文件 | `locateWithTable` 对 kt 直接 return null（`:81-82`） | **必须说明「Kotlin 不在本次范围」** |
-| xbatis / EasyQuery / JPA / Querydsl / MDS | 各自链模型 | 不共用本逻辑 | **必须说明范围外** |
+| `expandHelperCalls` | 实参型 helper 单层 | 必须改（修 1） | **已修**（车道 A）：递归 + 深度 5 + `PsiMethod` 身份 visited 门 + 别名追踪 |
+| `expandFactoryCalls` / `findFactoryReturnChain` | initializer 工厂链 | 必须改（修 2） | **已修**（车道 A）：多 return + 裸变量 return + 深度/环防护 |
+| `resolveFactoryArgumentChain` | 工厂方法参数链递归 | 已有递归（`expandFactoryCalls` 自调），但同样无深度/环防护 | **已收口**（车道 A）：depth+1 与 visited 透传给 `expandFactoryCalls` |
+| `filterCallsToAnchorSegment` | 重新赋值分段 | 必须改（修 3） | **已修**（车道 A）：自引用赋值不切段 + `ChainCallEntry.orderOffset` 逻辑坐标 |
+| `QueryWrapperParser` 未知方法分支（`:252`） | 解析层静默丢弃 | 必须改（修 5，只加可见性） | **未修**（范围外，其他车道）。P5/R13 实测现状：`statusEq` 方法体内的 `eq` 已能落条件，故该形态不丢 |
+| `isWrapperFactoryCall` | 工厂调用判定 | 不含工具方法 → R5 伪条件来源 | **未改**（按硬约束 2）。R5 改由 修 4 的 `isPseudoConditionCall` 在收集侧剔除 |
+| `collectExtendingChain` | 链式延续收集 | P1 绿，天然正确 | **未改**，回归确认仍绿（P1 `testReproHelperInternalChainedCall` PASS） |
+| `resolveNestedLambda` 块体分支（`ArgResolver.kt:181-185`） | 无差别全收 | **实测已红**（`[eq, and]`，内层 `ne` 丢失） | **未修**（`ArgResolver.kt` 属其他车道）。R7 仍红，实测读数不变 |
+| `WrapperAnchorDetector` 锚点集合 | gutter 图标 | 锚点侧完全不调 `buildChain` | **未动**（一行未改）；`CustomWrapperServicePreviewTest` 6 例全绿 |
+| `SqlPreviewService` 批量路径 | 批量模板 | 不共用本逻辑 | **未动**（范围外）。修 0 的「无 WHERE 拦截」未做 |
+| `ArgResolver.toWrapperCall` | 单个调用 → 条件 | 收到非条件方法会静默降级 | **未改**（其他车道）。修 4 已在收集侧拦住伪条件，`toWrapperCall` 不再收到 `buildQuery` |
+| `ExpressionEvaluator` 三元/方法调用（`:50`、`:202-214`） | 值级降级为 `?` | 本轮不改 | **未改**，登记为已知 |
+| if 分支去重（`WrapperLocator.kt:1116-1122`） | 同 if 只留首个 | 同分支多调用被误杀 | **已修**（车道 A）：`dedupeIfBranches` 按锚点分支选 + 同分支全留 |
+| 多个 return（`WrapperLocator.kt:1621`） | 只取第一个 | 分支 return 丢失 | **部分修**（车道 A）：全收 + 文本不一致即放弃；「按锚点可达性选分支」未做 |
+| Kotlin 侧（`KtWrapperDetector`） | .kt 文件 | `locateWithTable` 对 kt 直接 return null | **不在本次范围**（未改，`WrapperLocator.kt:81-82` 原样） |
+| xbatis / EasyQuery / JPA / Querydsl / MDS | 各自链模型 | 不共用本逻辑 | **范围外**（未改） |
+
 
 ## 六之二、破损风险清单（改这个文件会影响谁）
 
@@ -478,6 +479,63 @@ resolve 计数插桩对比，但本轮未做（无现成装置，见 §六之二
 | `resolveNestedLambda` 块体分支 | **已修**（本次） |
 | `collectCallChain` / `collectChainFromInitializer` / `toWrapperCall` | **必须不改**（被 `WrapperLocator` 共用），本次确未改 |
 | `WrapperLocator` / `BatchOperationConverter` / `QueryWrapperParser` / `SqlPreviewService` | 车道 A/B 独占，本车道**未触碰** |
+#### 车道 A（D264-A，分支 `t-d264-a`，基线 `d857d066a`，提交 `f058c285a`）
+
+范围：只改 `psi/WrapperLocator.kt`（+ `WrapperToolClassReproTest` 加一条护栏用例）。实施 修 1/2/3/4/6。
+
+| # | 落地内容 | 关键实现 |
+|---|---|---|
+| 修 1 | `expandHelperCalls` 递归化 | 新增 `WRAPPER_CROSS_METHOD_MAX_DEPTH = 5`（独立常量）；`collectWrapperFlow` 用 `visitedMethods: MutableSet<PsiMethod>` + `if (!visitedMethods.add(method)) return` 作门，**先判深度上限再 resolve**；`directAliasesOf` 追 `target = w` 直接别名（只一层）；去重键 `Triple(containingFile, startOffset, endOffset)` |
+| 修 2 | 返回值形态 | `findFactoryReturnChain` 改多 return + `collectReturnChain` 支持 `return q` 裸变量（`ReferencesSearch` 仅此形态触发）；多 return 按方法名序列比对，不一致即放弃；排除嵌套 lambda/内部类 return；`isWrapperReturningToolCall` 按**返回类型**认伪工厂链首（R6）；`expandFactoryCalls`/`resolveFactoryArgumentChain` 补 depth+visited |
+| 修 3 | 自引用不切段 | `assignmentRhsReferences` 只放行 RHS 引用 LHS 同一变量的赋值；新增 `ChainCallEntry(call, orderOffset, subOrder, path)`，分段一律用 `orderOffset`（锚点文件逻辑坐标），不再拿 helper 文件 `textRange` 与调用方 assignmentOffsets 比大小 |
+| 修 4 | 伪条件守卫 | `isPseudoConditionCall`：不在 `CONDITION_CHAIN_METHOD_NAMES` / `JOIN_CHAIN_METHOD_NAMES` / `wrapperFactoryMethodNames` / `MPJ_STRUCTURE_METHOD_NAMES`，且 qualifier 类型不是 Wrapper → 剔除 + `LOG.debug` 留痕 |
+| 修 6 | if 分支 | `dedupeIfBranches` 改为按锚点所在分支选，同分支多调用全保留；锚点不在该 if 内沿用源码序第一分支旧口径 |
+
+定向读数（5 类 78 例，`--tests` 定向，不 clean 不 --stop）：
+
+| 类 | 修复前 | 修复后 |
+|---|---|---|
+| `WrapperToolClassReproTest` | 16 例 9 红 | 17 例 1 红（新增护栏 1 例绿） |
+| `WrapperLocatorTest` | 31 例 0 红 | 31 例 0 红 |
+| `WrapperTypeSuperChainTest` | 9 例 0 红 | 9 例 0 红 |
+| `CustomWrapperServicePreviewTest` | 6 例 0 红 | 6 例 0 红 |
+| `PreviewStmtTypeScopeTest` | 15 例 0 红 | 15 例 0 红 |
+
+车道 A 范围内转绿：**R1**（`testReproNestedHelperTwoLevels`）、**R2**（`testReproHelperDelegatesToAnotherAndReturns`）、**R3**（`testReproHelperLocalAlias`）、**R4**（`testReproHelperReturnsWrapperAndReassigned`）、**R5**（`testReproHelperBuildsAndReturnsWrapper`）、**R6**（`testReproHelperResultConsumedInline`）、**R8**（`testReproOrderDependenceProbe`）、**R10**（`testReproBareVariableReturnProducesConditionlessSql`）。
+
+**未修（不在车道 A 范围）**：R7 `testReproNestedLambdaBlockWithHelperCall`（实测 `[eq, and]`，内层 `ne` 丢）——根因在 `ArgResolver.resolveNestedLambda` 的代码块分支（`ArgResolver.kt:181-185`），属修 7 / 其他车道。
+
+反向验证（两次读数）：
+
+| 关闭的分支 | 结果 |
+|---|---|
+| 修 3 自引用放行（`assignmentOffsets` 不过滤 selfRef） | `testReproHelperReturnsWrapperAndReassigned` + `testReproOrderDependenceProbe` + R7 变红（17 例 3 红） |
+| 修 1 递归分支 ②（`argIndex = -1`） | `testReproNestedHelperTwoLevels` + `testReproHelperDelegatesToAnotherAndReturns` + R7 变红（17 例 3 红） |
+
+两处关掉后均恢复原状并复跑全绿（除 R7）。
+
+性能实测（同机连续两遍，取第二遍；`--rerun-tasks` 保证真跑）：
+
+| 类 | 修复前（基线 `d857d066a`） | 修复后 | 变化 |
+|---|---|---|---|
+| `WrapperLocatorTest`（31 例） | 6.627 s | 4.959 s | **-25%** |
+| `WrapperToolClassReproTest`（17 例） | 15.275 s（含 9 条红例的失败路径） | 13.098 s | **-14%** |
+
+性能口径说明：
+- 递归只落在 `buildChain` 预览路径；`expandHelperCalls` / `collectWrapperFlow` / `expandFactoryCalls` / `findFactoryReturnChain` / `isWrapperReturningToolCall` **全部 private**，`isWrapperVariable` / `detectWrapperTypeDeep` / `WrapperAnchorDetector` 一行未动。
+- `visitedMethods` 的 `add()` 返回值直接当门，方法体遍历次数上界 = 不同方法数；深度上限在 `resolveMethod()` **之前**判。
+- 未新增 `ReferencesSearch` 调用点：`collectReturnChain` 的裸变量分支复用了「变量引用扫描」，仅在 `return q` 形态下触发（原实现在该形态下走的是空链，本来就无产出）。
+
+互递归护栏：新增 `testReproMutualRecursionTerminates`（`a(){w.ne();b(w);} b(){w.isNotNull();a(w);}`），实测 **PASS / 0.218 s**——无防护会栈溢出，有 visited 门后有限步终止。
+
+已知未覆盖（本车道范围外，需其他车道或后续批次）：
+- 修 0（批量兜底拦截，`SqlPreviewService` / `BatchOperationConverter`）
+- 修 5（`QueryWrapperParser` 未知方法可见性）
+- 修 7（`ArgResolver` 嵌套 lambda 代码块体）
+- `WrapperCache` 失效维度加 helper 文件（`WrapperCache.kt:76`）
+- 入口识别四处对齐（`isChainHeadCall` / `isSqlCandidate` / `initializerHeadIsWrapper` / `hasWrapperArgument`）——按 §七 的提醒，本轮未做修 2 的入口侧扩展即不动这四处
+- L15 多 return「按锚点/调用点可达性选」只做到「文本不一致即放弃」，分支标注未做
+
 
 ### 教训预登记
 
