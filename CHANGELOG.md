@@ -10,6 +10,8 @@
 
 ### Fixed
 
+- **Wrapper 交给工具类处理后，预览 SQL 不再丢条件或退化成全表查询（T-WrapperToolCrossMethod，D264）**：用户反馈「通过工具类对 QueryWrapper 处理之后，最终的 SQL 里少了这一部分；插件只处理简单的 if 判断，复杂一点就被舍弃」。复现确认这是**收集层与解析层两条独立缺陷**，且有比「少条件」更坏的形态——`mapper.selectList(FilterUtil.buildQuery(1))` 会产出**无 WHERE 的全表 SELECT 且无任何提示**，用户会以为查询本就没有过滤条件。现在：①工具类内再传一层、透传到别的方法、局部别名接住形参，都能把条件收全；②工具类构造并返回 wrapper（`return q` 裸变量、多 return 分支）能被识别并展开；③`w = decorate(w)` 这类自引用赋值不再切断前半段条件（此前会把 `eq` 一并切掉、只留后段）；④非条件方法不再被当成条件方法入链（此前 `buildQuery` 会作为伪条件名进入链）；⑤嵌套 lambda 代码块体按形参筛选，`trim()` / `log.info()` 这类非 wrapper 调用不再混进链（撞上 `select`/`last` 等 MP 方法名时会渲染出语义错误的 SQL）；⑥无法解析条件链时**拒绝产出**并给出明确原因，而不是静默输出无 WHERE SQL；⑦链上未识别的方法名会出现在警告里，用户能看到「少了什么」。
+
 - **XML 内嵌 SQL 预览不再把 `&gt;` / `&lt;` 带进产物（T-XmlEntityDecode，`b8e2fcfc7`）**：`<sql id>` 片段、自研框架 XML 载体（`<datasource>` / `<statement>` 等）、hbm 命名查询这三条链原先直接取 IntelliJ PSI 的源文本，XML 实体原样保留——预览面板与「复制 SQL / 执行 SQL」拿到的是 `WHERE o.update_time &gt;= #{fromTime}`，真机执行必然语法错误（用户报障截图形态，编辑器里 `&gt;` 还会被标红）。现在普通文本段按 XML 规则还原：五个标准实体（`&lt;` `&gt;` `&amp;` `&quot;` `&apos;`）加数字字符引用（`&#62;` / `&#x3E;`），单趟扫描只解一次（`&amp;gt;` 仍是 `&gt;`）；CDATA 段保持字面量，与 MyBatis 运行时一致。独立 SQL 预览工作台的「整段网页转义粘贴」解码收敛到同一实现，顺带补上数字引用与 CDATA 保护。mapper 语句与注解 `<script>` 走 DOM 解析，本来就正确，不受影响。
 
 - **两张二维码不再一高一低（T-QrValign，`a7d8063bb`）**：右码此前比左码整体低 7px。上一版按「两个 `<td>` 写同样 width」修，那只管水平轴；真因是 `<td>` 的 `align`/`valign` 都会被平台白名单剥掉（jsoup `Safelist.relaxed` 的 td 只留 abbr/axis/colspan/rowspan/width），默认 `vertical-align: middle` 下两列说明文字行数不同（3 行 vs 2 行）让内容各自居中，图片起点自然错开。现在表格单元格只放图片、说明文字移到表格外的独立段落：两列内容同高，垂直与水平都自然对齐，不再依赖任何会被剥掉的属性。已在 IDE 自带 JBR 25 的 Swing 渲染器（IDE 插件页同款）实测两码顶边齐平。
