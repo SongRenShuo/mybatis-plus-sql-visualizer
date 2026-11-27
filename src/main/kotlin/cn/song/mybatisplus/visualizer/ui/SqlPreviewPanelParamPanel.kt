@@ -2149,7 +2149,14 @@ internal fun SqlPreviewPanel.syncParamFieldText(source: String, value: String) {
     // 对位 paramFields 行序（currentParamFieldIndex），方案切换后 map 重填序=另一方案快照保存序，
     // 与其后的面板行构建序漂移时回写错位（值写进别家输入框）。锚点挂在输入框 clientProperty 上，
     // 与任何遍历序解耦。反向验证读数：退回插入序对位，跨方案键序漂移用例即 ComparisonFailure 红。
-    paramFields.firstOrNull { it.getClientProperty(PROP_FIELD_SOURCE) == source }?.text = value
+    // D255：同 source 可能有多个输入框（逐列展开的批量条件共用键时，历史上 setEntity 就是 15 框共用一个
+    // `"?"`）。写回必须覆盖全部同键字段——只写 firstOrNull 会让清除/召回只改第一个框，可见值与
+    // paramValues 分叉（用户看到的「点清除没清干净、重开预览才正常」）。
+    paramFields.forEach { field ->
+        if (field.getClientProperty(PROP_FIELD_SOURCE) == source && field.text != value) {
+            field.text = value
+        }
+    }
 }
 
 /**

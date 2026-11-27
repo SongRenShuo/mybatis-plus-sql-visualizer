@@ -4,6 +4,63 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **插件页描述精简：中文条目 10 → 7，长枚举收敛到代表性子集（T-PluginDescSlim，`a7d8063bb`）**：Marketplace 与 IDE 插件页的描述正文从 7656 字符降到约 5100 字符。Wrapper 六种写法、SQL 来源十余种、国产库驱动八种、方言八个名字这类密集枚举各自收短，细节留在文档站；合并口径为「生成与转换 + CRUD 直出 + 一键回滚」并为一条、「调用栈悬停 + 工作流增强」并为一条。方言数、MCP 工具数、快捷键、最低支持版本四项声明仍与代码对账，守卫照旧。
+
+### Fixed
+
+- **两张二维码不再一高一低（T-QrValign，`a7d8063bb`）**：右码此前比左码整体低 7px。上一版按「两个 `<td>` 写同样 width」修，那只管水平轴；真因是 `<td>` 的 `align`/`valign` 都会被平台白名单剥掉（jsoup `Safelist.relaxed` 的 td 只留 abbr/axis/colspan/rowspan/width），默认 `vertical-align: middle` 下两列说明文字行数不同（3 行 vs 2 行）让内容各自居中，图片起点自然错开。现在表格单元格只放图片、说明文字移到表格外的独立段落：两列内容同高，垂直与水平都自然对齐，不再依赖任何会被剥掉的属性。已在 IDE 自带 JBR 25 的 Swing 渲染器（IDE 插件页同款）实测两码顶边齐平。
+
+## [2026.11.27] - 2026-11-27
+
+> 范围＝上一正式版 `2026.11.25`（`452692060`）之后到本版发行提交的全部用户可见增量（含三轮内测 `2026.11.26-beta.1` / `beta.2` / `2026.11.27-beta.1` 全部内容；三段内测段由本节取代，内测发行版保留共存）。按最终能力面合并为 11 项，`Mapper 方法行预览`与`自研 Wrapper 支持`合并两轮的同族增量、`预览链两处 UI 线程卡顿与一处回填丢失`合并三笔同族修复。其余 mcprush 收录 / 内容营销 / 盘点 / 验收册 / 记忆精简 / CI 与测试类提交用户不可见。逐条根因与真机读数见 `docs/发行说明/20261127-1100-Mapper方法行预览与自研Wrapper及性能收口-发行说明.md`，三轮内测细目见 `docs/发行说明/` 三篇内测说明留档
+
+### Added
+
+- **Mapper 接口方法行也能预览 SQL（T-MapperMethodSqlPreview，`12f3232b8` + `3d6bb9b57`）**：方法名行新增预览图标，点击弹出该方法对应语句的动态 SQL 预览；此外光标停在方法名/参数/返回类型上按 `Alt+Shift+Q`（右键菜单同一入口）也能直接预览，此前这条路会落到「未找到可转换的 Wrapper」。两条入口走与 XML 语句行点击完全一致的装配与渲染链（参数表、`<include>`、`${}` 注入同一套）；同名多方言（`databaseId`）变体弹选择器；没有 XML 语句的方法（含 MP 内置 CRUD）仍回落原有链，不出错源提示。该方法行因此有两枚图标——左预览、右既有跳转箭头；开启同类插件共存让位时只让跳转、预览保留（三家竞品 Java 侧都只有跳转箭头，无预览能力），只装 MyBatisCodeHelperPro 时开让位该行不再为空。不加新设置项，随「MyBatis mapper XML」组开关与总闸。
+
+- **自研 Wrapper 子类（MPJ 套壳封装）现在能预览了（T-ServiceJoinWrapperPreview，D256，`736b6a272`）**：`CustomJoinWrapper extends AbstractLambdaJoinBaseWrapper<…>` 这类把 MPJ 整套复制改名、或在自己框架里再包一层的 Wrapper，此前插件只认官方类名——声明行没有 gutter 图标，Service 封装里的 `repository.selectJoinList(Dto.class, wrapper)` 点了没反应。现在沿类型父链识别（FQN 前缀 / 接口同名组合 / 依赖未索引时按链方法兜底），声明行与 `selectJoinList` / `selectJoinOne` / `selectJoinMap` / `selectJoinCount` 调用行都能直接预览。
+
+### Fixed
+
+- **方法行两枚图标固定为「预览在左、跳转在右」（T-MapperPreviewOrder，`031fb9089` + `6c1dc40a6`）**：第三次报障。此前预览与跳转在同一个 provider 里产出，首次渲染偶发「预览在右、过一会跳到左边」，与 XML 语句行的稳定顺序不一致。前两版修法（同 provider 双 marker、锚点 offset 小一档）都只让收集顺序偏向自己，真机多轮 daemon 复用下仍会翻转。现在改用平台的分列机制：预览固定 `Alignment.LEFT`、跳转保持 `CENTER`，`EditorGutterComponentImpl.processIconsRowForY` 按 alignment 分列排布（先排完所有 LEFT，再把 CENTER 整体放其右侧），左右序与 marker 收集顺序、daemon 增量复用、provider 注册顺序全部无关。另补 `MapperPreviewDaemonOrderTest` 钉住该行为。
+
+- **Mapper 接口方法的 Wrapper 参数不再多出一枚预览图标（T-MapperPreviewDedupAndAnnotationShortcut，`0263bf788`）**：`List<Order> selectByXxx(@Param("ew") Wrapper<Order> ew)` 这种签名里，参数名上曾经也出 Wrapper 预览图标，与方法行的 SQL 预览图标同款同行，看着像「图标重复」。参数在无方法体的接口/抽象方法里只是 `${ew.customSqlSegment}` 占位符、不是可预览的链起点，现在不标；实现类与接口 `default` 方法（有 body）的参数照旧。
+
+- **注解 SQL 的快捷键按方法定位，不再弹全文件列表（T-MapperPreviewDedupAndAnnotationShortcut，`0263bf788`）**：光标停在 `int createDemoTable();` 这类方法声明行（注解在上一行）时按 `Alt+Shift+Q`，此前会列出整个文件的注解 SQL 让人挑；现在直接预览该方法自己的 `@Select`/`@Update` 等注解 SQL。光标在类体空白处时仍保留文件级列表兜底。
+
+- **两个应用同时开着时，先启动的那个不再丢 SQL（T-EpAttachBeforeCapture，`ad4f5994b`）**：控制台捕获通道原先只在控制台创建那一刻装配，先启动应用、之后才点「开始捕获」时，这个控制台拿不到 EP 通道；后启动应用的控制台一旦捕获到 SQL，会把进程级的接管标志置位，前一个控制台的兜底解析也随之中止——表现为「两个应用单独跑都能看到 SQL，同时跑只剩后启动的那个」。现在捕获通道对任何控制台都先装配、捕获开启后自动生效，两边各收各的。
+
+- **预览链两处 UI 线程卡顿与一处回填丢失（T-PreviewFallbackEdtSlowOps / T-PerfSweep34 券01、券05）**：① `Alt+Shift+Q` 落在 Mapper 接口方法、且 Wrapper 链没有命中时，兜底要按 namespace 找同名 XML 语句，这步原先跑在 UI 线程的预览回调里——`idea.log` 每次留两条 `SEVERE Slow operations ... Plugin to blame: MyBatis SQL Visualizer`，索引要追平时界面还会卡一下；现在锚点解析放回后台线程的读动作里完成（`c5685aee8`）。② 同一处兜底链还有第二条分支漏改——光标停在 `deleteAllInBatch()` 这类 Repository 声明行时「按接口泛型找实体」会去查文件名索引并读工程的 Hibernate/Spring 配置文件，这条也在 UI 线程上；现在同样移到后台（`3e434734f`）。③ 预览里遇到未解析的 `<include refid>` 时，弹框里点「从文件选择」、选好 XML 后文本框没有任何变化——回填动作被排在一个「等模态框关掉才执行」的队列上，而那时框已经关了；现在选完即回填（`3e52b138f`）。
+
+- **从日志面板点「设置」不再停在 SQL 日志页中间（T-SqlLogSettingsJumpAnchor，`52322da26`）**：设置页按页面缓存内容与滚动位置，齿轮入口只切页不做定位，于是 SQL 日志这种多分组长页会沿用上次停的位置。现在只切页时落点复位到页顶；搜索与引导链接的带目标定位（滚动 + 高亮）不受影响。
+
+- **join 消费族加了守卫（D256，`84ae88a2d` + `0c15797e5`，随 `736b6a272` 合流进入发行树）**：wrapper 未识别时不再输出 `WHERE id IN (?, ...)` 这类凭空条件的错误 SQL。两笔原始提交写在 11-23，但当时只在 D256 分支上，直到本版 D256 合流才进 master；上个正式版 `2026.11.23` 与 `2026.11.25` 的产物都不含它。
+
+### Changed
+
+- **切换「同类插件共存让位」不再拖慢整个项目（T-PerfSweep34 券02，`56162eaf6`）**：这个开关只影响行号旁的图标，但原先切换后会让所有已打开项目重新做一遍全量代码分析，大工程下要等一会儿才恢复。现在只重算当前打开着的那些文件。图标刷新效果不变。
+
+- **发现 SQL 自动打开日志窗口不再顶掉你正在用的面板（T-AutoShowYield，`12b84ae03`）**：新 UI 同一侧栏同一时刻只显示一块面板，此前自动展开会把正在使用的 API 调试 / HTTP Client / Database 顶掉（表现为「我在看接口响应，日志窗抢上来了」）。现在同一侧栏已有其他工具窗口在显示时不展开，SQL 照常捕获、切回面板即可看到；设置页 SQL 日志组新增子开关「自动展开时让位给正在使用的面板」（默认开，父开关关闭时禁用），关掉即恢复每次必开。
+
+- **gutter 判定顺序与补全预热的内部提速（T-PerfSweep34 券04、券03，`a33d99a4a` + `0b581d5b1`）**：4 个图标 provider 原先对每个语法元素都先读一次插件设置再判断「这个元素是不是我的目标」，现在先做那个几乎零成本的判断；补全上下文预热加了每项目次数上限，冷启动后连续打开很多 mapper 文件时不再每个文件都触发一次较重的实体解析预热（与同批的装配预热同口径，每项目最多 2 个文件）。纯内部重排与节流，无行为变化，首次点击预览/补全仍命中热缓存。
+
+## [2026.11.25] - 2026-11-25
+
+> 范围＝`2026.11.23` 正式版之后到本版发行提交的全部用户可见增量（含内测 `2026.11.24-beta.1` 与 `2026.11.25-beta.1` 全部内容；两段内测段由本节取代，内测发行版保留共存）。按最终能力面合并为 3 项：Mapper 根标签跳接口类、接口类名跳 XML、两侧让位定稿；11.24 让位分侧口径已被 11.25 两侧让位取代。其余为内容营销 / 计划 / 调研 / 探针 / 索引类提交。逐条根因、真机读数与反向验证见 `docs/发行说明/20261125-1130-Mapper根标签与类级跳转及两侧让位转正-发行说明.md` 与 `docs/发行说明/` 两篇内测说明留档
+
+### Added
+- **Mapper XML 根标签也能跳接口类（T-MapperNavNamespaceJump，`6f6907655`）**：`<mapper namespace="...">` 根标签行新增「跳 Mapper 接口类」图标，点击 / Ctrl+B / Ctrl+Alt+Home 都能跳到对应接口类，接口里没有方法也能跳；让位登记同步扩到 MyBatisX / MyBatisPlus
+- **Mapper 接口类名也有跳转图标（T-MapperClassJump，`ddd37a5be`）**：接口声明行新增「类 → 对应 XML 根标签」图标，点击 / Ctrl+B / GotoRelated（Related）都落到 mapper XML 根标签；对齐同类插件（MPJ/MyBatisX）的类级箭头
+
+### Changed
+- **让位覆盖 XML 与 Mapper 两侧，切换开关后立即刷新（T-MapperNavYieldBothSides，`a009cf207` + `ddd37a5be`）**：同类插件在位时 XML 语句行与 Mapper 接口方法行都不再显示本插件跳转图标，同一位置只留对方那一套；切换让位开关后已打开的 mapper/xml 立即重算，无需重开文件。能力前提（反编译核实）：XML 侧 MyBatisCodeHelperPro / MyBatisX / MyBatisPlus 都会画；Java 侧 MyBatisX / MyBatisPlus 会画（`MapperLineMarkerProvider`，锚方法名），MyBatisCodeHelperPro 的 UAST 箭头在当前平台不产出——只装它时 Java 方法行让位后会为空
+
+## [2026.11.23] - 2026-11-23
+
+> 范围＝`2026.11.21` 正式版之后到本版发行提交的全部用户可见增量（含内测 `2026.11.23-beta.1` / `beta.2` 全部内容；两段内测段由本节取代，内测发行版保留共存）。本节按能力面合并，共 7 项用户可感改动；逐条根因、真机读数与反向验证见 `docs/发行说明/20261123-1450-显示名更名与裸SQL横幅及实体字段等修复转正-发行说明.md` 与 `docs/发行说明/` 两篇内测说明留档。
+
 ### Added
 - **新增 10 个国产/信创数据库方言（第 16~25 方言，官方文档级 + 族推定，未经真机引擎验证；T-DomesticDialects，8735a6a69 / 5ab49ed6b / 692bebc74）**：TiDB、PolarDB-X、PolarDB（Oracle 兼容版）、GBase 8a、GBase 8c、神通 Oscar、优炫 UXDB、AntDB、虚谷 XuGu、崖山 YashanDB——设置页可选、按各自兼容族渲染（MySQL/PG/Oracle 形态分页与引用、UPSERT 按 openGauss 真机实证形态等，逐项证据档见方言 KDoc）。连接面全链接通：`jdbc:polardb(b2|x):` / `jdbc:gbase(8c):` / `jdbc:oscar:` / `jdbc:uxdb:` / `jdbc:antdb:` / `jdbc:xugu:` / `jdbc:yasdb:` URL→方言、列表角标显示、MCP 识别（含「神通/优炫/虚谷/崖山」中文别名）、执行目标路由、IDEA SQL Dialects 语言注册（Generic 样板成对注册）；TiDB/PolarDB-X 走 `jdbc:mysql:` 不劫持（GoldenDB 先例）。能力矩阵如实显示：EXPLAIN 接入 8 家（TiDB/PolarDB-X 文档级 TABLE 档，其余保守 TEXT 档）、神通/崖山无输出形态证据不接入（P-9）；保留字按族底表复用（「宁可多包」，待真机校验）
 - **增强捕获驱动面扩容（T-DomesticDialects，5ab49ed6b）**：有专用驱动包名的 5 家（GBase `com.gbase.*`、PolarDB `com.aliyun.polardb.*`、神通 `com.oscar.*`、虚谷 `com.xuguedata.*`、崖山 `com.yashandb.*`）登记进框架帧跳过前缀（agent/IDE/注入模板/文档示例四副本同步），来源定位不再指进驱动内部
@@ -56,6 +113,11 @@
 - 插件显示名更名 SQL Visualizer → MyBatis SQL Visualizer（T-D244 搜索关键词决策 B1 案）：Marketplace 后台展示名与包内 plugin.xml `<name>` 同步更名，补上名称字段对 mybatis 系搜索词的匹配缺口；插件 ID / xmlId 与界面内品牌文案（错误报告、导出头、二维码说明、设置页标题）不变
 - Marketplace 描述关键词批（D246）——首行改 40 字符关键词句，补 iBatis/GoldenDB/openGauss 词面与 slow query/execution plan/sql formatter 精确短语，随下一发行批生效（蓝本列举中的磐维 PanWeiDB 经 Dialect.kt 对账不存在该方言，按实际改列 openGauss，数字 15 不动）
 - 描述补增强捕获国产库覆盖句（达梦 / 人大金仓 / GaussDB / 磐维 PanWeiDB / OceanBase / GoldenDB 等已适配，zh+en）；自定义页方言列举对账修正——磐维不占独立格式化方言档，移出 15 种列举、改为增强捕获专项支持表述
+
+### Fixed
+- **实体字段识别对齐真机语义（T-EntityFieldStaticHidden，D254）**：预览里静态常量（`TABLE_NAME`、日志器等）不再被当成表列；父子类同名字段只保留子类声明（`@TableLogic`/`@TableId`/`@Version`/`@TableField` 随子类字段生效，不再总是取父类那份）。参数类型提示与 XML 属性补全同步去噪（`serialVersionUID` 不再出现在候选里，`@类@` 静态成员补全不受影响）；父类文件修改后预览立即按新字段解析，不再沿用旧缓存。
+- **`setEntity(entity)` 预览的每个条件可以独立填值（T-SetEntityParamKeyCollision，D255）**：此前实体全列展开的所有条件共用一个匿名参数键——左侧参数栏改任意一个框，右侧整段 WHERE 都变成同一个值；点「清除」也只清掉第一个框，要关掉重开预览才恢复。现在每列独立参数键（`query.id`、`query.password`…），改哪个框只影响对应条件，清除立即清空全部条件框；`setUpdateEntity` / `updatable(entity)` 的全列 SET 同步修正。
+- **无数据源执行失败后结果区不再是整块绿空白（T-NoDataSourceGreenResultPanel，D253）**：独立工作台粘 SQL 点执行、确认框点「是」后，若项目没配数据源，结果区（原显示格式化 SQL 处）会变成整块纯色空白（真机呈亮绿）。根因＝确认框期间编辑器被释放、失败链无重渲染，结果区空置且容器透明，透出父级主题底色。修法＝结果区容器自带不透明主题底色（消除透出）+ 失败收口在无控制台且编辑器空时用最近结果重建预览编辑器（格式化 SQL 仍在）。有数据源执行路径不变。
 
 ## [2026.11.21] - 2026-11-21
 

@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui.nav
 
+import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiIdentifier
@@ -154,6 +155,17 @@ class MapperNavigationGotoDeclarationHandlerTest : BasePlatformTestCase() {
     // XML → Java
     // ------------------------------------------------------------------
 
+    fun testJava类名_跳XML根标签() {
+        val java = addMapper()
+        val xml = addXml("<select id=\"selectById\">select 1</select>")
+
+        val cls = PsiTreeUtil.findChildOfType(java, com.intellij.psi.PsiClass::class.java)!!
+        val result = targets(cls.nameIdentifier!!)
+
+        assertEquals("接口类名应给出唯一 XML 落点（T-MapperClassJump）", 1, result.size)
+        assertSame("落点应在 mapper XML 内", xml, result[0].containingFile)
+    }
+
     fun testXml起始标签名_跳接口方法() {
         addMapper()
         val xml = addXml("<select id=\"selectById\">select 1</select>")
@@ -256,5 +268,37 @@ class MapperNavigationGotoDeclarationHandlerTest : BasePlatformTestCase() {
         val block = xml.substring(start, end)
         assertFalse("注册段内不得出现 keyboard-shortcut：$block", block.contains("keyboard-shortcut"))
         assertFalse("注册段内不得出现 mouse-shortcut：$block", block.contains("mouse-shortcut"))
+    }
+
+    // ------------------------------------------------------------------
+    // T-MapperNavNamespaceJump：根标签 → 接口类；语句无方法 → 退化跳类
+    // ------------------------------------------------------------------
+
+    fun testXml根标签名_跳接口类() {
+        addMapper()
+        val xml = addXml("<select id=\"selectById\">select 1</select>")
+
+        val result = targets(startTagNameToken(xml, "mapper"))
+
+        assertEquals(1, result.size)
+        assertTrue("落点应是 PsiClass", result[0] is PsiClass)
+        assertEquals("com.demo.UserMapper", (result[0] as PsiClass).qualifiedName)
+    }
+
+    fun testXml语句无同名方法_退化为跳接口类() {
+        addMapper()
+        val xml = addXml("<select id=\"ghost\">select 1</select>")
+
+        val result = targets(startTagNameToken(xml, "select"))
+
+        assertEquals("找不到同名方法时应退化为跳接口类（不造死链接）", 1, result.size)
+        assertTrue("退化落点应是 PsiClass", result[0] is PsiClass)
+        assertEquals("com.demo.UserMapper", (result[0] as PsiClass).qualifiedName)
+    }
+
+    fun testXml根标签_namespace不存在时不接管() {
+        val xml = addXml("<select id=\"selectById\">select 1</select>", namespace = "com.demo.GhostMapper")
+
+        assertTrue("namespace 指向不存在的类时应回落原生（不接管）", targets(startTagNameToken(xml, "mapper")).isEmpty())
     }
 }

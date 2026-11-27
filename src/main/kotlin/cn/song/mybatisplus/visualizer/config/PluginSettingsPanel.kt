@@ -21,6 +21,8 @@ import cn.song.mybatisplus.visualizer.util.PluginBuildInfo
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
+import com.intellij.codeInsight.daemon.DaemonCodeAnalyzer
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.actionSystem.KeyboardShortcut
 import com.intellij.openapi.keymap.KeymapManager
@@ -445,7 +447,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
     internal val gutterGroupJdbcCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.jdbc"))
     internal val gutterGroupInlineFallbackCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.inlineFallback"))
     internal val gutterGroupOtherCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.other"))
-    /** T-MapperNavCoexistYield：MyBatisCodeHelperPro 启用时让出 Mapper 双向跳转图标（默认勾选＝让位）。 */
+    /** T-MapperNavCoexistYield：同类插件启用时让出 **XML 语句行与 Mapper 接口方法行**的跳转图标（默认勾选）。 */
     internal val mapperNavYieldCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.mapperNavYield"))
 
     /**
@@ -629,6 +631,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
     internal val logMixedPrefixCheck = JBCheckBox()
     internal val logAutoCaptureCheck = JBCheckBox()
     internal val logAutoOpenCheck = JBCheckBox()
+    /** T-AutoShowYield：自动展开的子开关——同侧栏已有面板时让位（父项关闭时禁用）。 */
+    internal val logAutoOpenYieldCheck = JBCheckBox()
     internal val logStopOnToolWindowCloseCheck = JBCheckBox()
     internal val logTimestampCheck = JBCheckBox()
     internal val logTimestampFormatField = JBTextField(12)
@@ -1301,6 +1305,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || logMixedPrefixCheck.isSelected != s.logMixedPrefix
             || logAutoCaptureCheck.isSelected != s.logAutoCaptureOnStart
             || logAutoOpenCheck.isSelected != s.logAutoOpenOnCapture
+            || logAutoOpenYieldCheck.isSelected != s.logAutoOpenYield
             || logStopOnToolWindowCloseCheck.isSelected != s.logStopOnToolWindowClose
             || logTimestampCheck.isSelected != s.logTimestampEnabled
             || logTimestampFormatField.text.trim() != s.logTimestampFormat
@@ -1380,8 +1385,41 @@ class PluginSettingsPanel @JvmOverloads constructor(
      *
      * @return 界面语言是否发生变化（true 时调用方应 [rebuild] 刷新设置页文案）
      */
+    /**
+     * T-MapperNavYieldBothSides：让位开关变化后立即重算已打开文件的 gutter。
+     * 此前 daemon 不会因设置变更自动重跑，用户要重开文件才看到图标变化（2026-11-25 真机反馈）。
+     *
+     * T-PerfSweep34 券02（2026-11-26 第十一期性能调研 §4.2）：原实现对 `openProjects` 里**每个**
+     * 项目调无参 `DaemonCodeAnalyzer.restart()`——那是**全项目全量重分析**（inspection / annotator /
+     * 高亮全部重跑），而触发它的只是一个 gutter 显示开关，成本与意图明显错配。改为**按文件**重分析：
+     * 只遍历每个项目真正打开着的编辑器文件，逐个 `restart(psi)`（同仓既有形态见
+     * `SqlPreviewPanelExecution.kt` 的 `restart(psi)`）。影响面从「全项目所有文件」收到「打开着的文件」。
+     */
+    private fun refreshGutterLineMarkers() {
+        ApplicationManager.getApplication().invokeLater({
+            ProjectManager.getInstance().openProjects.forEach { proj ->
+                if (proj.isDisposed) return@forEach
+                runCatching {
+                    val analyzer = DaemonCodeAnalyzer.getInstance(proj)
+                    val psiManager = com.intellij.psi.PsiManager.getInstance(proj)
+                    com.intellij.openapi.fileEditor.FileEditorManager.getInstance(proj).openFiles.forEach { vf ->
+                        // `PsiManager.findFile` 需要读动作（仓内既有惯例见 ChooseDataSourceTakeover
+                        // 与 DataSourceSelector 的同款调用，均包 ReadAction.compute）。裸调靠 EDT
+                        // 恰好持读权限侥幸通过——平台一旦加断言就是新的非法访问源。
+                        val psi = com.intellij.openapi.application.ReadAction.compute<com.intellij.psi.PsiFile?, Throwable> {
+                            psiManager.findFile(vf)
+                        }
+                        if (psi != null) analyzer.restart(psi)
+                    }
+                }
+            }
+        }, ModalityState.any())
+    }
+
     fun apply(): Boolean {
         val s = settings.state
+        // T-MapperNavYieldBothSides：记录让位开关旧值，写回后若变化则触发 gutter 重算
+        val yieldBefore = s.mapperNavYieldToCodeHelper
         // M19.1：语言变更判定包含「待应用」标记——写穿后（combo 与 state 已一致）仍报告一次变更，
         // 触发调用方 rebuild；消费后清除标记（后续 apply 幂等）
         // T-HiddenBugPerfScan 券 Y16：非 UI 分区面板的 languageCombo 空 model（buildSections
@@ -1446,6 +1484,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.logMixedPrefix = logMixedPrefixCheck.isSelected
             s.logAutoCaptureOnStart = logAutoCaptureCheck.isSelected
             s.logAutoOpenOnCapture = logAutoOpenCheck.isSelected
+            s.logAutoOpenYield = logAutoOpenYieldCheck.isSelected
             s.logStopOnToolWindowClose = logStopOnToolWindowCloseCheck.isSelected
             s.logTimestampEnabled = logTimestampCheck.isSelected
             s.logTimestampFormat = logTimestampFormatField.text.trim()
@@ -1507,6 +1546,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.gutterGroupInlineFallback = gutterGroupInlineFallbackCheck.isSelected
             s.gutterGroupOther = gutterGroupOtherCheck.isSelected
             s.mapperNavYieldToCodeHelper = mapperNavYieldCheck.isSelected
+            // T-MapperNavYieldBothSides：让位开关变化 → 立即重算已打开文件的 gutter（免重开文件）
+            if (yieldBefore != s.mapperNavYieldToCodeHelper) refreshGutterLineMarkers()
             s.xmlInlineSqlEnabled = xmlInlineSqlCheck.isSelected
             // T-Ibatis2Support 券 A：iBatis sqlMap 预览开关写回（随 UI 分区，读写判定同归属）
             s.ibatisXmlEnabled = ibatisXmlCheck.isSelected
@@ -1670,6 +1711,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             logMixedPrefixCheck.isSelected = s.logMixedPrefix
             logAutoCaptureCheck.isSelected = s.logAutoCaptureOnStart
             logAutoOpenCheck.isSelected = s.logAutoOpenOnCapture
+            logAutoOpenYieldCheck.isSelected = s.logAutoOpenYield
+            logAutoOpenYieldCheck.isEnabled = s.logAutoOpenOnCapture
             logStopOnToolWindowCloseCheck.isSelected = s.logStopOnToolWindowClose
             logTimestampCheck.isSelected = s.logTimestampEnabled
             logTimestampFormatField.text = s.logTimestampFormat

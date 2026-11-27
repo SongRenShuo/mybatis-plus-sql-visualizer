@@ -31,6 +31,8 @@ object GutterGroups {
         "IbatisXmlGutterLineMarkerProvider" to "mapperXml",
         "MapperXmlToJavaLineMarkerProvider" to "mapperXml",
         "MapperJavaToXmlLineMarkerProvider" to "mapperXml",
+        // T-MapperPreviewOrder：方法行预览图标（与跳转拆成两个 provider，与 XML 侧同构）
+        "MapperMethodPreviewLineMarkerProvider" to "mapperXml",
         // T-Ibatis2Gap 券 B：iBatis <sqlMap> 双向跳转（预览图标同组先例拍板 D-8，语义同源）
         "IbatisXmlToJavaLineMarkerProvider" to "mapperXml",
         "IbatisJavaToXmlLineMarkerProvider" to "mapperXml",

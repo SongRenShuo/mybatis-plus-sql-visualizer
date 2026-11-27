@@ -66,11 +66,31 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
     /** 点击处理：后台解析 + 渲染（EDT 禁止 PSI 慢操作），结果走统一展示入口。 */
     private object XmlGutterNavigationHandler : GutterIconNavigationHandler<PsiElement> {
         override fun navigate(e: MouseEvent?, elt: PsiElement) {
-            val project: Project = elt.project
             val tag = elt.parent as? XmlTag ?: return
             val file = tag.containingFile as? XmlFile ?: return
+            previewStatementTag(elt.project, sourceLocation = null) { file to tag }
+        }
+    }
+
+    companion object {
+        private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(XmlSqlGutterLineMarkerProvider::class.java)
+
+        /**
+         * 语句标签的预览入口（T-MapperMethodSqlPreview）：XML 语句行与 Mapper 接口方法行共用，
+         * 保证两处点击的装配与渲染逐字节一致（动态 SQL、参数表、`<include>`、`${}` 注入都在同一条链上）。
+         *
+         * [resolve] 在 [SqlPreviewService.previewAsync] 的 ReadAction 内执行——两处调用方锚点形态
+         * 不同（XML 侧叶子直接给 tag；Java 侧方法名要先解析出同名语句），把解析放在后台，
+         * EDT 上不做 PSI 慢操作。解析不到返回 null，按「未找到」轻提示（不制造点了必空的入口）。
+         */
+        internal fun previewStatementTag(
+            project: Project,
+            sourceLocation: String?,
+            resolve: () -> Pair<XmlFile, XmlTag>?,
+        ) {
             val contextRef = java.util.concurrent.atomic.AtomicReference<cn.song.mybatisplus.visualizer.context.PreviewSourceContext?>()
             SqlPreviewService.previewAsync(project, {
+                val (file, tag) = resolve() ?: return@previewAsync null
                 val t0 = System.currentTimeMillis()
                 val context = XmlPreviewService.resolveSourceContext(file, tag)
                 contextRef.set(context)
@@ -94,13 +114,9 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
                 }
                 XmlPreviewService.preview(file.text, tag.getAttributeValue("id"), project, entity, sourceContext = context)
             }) { result ->
-                SqlPreviewService.showResult(project, result, sourceContext = contextRef.get())
+                SqlPreviewService.showResult(project, result, sourceLocation = sourceLocation, sourceContext = contextRef.get())
             }
         }
-    }
-
-    companion object {
-        private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(XmlSqlGutterLineMarkerProvider::class.java)
 
         /**
          * M11 预取入口：只对 MBG Example 形态（`parameterType` 以 `Example` 结尾）的语句触发，
@@ -145,15 +161,46 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
         private val warmedContextFiles: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
         /**
+         * T-PerfSweep34 券03（2026-11-26 第十一期性能调研 §4.3）：每项目的补全上下文预热额度。
+         *
+         * 背景：同一条 kickFileWarmers 信号踢出的另一条链（`PreviewAssemblyWarm.warmOnce`）有
+         * `WARM_FILES_PER_PROJECT = 2` 的每项目额度，而**更贵的**本链（历史实测冷态 13.3s，
+         * `pre-assembly:completion=13280ms`）只有「每文件一次」去重、**没有项目级预算**——用户
+         * 冷启动后连续打开 10 个 mapper 就会踢 10 次实体解析预热。此处补上与装配预热对齐的额度。
+         *
+         * 键用 `project.locationHash`（与 PreviewAssemblyWarm.usedPerProject 同口径）：会话级、
+         * 项目关闭残留一条 map entry（量级可忽略，键含位置哈希无跨项目撞键面）。
+         */
+        private val ctxWarmBudgetPerProject: MutableMap<String, java.util.concurrent.atomic.AtomicInteger> =
+            java.util.concurrent.ConcurrentHashMap()
+
+        /** 每项目预热额度（与装配预热对齐；取值依据见计划 §券03 的 P-2，暖态实测后再调）。 */
+        internal const val CTX_WARM_FILES_PER_PROJECT = 2
+
+        /**
          * 后台预热补全上下文（实体解析 + 参数名）。**不解析联表候选**（那条另有预热链）。
          * 读动作走 nonBlocking + inSmartMode：等索引不持读锁，可取消。
+         *
+         * T-PerfSweep34 券03：加每项目额度（[CTX_WARM_FILES_PER_PROJECT]）——超限即退并回滚
+         * 去重标记，与 `PreviewAssemblyWarm` 的额度口径一致；失败/取消/索引期同样回滚额度，
+         * 保证「踢没成功不占额度」。
          */
         private fun warmCompletionContextOnce(tag: XmlTag) {
             val project = tag.project
             val fileUrl = tag.containingFile?.virtualFile?.url ?: return
             if (!warmedContextFiles.add(fileUrl)) return
+            val used = ctxWarmBudgetPerProject.computeIfAbsent(project.locationHash) {
+                java.util.concurrent.atomic.AtomicInteger()
+            }
+            if (used.incrementAndGet() > CTX_WARM_FILES_PER_PROJECT) {
+                used.decrementAndGet()
+                warmedContextFiles.remove(fileUrl)
+                return
+            }
             if (runCatching { com.intellij.openapi.project.DumbService.isDumb(project) }.getOrDefault(false)) {
-                warmedContextFiles.remove(fileUrl) // 索引期不预热，等下一次渲染再试
+                // 索引期不预热，等下一次渲染再试——额度一并退回，不占预算。
+                used.decrementAndGet()
+                warmedContextFiles.remove(fileUrl)
                 return
             }
             val started = System.currentTimeMillis()
@@ -168,6 +215,7 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
                     LOG.info("[open-perf] ctx warm done in ${System.currentTimeMillis() - started}ms file=$fileUrl")
                 }
                 .onError { t ->
+                    used.decrementAndGet()
                     warmedContextFiles.remove(fileUrl)
                     LOG.info("[open-perf] ctx warm fail ${t.javaClass.simpleName}: ${t.message}")
                 }

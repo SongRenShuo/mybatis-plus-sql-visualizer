@@ -3,15 +3,20 @@ package cn.song.mybatisplus.visualizer.ui.gutter
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.log.MapperXmlLocator
 import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
+import cn.song.mybatisplus.visualizer.ui.nav.MapperNavigationTargets
 import cn.song.mybatisplus.visualizer.ui.ref.MybatisXmlTargets
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.codeInsight.daemon.LineMarkerInfo
 import com.intellij.codeInsight.daemon.LineMarkerProvider
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.project.DumbService
+import com.intellij.openapi.project.IndexNotReadyException
 import com.intellij.openapi.project.Project
+import com.intellij.psi.JavaPsiFacade
+import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiMethod
+import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.xml.XmlTag
 import com.intellij.psi.xml.XmlToken
 import com.intellij.psi.xml.XmlTokenType
@@ -39,6 +44,12 @@ class MapperXmlToJavaLineMarkerProvider : LineMarkerProvider {
         internal val resolvedStatementKeys: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
         /**
+         * T-MapperNavNamespaceJump：根标签 → 接口类的会话级正缓存（键见 [classCacheKey]）。
+         * 语义与 [resolvedStatementKeys] 同口径：只在「确认真没有」时缺席，不在「还没查到」时缺席。
+         */
+        internal val resolvedClassKeys: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+        /**
          * T-PerfSweep32 券02：缓存键带 `project.locationHash` 前缀——[resolvedStatementKeys] 是
          * 应用级容器、项目关闭不清理，键不含项目身份时两工程同名 namespace+statement 会跨项目串号
          * （A 工程确认过，B 工程直接信）。与 [IbatisJavaToXmlLineMarkerProvider.cacheKey]
@@ -46,6 +57,10 @@ class MapperXmlToJavaLineMarkerProvider : LineMarkerProvider {
          */
         internal fun cacheKey(project: Project, namespace: String, statementId: String): String =
             "${project.locationHash}|$namespace|$statementId"
+
+        /** T-MapperNavNamespaceJump：根标签类缓存键（同工程同 namespace 复用；`#mapper` 与语句 id 不会撞）。 */
+        internal fun classCacheKey(project: Project, namespace: String): String =
+            "${project.locationHash}|$namespace|#mapper"
 
         /** 测试缝：dumb 判定（生产＝`DumbService.isDumb`，F1-b 乐观产出用），形态承 MbgExampleCallResolver。
          *  F1' 起双侧共用（Java 侧 `MapperJavaToXmlLineMarkerProvider` 的失败分支同读此缝）。 */
@@ -55,6 +70,7 @@ class MapperXmlToJavaLineMarkerProvider : LineMarkerProvider {
 
         internal fun resetResolvedCacheForTest() {
             resolvedStatementKeys.clear()
+            resolvedClassKeys.clear()
             // P2.1 三态测试缝一并复位，防跨用例泄漏（用例用它们驱动 Unknown/Absent 分支）
             MybatisXmlTargets.methodLookupOverrideForTest = null
             MapperXmlLocator.lookupOverrideForTest = null
@@ -72,9 +88,11 @@ class MapperXmlToJavaLineMarkerProvider : LineMarkerProvider {
         val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
         if (gutterState != null && !gutterState.showGutterIcon) return
         if (!GutterGroups.enabledFor(javaClass, gutterState)) return
-        // 第三道门（T-MapperNavCoexistYield）：gutter 面的共存让位——MyBatisCodeHelperPro 启用时
-        // 它自己也会给同一行出跳转箭头，本插件让位。与 XmlSynHiGate 的注入区间互补是两件事：
-        // 那边判「对方是否真给这段文本上色」，这边判「对方是否在位」（同行两个图标都合规，故让位）。
+        // 第三道门（T-MapperNavCoexistYield / T-MapperNavYieldJavaSideKeep）：**仅 XML 语句行**的共存
+        // 让位——同类插件启用时它自己也会给同一行出跳转箭头，本插件让位。Java 侧（Mapper 接口方法行）
+        // 不再让位：对方 Java 箭头与我方同款，让位会让该行只剩对方一枚、用户无法分辨（见
+        // MapperJavaToXmlLineMarkerProvider 的 KDoc）。与 XmlSynHiGate 的注入区间互补是两件事：
+        // 那边判「对方是否真给这段文本上色」，这边判「对方是否在位」。
         // 探测结论已缓存，此处为 O(1) 布尔，不引入按元素开销。
         if (gutterState != null &&
             MyBatisCompetitorGate.shouldYield(
@@ -91,6 +109,15 @@ class MapperXmlToJavaLineMarkerProvider : LineMarkerProvider {
         val token = element as? XmlToken ?: return null
         if (token.tokenType != XmlTokenType.XML_NAME) return null
         val tag = token.parent as? XmlTag ?: return null
+        // T-MapperNavNamespaceJump：`<mapper namespace="…">` 根标签 → 接口类。
+        // 竞品（MPJ view.I / MyBatisX / MyBatisPlus）都在这里给「跳 mapper class」，接口里没有方法也能跳；
+        // 本插件此前缺这一格，用户感知为「mapper 没有方法就没法跳转」。锚点＝根标签名 token（与语句锚同形）。
+        if (tag.name == "mapper" && tag.parentTag == null &&
+            XmlTagUtil.getStartTagNameElement(tag) === token &&
+            MybatisXmlTargets.isMapperFile(tag.containingFile)
+        ) {
+            return createRootMapperMarker(element, tag)
+        }
         if (tag.name !in XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS) return null
         if (XmlTagUtil.getStartTagNameElement(tag) !== token) return null
         if (!MybatisXmlTargets.isMapperFile(tag.containingFile) || tag.parentTag?.parentTag != null) return null
@@ -132,6 +159,42 @@ class MapperXmlToJavaLineMarkerProvider : LineMarkerProvider {
         com.intellij.openapi.editor.markup.GutterIconRenderer.Alignment.CENTER,
         { MpSqlVisualizerBundle.message("gutter.mapperStatement.accessible.name") },
     )
+
+    /**
+     * 根标签 → 接口类图标的五段式（与 [createMarker] 语句侧同不变式）：
+     * ① dumb 乐观产出（不查索引、不入缓存）② 确定存在 → 入缓存并产出
+     * ③ 索引临界（`IndexNotReadyException`）→ 缓存命中仍产出 ④ 确定不存在 → 收回缓存并摘图标
+     * ⑤ 其余不产出。namespace 为空 → 不产出（不出死图标）。
+     */
+    private fun createRootMapperMarker(element: XmlToken, tag: XmlTag): LineMarkerInfo<*>? {
+        val namespace = tag.getAttributeValue("namespace")?.takeIf { it.isNotBlank() } ?: return null
+        val project = element.project
+        val key = classCacheKey(project, namespace)
+        if (isDumbProvider(project)) return buildRootMapperMarker(element)
+        val cls = try {
+            JavaPsiFacade.getInstance(project).findClass(namespace, GlobalSearchScope.allScope(project))
+        } catch (e: IndexNotReadyException) {
+            return if (resolvedClassKeys.contains(key)) buildRootMapperMarker(element) else null
+        }
+        return if (cls != null) {
+            resolvedClassKeys.add(key)
+            buildRootMapperMarker(element)
+        } else {
+            resolvedClassKeys.remove(key)
+            null
+        }
+    }
+
+    private fun buildRootMapperMarker(element: XmlToken): LineMarkerInfo<*> = LineMarkerInfo(
+        element, element.textRange, MpvsIcons.MapperStatement,
+        { MpSqlVisualizerBundle.message("gutter.mapperClass.tooltip") },
+        { _, elt ->
+            val currentTag = elt.parent as? XmlTag ?: return@LineMarkerInfo
+            MapperNavigationTargets.mapperClassOfRootTag(currentTag)?.navigate(true)
+        },
+        com.intellij.openapi.editor.markup.GutterIconRenderer.Alignment.CENTER,
+        { MpSqlVisualizerBundle.message("gutter.mapperClass.accessible.name") },
+    )
 }
 
 /** Mapper 接口方法跳转到 namespace 对应 XML 中的同名 statement。 */
@@ -146,20 +209,31 @@ class MapperJavaToXmlLineMarkerProvider : LineMarkerProvider {
         val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
         if (gutterState != null && !gutterState.showGutterIcon) return
         if (!GutterGroups.enabledFor(javaClass, gutterState)) return
-        // 第三道门（T-MapperNavCoexistYield）：与 XML 侧同门形——竞品在位且用户未关闭让位即不产出图标
-        if (gutterState != null &&
+        // 第三道门（T-MapperNavCoexistYield，2026-11-25 两侧让位口径）：XML 语句行与 Mapper 接口
+        // 方法行都不出本插件**跳转**箭头，同一位置只留同类插件那一套。
+        // T-MapperPreviewOrder（2026-11-26）：方法行的 SQL 预览图标已拆到
+        // [MapperMethodPreviewLineMarkerProvider]（另一 provider、plugin.xml 注册在前），
+        // 本类只产跳转箭头——同行左右序因此确定（预览恒左），不再随 daemon 首次/重算翻转。
+        val yieldNavigation = gutterState != null &&
             MyBatisCompetitorGate.shouldYield(
                 gutterState.mapperNavYieldToCodeHelper,
                 MyBatisCompetitorGate.isPeerPluginActive(),
             )
-        ) {
-            return
-        }
-        elements.mapNotNullTo(result, ::createMarker)
+        elements.forEach { element -> createMarker(element, yieldNavigation)?.let(result::addAll) }
     }
 
-    private fun createMarker(element: PsiElement): LineMarkerInfo<*>? {
+    private fun createMarker(element: PsiElement, yieldNavigation: Boolean): List<LineMarkerInfo<*>>? {
         if (element !is com.intellij.psi.PsiIdentifier) return null
+        // T-MapperClassJump（2026-11-25 用户反馈「mapper.java 少一个类跳转图标」）：
+        // Mapper 接口**类名** → 对应 XML 根标签。对齐竞品：MPJ view.A 的 UClass 分支、
+        // MyBatisX 的 PsiClassAbstractElementFilter 都在接口声明行出这一枚；我方此前只锚方法名。
+        (element.parent as? PsiClass)?.let { owner ->
+            if (owner.nameIdentifier === element) {
+                // 类名不是语句，没有可预览的 SQL；类跳转属「跳转」，随让位一并让掉。
+                if (yieldNavigation) return null
+                return createClassMarker(element, owner)?.let { listOf(it) }
+            }
+        }
         val method = element.parent as? PsiMethod ?: return null
         if (method.nameIdentifier !== element) return null
         // 券01（T-PerfSweep28-01，R28-1/P-1）：接口前置——mapper namespace 语义必为接口
@@ -167,6 +241,8 @@ class MapperJavaToXmlLineMarkerProvider : LineMarkerProvider {
         // 全 mapper 文件定位。isInterface 为 O(1) 属性读，开闸用户可见行为不变。
         val containingClass = method.containingClass ?: return null
         if (!containingClass.isInterface) return null
+        // T-MapperPreviewOrder：跳转让位时本类不产出；预览由另一个 provider 照出。
+        if (yieldNavigation) return null
         val namespace = containingClass.qualifiedName ?: return null
         // F1 同构（T-GutterFirstOpenDelay，治 Java 侧 S2'：冷窗/索引临界期 MapperXmlLocator.locate
         // 瞬时落空（XML 清单未就绪）→ 慢趟结果固化 → Java→XML 图标长期缺席，直到文件改动才恢复——
@@ -177,14 +253,16 @@ class MapperJavaToXmlLineMarkerProvider : LineMarkerProvider {
         val key = MapperXmlToJavaLineMarkerProvider.cacheKey(project, namespace, method.name)
         // T-MapperGutterEvict P2.1（2026-11-16）：与 XML 侧同构五段式——dumb 乐观 / 确定存在入缓存 /
         // 暂时查不了保留缓存命中 / 确定不存在收回缓存并摘图标。dumb 门前移，避免在索引重建期查索引。
-        if (MapperXmlToJavaLineMarkerProvider.isDumbProvider(project)) return buildMethodMarker(element)
+        // T-MapperMethodSqlPreview：本条判定同时决定「预览 + 跳转」两枚（预览图标只在有 XML 语句时出现，
+        // 两枚同生共死，不存在点了必空的死入口；零新增索引查询）。
+        if (MapperXmlToJavaLineMarkerProvider.isDumbProvider(project)) return listOf(buildMethodMarker(element))
         return when (MapperXmlLocator.locateOrUnknown(project, "$namespace.${method.name}")) {
             is MapperXmlLocator.Lookup.Found -> {
                 MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add(key)
-                buildMethodMarker(element)
+                listOf(buildMethodMarker(element))
             }
             MapperXmlLocator.Lookup.Unknown ->
-                if (MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains(key)) buildMethodMarker(element) else null
+                if (MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains(key)) listOf(buildMethodMarker(element)) else null
             MapperXmlLocator.Lookup.Absent -> {
                 MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.remove(key)
                 null
@@ -204,5 +282,56 @@ class MapperJavaToXmlLineMarkerProvider : LineMarkerProvider {
         },
         com.intellij.openapi.editor.markup.GutterIconRenderer.Alignment.CENTER,
         { MpSqlVisualizerBundle.message("gutter.mapperMethod.accessible.name") },
+    )
+
+    companion object {
+        /**
+         * T-MapperClassJump：接口类名 → XML 文件的会话级正缓存。
+         * 语义与语句侧同不变式：dumb 乐观产出、确定存在入缓存、暂时查不到且缓存命中仍产出、
+         * 确定不存在收回缓存并摘图标（不出点开必空的死图标）。
+         */
+        internal val resolvedMapperClassKeys: MutableSet<String> =
+            java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+        internal fun classToXmlKey(project: Project, namespace: String): String =
+            "${project.locationHash}|$namespace|#class"
+
+        internal fun resetClassCacheForTest() {
+            resolvedMapperClassKeys.clear()
+        }
+    }
+
+    private fun createClassMarker(
+        element: com.intellij.psi.PsiIdentifier,
+        owner: PsiClass,
+    ): LineMarkerInfo<*>? {
+        if (!owner.isInterface) return null
+        val namespace = owner.qualifiedName ?: return null
+        val project = element.project
+        val key = classToXmlKey(project, namespace)
+        if (MapperXmlToJavaLineMarkerProvider.isDumbProvider(project)) return buildClassMarker(element)
+        val xml = MybatisXmlTargets.findMapperFileByNamespace(project, namespace)
+        return if (xml != null) {
+            resolvedMapperClassKeys.add(key)
+            buildClassMarker(element)
+        } else if (resolvedMapperClassKeys.contains(key)) {
+            buildClassMarker(element)
+        } else {
+            resolvedMapperClassKeys.remove(key)
+            null
+        }
+    }
+
+    private fun buildClassMarker(element: PsiElement): LineMarkerInfo<*> = LineMarkerInfo(
+        element, element.textRange, MpvsIcons.MapperMethod,
+        { MpSqlVisualizerBundle.message("gutter.mapperClassToXml.tooltip") },
+        { _, elt ->
+            val cls = elt.parent as? PsiClass ?: return@LineMarkerInfo
+            val xml = MapperNavigationTargets.xmlFileForMapperInterface(cls) ?: return@LineMarkerInfo
+            val vf = xml.virtualFile?.takeIf { it.isValid } ?: return@LineMarkerInfo
+            OpenFileDescriptor(elt.project, vf, xml.rootTag?.textOffset ?: 0, 0).navigate(true)
+        },
+        com.intellij.openapi.editor.markup.GutterIconRenderer.Alignment.CENTER,
+        { MpSqlVisualizerBundle.message("gutter.mapperClassToXml.accessible.name") },
     )
 }

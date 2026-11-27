@@ -4,6 +4,7 @@
 
 1. **改代码前先读 [`docs/LESSONS.md`](docs/LESSONS.md)**——教训账本，每条都是带证据的复发规则；Seen 满 3 天的已固化进 [`docs/规范/编码与验收标准-规范.md`](docs/规范/编码与验收标准-规范.md)，审查与收口逐条对照。
 2. **跑任何 Gradle 命令前先过并行登记表**——`python C:\Users\USER\.zcode\cli\parallel_tasks.py check` → 有活跃任务先 register/done（禁裸 done）；构建并发上限 2 路，禁降片。
+   **耗时命令一律后台启动**（全局 AGENTS.md §执行纪律 E1，2026-11-23 用户复述「新会话经常不遵守」）：`./gradlew` 测试/构建、`mvnd` 编译、`runIde`、依赖安装这类超过约 20 秒的命令必须用 Bash 工具的 `run_in_background: true` 启动，完成靠 task-notification 继续；禁止 `sleep` 等待、禁止 `sleep` 轮询日志、禁止前台跑完再睡。撞锁/撞缓存记录证据交回收口阶段复跑，不许空等。
 3. 定向测试纪律、验收清单（含 not run 条款）、派活模板：[`docs/开发流程-派活与验收清单.md`](docs/开发流程-派活与验收清单.md)。
 4. 行为域文档（子系统职责与 source of truth）：[`docs/架构设计/`](docs/架构设计/) 下 `子系统-*.md`；改契约必须同批更新归属文档。
 5. 文档写现状，提案写进 `docs/开发计划/`；新缺陷/教训在收口后补记 `docs/LESSONS.md`（规则一句话 + hash 证据 + Seen 计数，不写流水账）。

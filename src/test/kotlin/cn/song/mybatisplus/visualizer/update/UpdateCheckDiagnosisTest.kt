@@ -97,7 +97,7 @@ class UpdateCheckDiagnosisTest {
     @Test
     fun Marketplace兜底链接常量存在_与发行页同值() {
         assertEquals(
-            "https://plugins.jetbrains.com/plugin/33633-sql-visualizer",
+            "https://plugins.jetbrains.com/plugin/33633-mybatis-sql-visualizer",
             UpdateSource.MARKETPLACE_URL,
         )
         assertEquals(

@@ -21,6 +21,7 @@ import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.model.UpdateStatement
 import cn.song.mybatisplus.visualizer.model.WrapperArg
 import cn.song.mybatisplus.visualizer.psi.ArgResolver
+import cn.song.mybatisplus.visualizer.psi.EntityFieldCollector
 import cn.song.mybatisplus.visualizer.psi.ExpressionEvaluator
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaMetadataReader
@@ -306,12 +307,26 @@ object EasyQueryConverter {
         val conditions = ctx.conditions
         return if (ctx.sets.isEmpty()) {
             // updatable(entity) 无 setColumns：实体全列更新 + 主键 WHERE（对齐 merge 语义的静态近似）
+            // D255：每列占位符带唯一参数键（`entity.col`），否则参数面板只有一个 `#?` 行、一个值填满全列。
+            val prefix = ParamSourceNaming.sanitize(entry.argumentList.expressions.firstOrNull()?.text)
             val idColumn = table.columns.firstOrNull { it.isId }
             val sets = table.columns
                 .filter { !it.isId }
-                .map { SetClause(column = ColumnRef(columnName = it.columnName), value = SqlValue.Placeholder("?")) }
-            val where = idColumn?.let { listOf(Condition.Simple(ColumnRef(columnName = it.columnName), "=", SqlValue.Placeholder("?"))) }
-                ?: conditions
+                .map {
+                    SetClause(
+                        column = ColumnRef(columnName = it.columnName),
+                        value = SqlValue.Placeholder(ParamSourceNaming.source(prefix, it.columnName)),
+                    )
+                }
+            val where = idColumn?.let {
+                listOf(
+                    Condition.Simple(
+                        ColumnRef(columnName = it.columnName),
+                        "=",
+                        SqlValue.Placeholder(ParamSourceNaming.source(prefix, it.columnName)),
+                    ),
+                )
+            } ?: conditions
             val statement = UpdateStatement(table, sets, where)
             val generated = SqlGenerator.generateWithParams(statement)
             // 普查批：无主键且无 where 段 → WHERE 整体缺位（全表更新），notes 按实际 WHERE 语义给
@@ -767,7 +782,8 @@ object EasyQueryConverter {
 
         /** EQ8：@Column(primaryKey = true, generatedKey = true) 的主键列（INSERT 排除）。 */
         val generatedKeyColumns: Set<String> by lazy {
-            entityClass.allFields.mapNotNull { field ->
+            // D254：allFields 不按名去重、不过静态——按实体列语义收（同名取子类定义、排除 static/transient）
+            EntityFieldCollector.collectColumns(entityClass).mapNotNull { field ->
                 val column = JpaMetadataReader.findFlex(field, JpaMetadataReader.FQN_EASY_QUERY_COLUMN)
                     ?: return@mapNotNull null
                 val fieldName = field.name ?: return@mapNotNull null

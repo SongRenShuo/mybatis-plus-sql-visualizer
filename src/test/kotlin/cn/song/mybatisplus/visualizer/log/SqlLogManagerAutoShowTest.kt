@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.wm.ToolWindowAnchor
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -13,7 +14,8 @@ import org.junit.Assert.assertTrue
  *  - 决策纯函数：设置开启 + 距上次展开超过防抖窗口 + 未被用户关闭抑制才展开；
  *  - 接线与面板解耦：buffer 无条件监听（未订阅 UI 时首条捕获也触发）；
  *  - 防抖：防抖窗口内多条 SQL 只展开一次；
- *  - T-AutoShowSuppress：用户手动关闭后本会话抑制（转换沿判定 + 设置重启用解除）。
+ *  - T-AutoShowSuppress：用户手动关闭后本会话抑制（转换沿判定 + 设置重启用解除）；
+ *  - T-AutoShowYield：同侧条纹已有面板在显示时让位，不 `show()` 顶掉用户正在用的面板。
  */
 class SqlLogManagerAutoShowTest : BasePlatformTestCase() {
 
@@ -22,8 +24,12 @@ class SqlLogManagerAutoShowTest : BasePlatformTestCase() {
         override fun hasMainConsole(): Boolean = true
     }
 
-    private fun manager(): SqlLogManager =
-        SqlLogManager(project).apply { installBridgeForTest(FakeBridge()) }
+    /** 默认把「同侧条纹占用」注入为 false——测试项目里 ToolWindow 的可见性取决于夹具，
+     *  不隔离会让既有防抖/抑制用例随平台布局漂移。占用形态由 [testOtherPanelOnSameStripeSuppressesAutoShow] 单独覆盖。 */
+    private fun manager(): SqlLogManager = SqlLogManager(project).apply {
+        installBridgeForTest(FakeBridge())
+        isOwnStripeOccupiedByOtherPanel = { false }
+    }
 
     private fun entry(sql: String = "SELECT 1") = LogSqlEntry(
         rawSql = sql,
@@ -139,5 +145,59 @@ class SqlLogManagerAutoShowTest : BasePlatformTestCase() {
         manager.onAutoShowRequest = { calls++ }
         manager.entries.addEntry(entry())
         assertEquals("设置关闭时不触发展开", 0, calls)
+    }
+
+    fun testStripeYieldDecision() {
+        // 同锚点条纹里有别的面板在显示 → 让位（展开会顶掉它）
+        assertTrue(
+            "同侧已有面板在显示",
+            SqlLogManager.shouldYieldToOtherPanel(ToolWindowAnchor.RIGHT, listOf(ToolWindowAnchor.RIGHT)),
+        )
+        // 只有别的侧栏（左/底）在显示 → 不冲突，照常展开
+        assertFalse(
+            "其他侧栏不冲突",
+            SqlLogManager.shouldYieldToOtherPanel(
+                ToolWindowAnchor.RIGHT,
+                listOf(ToolWindowAnchor.LEFT, ToolWindowAnchor.BOTTOM),
+            ),
+        )
+        assertFalse("无其他可见面板", SqlLogManager.shouldYieldToOtherPanel(ToolWindowAnchor.RIGHT, emptyList()))
+        assertFalse("锚点未知不判定", SqlLogManager.shouldYieldToOtherPanel(null, listOf(ToolWindowAnchor.RIGHT)))
+    }
+
+    fun testOtherPanelOnSameStripeSuppressesAutoShow() {
+        PluginSettings.getInstance().state.logAutoOpenOnCapture = true
+        val manager = manager()
+        var calls = 0
+        manager.onAutoShowRequest = { calls++ }
+        // 用户正在用右侧的 API 调试 / HTTP Client 面板 → 日志窗不抢
+        manager.isOwnStripeOccupiedByOtherPanel = { true }
+        manager.entries.addEntry(entry())
+        assertEquals("同侧面板在用时不抢", 0, calls)
+        // 让位消费防抖窗口：同一窗口内不因后续条目重试（避免用户稍后关面板被延迟偷袭）
+        manager.entries.addEntry(entry("SELECT 2"))
+        assertEquals("让位后同一防抖窗口内不重试", 0, calls)
+        // 那块面板让开（判定转 false）且防抖窗口已过 → 恢复自动展开
+        manager.isOwnStripeOccupiedByOtherPanel = { false }
+        manager.lastAutoShowAt = 0L
+        manager.entries.addEntry(entry("SELECT 3"))
+        assertEquals("同侧空出后恢复自动展开", 1, calls)
+    }
+
+    fun testYieldSwitchOffRestoresAlwaysOpen() {
+        PluginSettings.getInstance().state.logAutoOpenOnCapture = true
+        val manager = manager()
+        var calls = 0
+        manager.onAutoShowRequest = { calls++ }
+        manager.isOwnStripeOccupiedByOtherPanel = { true }
+        val original = PluginSettings.getInstance().state.logAutoOpenYield
+        try {
+            // 用户显式关掉让位（"我就是要它每次都开"）→ 同侧有面板也展开
+            PluginSettings.getInstance().state.logAutoOpenYield = false
+            manager.entries.addEntry(entry())
+            assertEquals("让位开关关闭时应恢复旧行为", 1, calls)
+        } finally {
+            PluginSettings.getInstance().state.logAutoOpenYield = original
+        }
     }
 }

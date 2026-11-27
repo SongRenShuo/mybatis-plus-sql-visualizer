@@ -288,12 +288,17 @@ class WrapperAnchorDetectorJpaAndWholeFileTest: BasePlatformTestCase() {
 
     fun testMpjFactoryChainWholeFileSingleAnchorOneAndCount() {
         // joinOneAndCount：selectJoinMap + selectJoinCount + 实体返回细分形态
+        // D256 M2 契约更新：join 消费族调用行独立承载锚点（与 Maps 族同口径），
+        // 期望集合由 {wrapper} 扩为 {wrapper, selectJoinMap, selectJoinCount}；
+        // receiver 必须是 MP Mapper 家族，故夹具补 DeviceInfoMapper extends BaseMapper。
         configure(
             """
             import com.github.yulichang.toolkit.JoinWrappers;
             import com.github.yulichang.wrapper.MPJLambdaWrapper;
 
             public class Demo {
+                private DeviceInfoMapper deviceInfoMapper;
+
                 public Object query(Integer id) {
                     MPJLambdaWrapper<DeviceInfoEntity> wrapper = JoinWrappers.lambda(DeviceInfoEntity.class)
                             .selectAll(DeviceInfoEntity.class)
@@ -307,19 +312,29 @@ class WrapperAnchorDetectorJpaAndWholeFileTest: BasePlatformTestCase() {
                 static class DeviceInfoEntity { private Long id; private Long stationId; }
                 static class StationInfoEntity { private Long stationId; private String stationName; private Integer merchantId; }
             }
+
+            interface BaseMapper<T> {}
+            interface DeviceInfoMapper extends BaseMapper<DeviceInfoEntity> {}
             """.trimIndent(),
         )
-        assertEquals("joinOneAndCount 形态应恰好 1 个锚点", setOf("wrapper"), collectedAnchors())
+        assertEquals(
+            "joinOneAndCount 形态：变量声明 + 两个 join 消费调用行各一枚锚点",
+            setOf("wrapper", "selectJoinMap", "selectJoinCount"),
+            collectedAnchors(),
+        )
     }
 
     fun testMpjFactoryChainWholeFileSingleAnchorListEntity() {
         // joinListEntity：实体返回 + orderByAsc 细分形态
+        // D256 M2 契约更新：selectJoinList 调用行独立承载锚点，期望集合 {wrapper, selectJoinList}
         configure(
             """
             import com.github.yulichang.toolkit.JoinWrappers;
             import com.github.yulichang.wrapper.MPJLambdaWrapper;
 
             public class Demo {
+                private DeviceInfoMapper deviceInfoMapper;
+
                 public Object query() {
                     MPJLambdaWrapper<DeviceInfoEntity> wrapper = JoinWrappers.lambda(DeviceInfoEntity.class)
                             .selectAll(DeviceInfoEntity.class)
@@ -332,9 +347,16 @@ class WrapperAnchorDetectorJpaAndWholeFileTest: BasePlatformTestCase() {
                 static class DeviceInfoEntity { private Long id; private Long stationId; private Long shareSchemeId; }
                 static class StationInfoEntity { private Long stationId; }
             }
+
+            interface BaseMapper<T> {}
+            interface DeviceInfoMapper extends BaseMapper<DeviceInfoEntity> {}
             """.trimIndent(),
         )
-        assertEquals("joinListEntity 形态应恰好 1 个锚点", setOf("wrapper"), collectedAnchors())
+        assertEquals(
+            "joinListEntity 形态：变量声明 + selectJoinList 调用行各一枚锚点",
+            setOf("wrapper", "selectJoinList"),
+            collectedAnchors(),
+        )
     }
 
     // ------------------------------------------------------------------

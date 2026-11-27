@@ -1,6 +1,6 @@
 <!-- Marketplace 自定义页（第二页）Markdown 版：页名 Comparison & FAQ，整页复制到
      JetBrains Marketplace → 自定义页编辑器（仅渲染 Markdown）。
-     2026-11-01 新建并在后台发布，地址 /plugin/33633-sql-visualizer/custom-pages/63591。
+     2026-11-01 新建并在后台发布，地址 /plugin/33633-mybatis-sql-visualizer/custom-pages/63591。
      与 marketplace-custom-page.md（主文档页 Documentation）分工：主文档页讲功能全集，本页只做
      竞品定位对照与常见疑问，竞品能力列一律保守留「—」，不写贬损。 -->
 

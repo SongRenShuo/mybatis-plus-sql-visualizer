@@ -223,7 +223,8 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 **反例**：看到 NoSuchMethodError 就去查「谁改了调用点」——调用点没错，是磁盘上的旧 class；或把这种红当真回归去回滚修复提交。
 **2026-11-09 补充（最高频触发源）**：`config/PluginSettings.State` 是最常被加字段的 data class，**任何给它加字段的提交都会让全仓引用旧构造器 / `copy$default` 的测试类失效**。当日两例：①第一波三路合并（`3080cad3`）后集成分支 **202 红**，全是合成构造器 `NoSuchMethodError`，其中 `HibernateLogParserTest` 56/56 全红（该合并无人碰过 Hibernate）——清产物后 186 类 2041 例全绿；②L4 给 `State` 加 `ibatisXmlEnabled` 后 `GutterGroupsTest` / `MapperNavigationGutterGateTest` 6 红（`State.<init>` / `copy$default`）。
 **判据**：某类**整类全红**且报错是 `<init>` 或 `copy$default` 的 `NoSuchMethodError` → 一律先 `rm -rf build/classes`，不要去查调用点。
-**Seen 4× (2026-11-07 ×2, 2026-11-09 ×2)**
+**2026-11-25 补充**：给 `PluginSettings.State` 加 `logAutoOpenYield`（`12b84ae03`）后 `PluginSettingsPanelUiTest` 4 例全红（`State.copy$default` 的 `NoSuchMethodError`）；本拍 `compileTestKotlin` 是执行态（非 UP-TO-DATE）仍未重编这些类，删 `build/classes/kotlin/test` 后 41 例全绿。加 State 字段后整桶定向按「先清测试产物」跑。
+**Seen 5× (2026-11-07 ×2, 2026-11-09 ×2, 2026-11-25 ×1)**
 
 ### L22 后台长命令禁用 `2>&1 | tail -N` 收尾——失败正文会被管道截断吞掉，退出码还会被换掉
 
@@ -242,12 +243,13 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 **反例**：反复重跑 buildPlugin 撞同一把锁；或为绕锁去改 gradle 配置/清沙盒——沙盒是用户的活会话，动了直接打断验收。
 **Seen 1× (2026-11-07)**
 
-### L24 方言套件外指共享实例时固定表名互删——跑前先错峰确认，根治＝运行唯一前缀（已登记未实施）
+### L24 方言套件外指共享实例时固定表名互删——跑前先错峰确认，根治＝运行唯一前缀（**已根治，2026-11-27 补回归守卫**）
 
 **规则**：多个方言套件轮次（本地 Docker 外指腿 / `dialectExternalVerify` / CI 夜间方言腿 / DBX 临时探测）并发打**同一共享实例**会互删表——套件用固定表名 `dev_info` / `mpv_batch_probe` / `kw_probe_<词下标>`，`createWithRetry` 开跑先 `DROP TABLE`、finale 再 `DROP`，两轮并发即互相删对方的表。
 **证据**：`DialectVerifySupport.kt:265/317/345/437/521-528/601/606/654/674`（固定表名与 DROP 逻辑，20261107 调研册 §五-3 代码级取证）；T-DockerGateOffload（2026-11-07，`a7c924e2`）把 Docker 五腿也并入外指通道后，共享实例的并发源面扩大（本地 `-PmpvDockerTests=true` 腿新增）。既有缓解仅「建表失败清残留重试一次」，对持续并发无效。
 **正例**：跑外指腿前确认该实例当前无其他套件轮次（本地其他车道/夜间 CI 时刻表错峰）；**反例**：两轮套件同时打同一实例，A 轮种子表被 B 轮开头 DROP，读数红且难归因。
 **Seen 1× (2026-11-07)**——本轮只登记不重构；根治方案（运行唯一 schema/表前缀）在计划册实施记录挂账，待复发或外指面再扩大时立项。
+**根治已落地（2026-11-27 核销）**：`DialectVerifySupport.runSuffix()` 现产出 `pid_base36_启动时刻_base36_轮次`，`suffixed()` 给每个基础表名加该后缀（长度 ≤30 字符，兼容 Oracle 12c 前标识符上限），并发两轮各用各自的表。回归守卫 `DialectTableIsolationConcurrentTest`（同一 H2 内存实例 `CyclicBarrier(2)` 并发两轮 × 10 轮，worker 1 刻意晚 5ms 复现真实交错）——把 `runSuffix()` 改回空串则必红，这是它唯一的存在理由。原临时探针 `TmpL24CollisionProbeTest` 已按此转正（探针 KDoc 原写「验证后删除」，转正时改写为回归守卫说明）。
 
 ### L25 置顶 change-notes 新块时两件事同批做完并跑机器判据，且必须跑在打 tag 之前
 
@@ -1063,8 +1065,12 @@ expected 10 was 12）与分片 2（`SqlLogPanelFocusTabTest` expected 4 was 6）
 已按本规则把该用例改成轮询、`iBatis 片段不报 Unknown element` 改成装配期内持续观察（`0611f6ab2`）。
 **正例**：失败先做同 src 跨 run 对照（前一轮全绿 ⇒ 瞬态），再 rerun-failed-jobs，不改代码不前移 tag。
 **反例**：看到红就怀疑新改动引入回归，去动生产代码或重排队列——本轮 src 与上一轮完全相同。
+**2026-11-25 第三形态（已改成轮询后仍偶发）**：CI run `45562438538` 的 `test(4)` 第三次尝试
+`SqlStandalonePreviewPanelDialogTest` `warning.isNotBlank()`（`kt:133`，`awaitWarning` 之后）仍红，
+同片第四次（干净工作树）通过 ⇒ 轮询窗口在该 runner 负载下不够，或该警告依赖的链路偶尔不产出。
+下次改这条用例时先量化 `awaitWarning` 的实际等待上限，改为「等非空 / 超时把面板状态写进断言消息」。
 
-**Seen 2× (2026-11-20)**
+**Seen 3× (2026-11-20 ×2, 2026-11-25 ×1)**
 
 ### L91 多个反向探针同批打会互相掩盖——每个探针单独打、单独记读数
 
@@ -1166,9 +1172,354 @@ ISE）与 fork 启动失败不重试，直接红。
 
 **Seen 1× (2026-11-21)**
 
-### L97 依赖校验清单只覆盖 CLI 解析过的构件——IDE 侧会多解析三类，必须同批放行
+### L97 Heavy 沙盒的跨文件继承夹具要凑齐四件事：同 root、package 目录、source root 注册、Document 重写
 
-**规则**：`gradle/verification-metadata.xml` 由 `--write-verification-metadata` 生成，**只记录那次构建真正解析过的构件**。IDE 的 Gradle 导入/脚本模型会额外解析三类清单外的东西：①**辅助构件**（`-sources.jar` / `-javadoc.jar`，挂源码导航）；②**平台 distro 的 POM**（`com.jetbrains.intellij.idea:ideaIU:<本机 IDE 版本>`）；③**Gradle 发行版自身的附属物**（`gradle:gradle:<ver>` 的 `-src.zip`、`org.apache.groovy` 的 `.module`——来自 Gradle custom / Gradle distributions / Gradle Libs 仓库）。三类都不在生成时的解析图里 → IDE 一同步就 `Dependency verification failed`，而 `./gradlew` 全绿。故开严格校验时必须同批写 `trusted-artifacts`：按文件模式信任 `.*-sources\.jar` / `.*-javadoc.jar`；按 group 信任 `com.jetbrains.intellij.idea` 的 `.*\.pom`（**不能**逐版本写死——平台版本随每个开发者本机 IDE 变化）；整组放行 `gradle` / `org.apache.groovy` / `org.codehaus.groovy`（Gradle 发行版已由 `distributionSha256Sum` 钉死，Maven 侧 checksum 无可信来源）。（对齐轮注：本支原编 L80，与 master 侧 L80 撞号，并入时改编 L97）
+**规则**：在 `HeavyPlatformTestCase` 里造「父类与子类分处两个文件」的夹具时，四件事缺一即假红：
+① `createTestProjectStructure()` 每次调用都会新建结构——所有文件必须复用**同一个** root（测试内缓存）；
+② 文件落盘目录必须与 `package` 声明一致（`src/com/example/X.java`）——索引版 `findClass` 能命中，
+但 `extends` 引用解析会因包目录不匹配而恒 null；③ `src` 必须显式注册为模块 source root
+（`ModuleRootModificationUtil.updateModel` + `entry.addSourceFolder(src, false)`），否则同样 `superClass == null`；
+④ 重写已存在文件必须走 Document 路径（`document.setText` + `PsiDocumentManager.commitDocument`），
+`VfsUtil.saveText` 直写 VFS 时 PSI 与 modificationStamp 不刷新，依赖戳的缓存失效判据读不到变化。
+判据顺序：先断言 `child.superClass?.name` 与「索引版 findClass 的 fields.size」，再断言业务行为。
+**证据**：D254（`8b2b15e13`）父类链缓存失效用例四轮试错：初版 2 红 `expected [id, name] but was [name]`；
+补 package 目录仍红；注册 source root 后首断言过、改父类断言红（`deleted` 为 null）；改 Document 重写后
+2/0/0 绿；反向（摘 `inheritanceStamp` 判据）恰 2 红。
+**正例**：先写一条诊断方法断言 superClass + fields，绿了再写业务断言，最后删掉诊断。
+**反例**：直接写业务断言调试——`[name]` 这种读数会被误判成「收集器丢了父类字段」的实现缺陷。
+
+**Seen 1× (2026-11-23)**
+
+### L98 批量展开的条件必须逐条携带唯一参数键——「同 key 共享值」只适用于同一表达式复用
+
+**规则**：把实体/列清单展开成多条 `col = ?` 时（`setEntity`、`setUpdateEntity`、`updatable(entity)` 全列 SET），
+每条占位符的 `source` 必须是「实体实参前缀.列名」这类逐条唯一的名字。共用匿名 `"?"` 会让预览参数面板
+按 source 建多个输入框却读写同一个 `paramValues` 键：改一个框全列跟着变；清除/召回只写回首框
+（可见值与状态分叉，用户表现为「点清除没清干净、重开预览才正常」）。判据：
+`generateWithParams` 的 `unresolvedParams.distinct().size == 条件数`；命名走 `ParamSourceNaming` 单点。
+**证据**：D255（`33661f779` / `f9aa1b375`）真机截图 15 列全被改成 2；反向摘 M1 → 9 tests / 6 failed，
+摘 M2 → 4 tests / 1 failed（只有多框同步用例变红，因 M1 修后每行只剩自己的框）；还原后 15/0 绿。
+**正例**：展开时就定唯一键，SQL 文本（`?`）逐字节不变；**反例**：先共用 `"?"`、指望面板按框去重。
+
+**Seen 1× (2026-11-23)**
+
+### L99 平台 Kotlin 类的只读属性优先用属性语法取值——getter 方法语法在 243 基线可能 Unresolved
+
+**规则**：调 JetBrains 平台里已由 Kotlin 声明为 `abstract val` 的只读属性（如 `ToolWindowManager.toolWindowIdSet: Set<String>`），Kotlin 侧直接写属性语法；`getToolWindowIds()` / `getToolWindowIdSet()` 这类 getter 方法语法在本仓 2024.3.7.1 编译基线上会报 `Unresolved reference`——但 javap 与 sources jar 都证明 getter 是 `public abstract`，**不要据此判断「平台没有这个 API」**。判定顺序：先试属性语法 → javap 确认 getter 在 → 仍失败再考虑反射桥。
+
+**证据**：T-AutoShowYield（`12b84ae03`）写「同侧栏是否被其它工具窗占用」时，`manager.getToolWindowIds()`、`manager.getToolWindowIdSet()` 两轮各耗一整次 `:compileKotlin` 均 Unresolved；改 `manager.toolWindowIdSet` 一次通过。javap（2024.3.7.1 `app-client.jar`）两个 getter 均在，sources jar `ToolWindowManager.kt:121` 为 `abstract val toolWindowIdSet: Set<String>`。
+
+**正例**：声明处是 `abstract val x` 就写 `obj.x`；**反例**：拿 javap 的 `getX()` 反推 Kotlin 一定可调，然后去翻依赖版本/裁剪问题。
+
+**Seen 1× (2026-11-25)**
+
+### L100 设置页增删复选框必须同步总数普查断言——`PluginSettingsPersistenceTest` 是最远一道闸
+
+**规则**：在 `PluginSettingsPanel` / `buildSections` 里新增或删除 `JBCheckBox` 时，同批把
+`PluginSettingsPersistenceTest` 的「复选框总数」断言 ±1，并在注释里登记开关名与来源（沿用
+「+1 后为 N」写法）；定向至少覆盖该类。该断言是**全页组件普查**，只在该类的语言写穿用例里跑，
+本地漏跑就等于把红留到远端分片。
+
+**证据**：T-AutoShowYield（`12b84ae03`）新增 `logAutoOpenYieldCheck` 未同步计数，push 后 CI
+run `45560193140` 的 `test (1)` 红：`testLanguageWriteThroughRefreshesCheckboxTexts`
+→ `复选框总数应为 51 expected:<51> but was:<52>`（927 例 / 1 红）；本地定向只跑了自动展开与
+设置搜索/面板类，未含该普查类。同步为 52 后本地 20/0。
+
+**正例**：加/删复选框同批改计数并在注释里写明开关与节位；**反例**：只跑「改到的那几个类」就宣布绿，
+不去看全仓还有哪些普查型断言（同族：设置搜索索引守卫、面板控件计数）。
+
+**Seen 1× (2026-11-25)**
+
+### L101 重试包装的失败判据必须只看「本次尝试」的输出——跨尝试累积日志会把真红判成竞态
+
+**规则**：多级重试脚本里，每级判定只能读本次尝试的日志（独立文件或先截断）。禁止对 append 累积的
+同一文件做签名匹配：一旦第一级命中环境竞态，后续任何失败（含真实测试红）都会命中旧签名，被判成
+「竞态未恢复」升级到全量重跑——既白烧时间，还可能把真红掩盖成绿。分流口径：竞态→环境恢复重试；
+测试红→只重跑失败类（同 job，编译已 UP-TO-DATE）；其它失败→立即红。
+
+**证据**：`dev-support/ci/run-gradle-retry.ps1` 旧版用 `Tee-Object -Append` 共用 `gradle-run.log`。
+CI run 45562438538 的 test(4)：第 1/2 次真竞态（1m02 / 49s），第 3 次全量跑完 1117 例 / 1 红
+（`SqlStandalonePreviewPanelDialogTest` flaky），却被判「第三级未恢复」→ `git clean -xdf` 全量重跑
+5m44 才绿，job 16m21s（正常片 9m05s）。新版每次尝试独立 `gradle-run-N.log`，`-SelfTest` 7 项断言
+钉住分类（含「测试红不得判为竞态」），本机 fake-wrapper 四场景（编译错 1 次即退 / 竞态两次升干净树 /
+竞态后成功 / 测试红只重跑失败类）全部符合预期。
+
+**Seen 1× (2026-11-25)**
+
+### L102 发行 CI 红先按「单条 flake」验证，再归因到最近提交
+
+**规则**：拿到红先做三件事——① 看失败 job/step 与最近提交的**影响面**是否相交（有没有碰该模块/该测试）；② 读断言原文判断是否时序类（`expected N but was N±1`、超时、并发计数）；③ 用 rerun 复跑验证。三步都不支持「是这次改动」时才去改代码；flaky 断言复跑即绿就记台账、另开去抖任务，**不要在发行 publish 正在跑时改测试**。
+
+**证据**：`插件 CI（release）· master @ fbb91e565`（run 45578089046）attempt 1 红在 `agenttest` 的 `SenderLoopDrainRateTest > 风暴排水期CONFIG到达_即被处理且看门狗不误触发`：`expected:<512> but was:<513>`（off-by-one，典型并发时序）；同 run 的 build / test 5 片 / verify 3 平台 / verifyplugin / marketplace **全绿**。attempt 2 同一提交全绿、publish 成功。该提交只加了 `sub-projects/engine-jar` 与 `settings.gradle.kts` 一行，与 agent 传输层无交集。
+
+**反例**：见到红就去改最近提交的模块，或把 gate 连带红当成本模块问题（gate 只是依赖 agenttest）。
+
+**Seen 1× (2026-11-25)**
+
+### L103 新增 Gradle 子模块必须登记进 CI 任务图，否则模块永不构建
+
+**规则**：`settings.gradle.kts` 新增 `include` 后，必须同步检查 CI 工作流的任务清单（build / test 分片 / verify / gate）是否覆盖该模块；只写 `build.gradle.kts` 而不接 CI，模块会「本地能构建、CI 从不构建」，腐化无人发现。
+
+**证据**：`engine-jar`（提交 `b3a8aeb9a`）在 run 45578089046 的 13 份 job 日志里**一次都没出现**（`grep -l engine-jar ex/*.txt` 零命中），而 `build` job 报 `BUILD SUCCESSFUL`——说明它不在任何任务图内。后续需在 T5-1/T7 接线：至少 `:engine-jar:jar :engine-jar:check` 进 build 腿，并把产物与 sha256 归档。
+
+**Seen 1× (2026-11-25)**
+
+### L104 跨类复用的项目服务，测试必须在 setUp 清业务状态（tearDown 的清理只保护后续类）
+
+**规则**：light 项目在分片内跨测试类复用，`projectService` 拿到的是同一实例。`tearDown` 里 `clear()` 只让**下一个类**干净，保护不了本类的**第一个**用例；凡是断言「初始为 0/空」的用例，`setUp` 里必须显式清业务状态（在 capture 之后、改配置之前），否则前一个类留下的条目会漏进来，表现为罕见的 `expected:<0> but was:<1>`。
+
+**证据**：CI run `45584370342` 分片 4 在纯 docs 提交 `1620748ea` 上红在 `SqlConsoleBridgeFilterProviderTest > test非捕捉态_零处理_不置位`（`assertEquals(0, manager.entries.snapshot().size)` 读到 1）。该类 `setUp` 只 `SqlLogManagerProjectState.capture` + 改 `dedupeEnabled`，未清 `entries`；`tearDown` 的 `manager.entries.clear()` 只覆盖后续类。修复＝`setUp` 在 capture 后补 `manager.entries.clear()`；本地定向 3 用例全绿（XML `tests="3"`）。
+
+**反例**：把「测试隔离」理解成「tearDown 清理」，忽略同片共用实例的**首例**暴露面。
+
+**Seen 1× (2026-11-25)**
+
+### L105 批量替换 API 属性名会连坐字符串常量里的同名后缀——改完先 grep 键名再跑测试
+
+**规则**：用「全量替换 `.foo` → `.bar`」修 API 属性名时，替换面会覆盖 `"a.b.foo"` 这类**字符串字面量**。
+凡是替换目标后缀同时出现在 bundle key / 配置键 / 消息 ID 里，替换后必须 `grep` 一遍「键名 + 新后缀」，
+确认没有把数据键改成不存在的名字。否则表现为「过滤/查找恒 miss」的一整片假红，看着像业务逻辑坏了。
+
+**证据**：`T-MapperMethodSqlPreview`（`12f3232b8`）把测试里的 `LineMarkerInfo.tooltip` 换成
+`lineMarkerTooltip`（243 的访问器实叫 `getLineMarkerTooltip()`），连坐把
+`MpSqlVisualizerBundle.message("gutter.mapperMethodPreview.tooltip")` 改成 `.lineMarkerTooltip`——
+键不存在返回键名本身，预览 marker 过滤恒 false，6 个方法各算两枚 → **16 红**；二次修正键名后 95/0。
+（对齐轮注：本支原编 L102，与 master 侧 L102 撞号，2026-11-26 合流时改编 L105）
+
+**Seen 1× (2026-11-25)**
+
+### L106 平台 transform 只剩 app.jar 且被 IDE daemon 持有时，用平台 zip `unzip -n` 就地补齐，别硬删
+
+**规则**：`:test` 报「IDE by path … 找不到 com.intellij core plugin」时先看
+`~/.gradle/caches/*/transforms/<hash>/transformed/ideaIU-*/lib` 的 jar 数——若只剩 `app.jar` /
+`app-client.jar`，是 transform 半成品（并发构建被中断）。此时 `rm -rf` 与 `mv` 都可能被「用户映射
+打开的文件」拒绝（Restart Manager 点名常见为**用户 IDE 的 Kotlin daemon**，不能杀）。正路是用
+`modules-2/files-2.1/idea/ideaIU/<ver>/<sha>/ideaIU-<ver>-win.zip` 对 transform 目录执行
+`unzip -n`（不覆盖已存在的两个被占 jar），补齐其余 2200+ 文件即可，无需重下平台包。
+
+**证据**：`T-MapperMethodSqlPreview` 实施轮（2026-11-25）：`9.7.0/transforms/cfd9113040487d86d63…`
+只有 2 个 jar，PID 27684（IDE 2026.3 的 kotlin daemon）持有；删/改名均 Permission denied；
+`unzip -n` 补齐 2268 files 后 `:test` 正常跑出 95/0。
+（对齐轮注：本支原编 L103，与 master 侧 L103 撞号，2026-11-26 合流时改编 L106）
+
+**Seen 1× (2026-11-25)**
+
+### L107 共享静态状态 + 未 join 的生产线程 = 跨用例 off-by-one；收尾必须 join 之后再清理
+
+**规则**：测试用例里凡是起了**自己生产数据**的线程（持续 offer / 持续写队列），收尾顺序必须是
+「置停止标志 → **join 并断言线程已死** → 清理共享静态状态 → 停被测对象」。只置标志不 join 时，
+线程可能已通过标志判断、正停在写动作之前，它最后一轮写入会落在 `@After` 与下一个用例 `setUp`
+的清理之后，在 JVM 级共享状态里留下 ±1 条存量——下一个用例把它算进自己的账，表现成与代码无关的
+`expected:<N> but was:<N+1>`。同时把「起点干净」写成断言（清理后 / 预填后各断言一次条数），
+让未来的 polluter 自报家门，而不是伪装成业务缺陷。
+
+**证据**：`SenderLoopDrainRateTest > 风暴排水期CONFIG到达…` 两次 CI 偶发红
+（`expected:<512> but was:<513>`，run 45578089046 attempt 1 与 run 45730701535 的 `extras` job，
+两次提交都与 agent 传输层无交集，复跑即绿）。机制三证：①`EventBus.QUEUE` 是测试 JVM 内的
+`static final` 队列；②JUnit4 `MethodSorters.DEFAULT`（方法名 hashCode 升序）实测把
+「持续风暴从未收到CONFIG…」（-340849885）排在「风暴排水期CONFIG到达…」（751907909）**前一位**；
+③前者 finally 只有 `producing.set(false)`，无 `producer.join()`、无 `clearQueued()`。修复 `6925c7a8b`：
+finally 改 `join(2000)` → `assertFalse(isAlive)` → `clearQueued()`；`prefillEvents` 填前后各断言队列条数。
+读数：定向 4/0；反向探针在失败用例体首行种 1 条残留 → **恰 1 红**且消息点名「上一个用例残留 1 条」
+（`expected:<0> but was:<1>`）→ 撤探针复绿；transport 全包 12 类 59/0；`cleanTest` 连跑 3 轮全绿。
+
+**正例**：`join` → 断言线程已死 → 清理共享单例 → 再停被测对象；共享队列/单例进断言。
+**反例**：`producing.set(false)` 就当清理完成；把这类偶发红当 flake 反复 rerun 不改判据；
+或改断言去容忍 N±1（真丢事件就再没人发现）。
+
+**Seen 1× (2026-11-26)**
+
+### L108 钩子/MCP 里调外部命令一律写绝对路径，别指望 PATH 继承
+
+**规则**：任何 `hooks` / MCP `command` 字段里指向**本机安装的第三方工具**（WinGet、npm 全局、
+scoop 等包管理器装的），一律写可执行文件的绝对路径，不写裸命令名。包管理器安装只写注册表
+`HKCU\Environment\Path`，而**运行中的进程 PATH 是创建时快照**——装完之后才起来的、或者由
+旧环境父进程拉起的宿主，都拿不到新条目；`which` 查不到、钩子却静默从 `enabled: true` 变成
+每次 `failed`，功能已经不工作而配置界面仍显示开启。排查判据：配置里 `command` 是裸名时，
+先比对「注册表 USER PATH 有它」与「当前进程 PATH 没有它」，两者不一致即本条病灶；
+确认工具本体可用（直接跑绝对路径 `--version`）后再断言是路径问题而非工具损坏。
+
+**证据**：ZCode 侧 `rtk` 压缩钩子（2026-11-26，工具环境问题，未落提交）。
+`~/.zcode/cli/config.json` 的 `hooks.events.PreToolUse[0].hooks[0].command` 原为裸 `"rtk"`；
+当日 `~/.zcode/cli/log/zcode-2026-11-26.jsonl` 累计 **1486 条 `hook.run.failed`**，过滤后
+形态单一：`hookEventName=PreToolUse` / `matcher=Bash` / `source=config.PreToolUse.0.0`，
+无一条 SessionStart（同在 hooks 段、但用的是 `node` + 绝对脚本路径，故不受影响）。三证：
+①`which rtk` → 空，`/usr/bin/bash: rtk: command not found`；②注册表
+`[Environment]::GetEnvironmentVariable('Path','User')` **含** `…\WinGet\Packages\rtk-ai.rtk_…`
+（第 29 条）；③该目录下 `rtk.exe` 直接执行 `--version` → `rtk 1.2.1`、
+`echo '{}' | rtk hook claude` → **exit 0**，本体与钩子协议均正常。修复＝`command` 改绝对路径
+后配置界面即显示 WinGet 全路径；备份 `config.json.bak-rtk-1319`。
+
+**正例**：`"command": "C:\\…\\Packages\\rtk-ai.rtk_…\\rtk.exe"`；或进程内自解析路径后再 spawn。
+**反例**：写 `"command": "rtk"` 后靠「重启一下就继承到了」自我安慰——父进程环境没刷新时重启
+继承的仍是旧快照；也不要把 `hook.run.failed` 的密集刷屏当成「钩子参数填错」去改 `args`。
+
+**第二层（同日实测，配置改不到的一半）**：把钩子 `command` 改成绝对路径只修好了「钩子能否被
+拉起」，**修不了「钩子吐回来的命令能否被执行」**。rtk 这类**改写型**钩子的输出形态是
+`{"hookSpecificOutput":{"updatedInput":{"command":"rtk git add …"}}}`——它在改写串里写的仍是
+**裸 `rtk`**，这个前缀是钩子内部写死的，配置文件里没有对应开关（`rtk config` 的 `[hooks]` 段
+只有 `exclude_commands` / `transparent_prefixes`）。于是出现本章最迷惑的形态：**钩子本身
+exit 0、配置界面显示正常，但每条被改写的命令都以 `command not found` / 127 告终**，表现为
+`git add` 失败而 `git status` 看起来「只是输出怪」。判据：`rtk hook check "<cmd>"` 干跑，
+输出 `rtk <cmd>` 即本条；`rtk hook check "rtk config"` 输出 `No rewrite`，证明它只在**无前缀**
+时才加前缀（不会叠成 `rtk rtk`）。**解法是给裸名补一个 PATH 可达的 shim**，不是改钩子配置：
+`rtk.cmd` 写进 WinGet 包目录（该目录在注册表 PATH 里），Git Bash 另需一份同名 sh 脚本。
+反向验证：移走 shim → 裸 `rtk` 立刻回到 `command not found`；放回 → `rtk 1.2.1`（两次读数）。
+另注：`C:\Users\USER\bin` 之前**只在 Git Bash 进程 PATH 里**、注册表里没有（`-contains` 为
+False），是 dev shell 注入的假象——要长期生效必须显式写进 `HKCU\Environment` 的 Path。
+
+**Seen 1× (2026-11-26)**（第二层同日实测补记）
+
+
+### L109 沙盒 IDE 的崩溃日志会写进 gradle transform 缓存，把整个平台包判失效
+
+**规则**：`runIde` 的沙盒 JVM 工作目录**就是平台解压目录**
+（`~/.gradle/caches/<ver>/transforms/<hash>/transformed/ideaIU-*`），HotSpot 崩溃时默认把
+`hs_err_pid<pid>.log` 与 `replay_pid<pid>.log` 写进当前目录——等于往 Gradle 的 artifact
+transform 输出里塞外来文件。Gradle 校验 transform 输出快照后判其失效，下次求值
+`runtimeDirectory` 就把整个目录删掉重解压；此时若主 IDE 的 Kotlin daemon、或沙盒残留的 JPS
+`ExternalJavacProcess` 正占着 `lib/*.jar`，就报 `Unable to delete directory`，而报错点只写
+「Failed to query the value of task ':runIde' property 'runtimeDirectory'」，从字面看不出与崩溃
+有关（这条与 L106 的区别：L106 是只剩 app.jar 的半成品，本条是**目录里多了崩溃产物**）。
+三层对策必须同时成立：
+
+1. 所有跑沙盒 IDE 的任务传 `-XX:ErrorFile=` / `-XX:ReplayDataFile=` 指到工程 `build/hs-err/`
+   （本仓 `buildSrc/src/main/kotlin/mpv-runide.gradle.kts` 的 T-TransformLockGuard，runIde 与
+   runIdeHotSwap 同口径），崩溃产物永不落进任何缓存目录。参数路径只能写成**各任务块内的局部
+   val**：预编译脚本的顶层 val 会变成脚本类字段，argument provider 闭包随之捕获脚本实例，配置
+   缓存直接拒绝（`cannot serialize Gradle script object references`，本轮踩过一次）；
+2. 沙盒退出即执行 `T-SandboxCacheHygiene`（两任务的 `finalizedBy`，正常退出/崩溃/任务失败三条
+   出口都跑），它直接调 `dev-support/gradle-transform-doctor.ps1 -Fix`：杀「**父进程已死**」的
+   JPS `ExternalJavacProcess` 孤儿，并回收此前挪开的 `*.locked-*` 目录。判据只能用父进程存活，
+   不能用启动日期——当天崩溃的沙盒留下的孤儿按日期筛会漏掉，而它们正是下一次重解压的阻塞者；
+   写这类判定也必须走 WMI：本机 `ProcessHandle.Info.commandLine()` 对**所有**进程都返回空
+   （连 Gradle daemon 自己都是 `cmdLen=0`），Java 侧认不出谁是 javac worker（首版实现
+   `killed=0` 实证），只能 `Get-CimInstance Win32_Process` 取 CommandLine；
+3. 已经锁死时手工跑同一个脚本（不加 `-Fix` 是只读体检）：列占用者（Restart Manager）→ 杀孤儿 →
+   把污染目录改名 `<hash>.locked-<stamp>`。Windows 允许改名「里面有打开文件」的目录，所以不必
+   关 IDE；Gradle 下次构建自动在原路径重解压。
+
+**证据**：2026-11-26 同日两段日志拼出完整链条。①`F:\gradle-home\daemon\9.7.0\daemon-42976.out.log`
+12:21:35：`java.lang.OutOfMemoryError` + `Native memory allocation (malloc) failed to allocate
+1606416 bytes. Error detail: Chunk::new`，出事的 JVM 是
+`transforms/cfd911…/transformed/ideaIU-2024.3.7.1-win/jbr/bin/java.exe`（runIde 沙盒），紧随
+`An error report file ... hs_err_pid88668.log` 与 `Compiler replay data is saved as ...
+replay_pid88668.log`——两个产物路径都落在 transform 输出目录内。②13:52 用户起沙盒失败：
+`Unable to delete directory '…\transforms\cfd911…'`；Restart Manager 逐个点名占用者＝PID 8224
+（主 IDE 窗口）、82660（IDE 的 Kotlin compile daemon）、以及两个 11-25 起就一直活着的
+`ExternalJavacProcess` 孤儿（30864/94092，classpath 指该目录）。③把目录改名
+`.locked-20261126` 后 `runIde` 直接正常：新解压出 2261 文件 / 102 个 lib jar（完整），旧目录剩
+1541 文件 / 10 jar + 6.8MB `replay_pid88668.log`（多次失败的删除尝试已删掉一部分）。
+④沙盒关闭后复查：又留下 4 个孤儿 worker（14:09:52 起，父进程 25044 已死）仍在锁新目录——
+所以判据写「父进程已死」而非「今天之前启动」。
+
+**正例**：起沙盒前先跑 `gradle-transform-doctor.ps1`（只读）看有无 `CONTAMINATED` / `INCOMPLETE`，
+命中就 `-Fix`；修完再起沙盒。
+**反例**：把 `Failed to query ... runtimeDirectory` 当成 IPGP 版本问题去升降级插件；或反复重试
+runIde——每次重试都再删一遍，把目录删得更残，原本 `unzip -n` 就能补齐的形态最后只能重解压。
+
+**Seen 1× (2026-11-26)**
+
+### L110 预览回调（EDT）只许渲染：索引/PSI 解析一律在 `previewAsync` 的 compute 块预解析
+
+**规则**：`SqlPreviewService.previewAsync(project, compute) { onResult }` 的 `onResult` 在 EDT 上执行，只能分发与渲染；凡走 `FileBasedIndex`（含自定义索引，如 `MapperNamespaceIndex`）/ `ProjectFileIndex` / VFS 下沉的解析，一律挪进 `compute` 块预解析、用 holder 传给回调——「顺手查一下」也不行。
+
+**证据**：2026-11-26 真机 runIde 两条 `SEVERE - #c.i.u.SlowOperations`（`Plugin to blame: MyBatis SQL Visualizer version: 2026.11.26-beta.2`、`Last Action: cn.song.mybatisplus.visualizer.ConvertToSql`），栈 `ConvertToSqlAction.tryMapperXmlMethodFallback` → `MapperNavigationTargets.statementTagsFor` → `MapperNamespaceIndex.getMapperXmlFiles` → `FileBasedIndex.getContainingFiles`，入口是 `previewAsync$lambda$0$2`（`invokeLater`）。修复提交 `c5685aee8`（T-PreviewFallbackEdtSlowOps），结构守卫 `ConvertToSqlActionTest.testMapperXml兜底锚点解析不在EDT回调链`。
+
+**正例**：解析放进 compute 块，连 compute 抛错的异常分支也备料（否则「预览计算失败」时兜底档静默失效）；守卫钉「解析只出现在辅助函数里、回调消费预解析结果」。**反例**：看见 `previewAsync` 就以为整条链都在 BGT——它的回调设计上就在 EDT；单测与门禁都看不出来，只有真机 log 才暴露。
+
+**Seen 1× (2026-11-26)**
+
+### L111 数平台注册项必须解析 XML，`grep -c` 数的是行数且会漏「一文件多类」
+
+**规则**：统计 `plugin.xml` 的 EP 注册条数时，一律用 XML 解析（Python `ElementTree` 或等价手段）按元素计数；**禁用 `grep -c "<tag"`**（一个注册体跨行就少算，注释与容器开标签会多算），也不要用 `implementation="` 的出现次数代替（属性名与元素名不一致，如 `lineMarkerProvider` 元素用的是 `implementationClass`）。反向同理：数源码里的 provider/converter 类数要看**类声明**（`^class X : ...Provider`），不能用文件数——允许一文件多类。现成命令（本仓根目录跑）：
+
+```bash
+python -I -c "
+import re, xml.etree.ElementTree as ET
+from collections import Counter
+raw=open('src/main/resources/META-INF/plugin.xml',encoding='utf-8').read()
+root=ET.fromstring(re.sub(r'<!DOCTYPE[^>]*>','',raw,flags=re.S))
+print(Counter(e.tag.split('}')[-1] for e in root.iter()))
+"
+# 注意 EP 标签带命名空间前缀：真正要读的键是 codeInsight.lineMarkerProvider（=20），
+# 不是 lineMarkerProvider。fileBasedIndex=3、registryKey=13 同表可查。
+```
+
+**证据**：2026-11-26 对齐 `docs/架构设计/01-项目架构总览.md` 时查出三处过期计数，全部同源：①gutter provider 文档写「19 个类」，`ElementTree` 实数 `codeInsight.lineMarkerProvider` = 20（JAVA 13 + XML 7），而入错门的读数是 `grep -c "codeInsight.lineMarkerProvider" plugin.xml` = **22**——多出的 2 条是**注释行**（`plugin.xml:304` 守卫说明、`:749` 区域约定），注释里提到标签名同样命中；另一个看似合理的替代 `grep -c 'implementation="'` = 24 更离谱，因为该元素实际用的属性名是 `implementationClass`，`implementation="` 命中的是别的 EP。差异的真实来源是 T-MapperMethodSqlPreview 新增的 `MapperMethodPreviewLineMarkerProvider` 没人回填；②`fileBasedIndex` 写 ×2 实为 3（多 `xml/ibatis/SqlMapConfigAliasIndex`）；③`registryKey` 写 ×6 实为 13。另发现 `ui/gutter` 是 **20 类分装 19 文件**——`MapperNavigationLineMarkerProviders.kt` 一个文件里装 XML↔Java 一对，所以按文件数推算永远比类数少 1，这正是 19 这个错值一路传下去的原因。修复提交 `77b7b6307`（含 `03-开发与测试指南.md` §4.4 与 openidea 调研报告 08 两处下游引用）。
+
+**Seen 1× (2026-11-26)**
+
+### L112 内测「内容累计」是并入不是追加——累计条目必须按性质重排进同一张分区表
+
+**规则**：内测系列的 changeNotes 要「内容累计」（上一发的能力并入本发块），但**并入 ≠ 贴到 `<ul>` 末尾**。
+把上一发的整块内容追加到尾部，读者看到的顺序会变成「本发优化 → 上一发新功能 → 上一发修复」，
+即优化段被夹在中间、新功能与修复排到了优化之后。正确做法是先合表（本发 + 上一发全部条目），
+逐条标性质，再整体按「新功能 → 修复 → 优化」重排。
+
+**判据**：`check-change-notes.py` 的 C7 只校验「html 本版 `<li>` 与 preview.changeNotes 逐条相等」——
+两边一起错位时它照样绿，**看不出跨分区错位**。这条只能靠人工对三处清单（html `<li>` / preview
+changeNotes / 发行说明编号）的**条数与顺序同时一致**，再对照 `CHANGELOG.md` 的
+`### Added` / `### Fixed` / `### Changed` 分节逐条落位。
+
+**证据**：v2026.11.27-beta.1（2026-11-27）用户直接报「变更日志没按新功能、修复、优化的顺序排列，现在有点乱」。
+实查 `gradle/plugin-change-notes.html`：beta.2 的 6 条累计内容整块贴在 `<ul>` 尾部，其中「自研 Wrapper
+子类预览」（新功能）和「双应用丢 SQL」「设置落点」（修复）都排在「让位开关重算范围」（优化）之后。
+修正提交 `f0ddc448f`（只改仓内 html + preview，不前移 tag、不重打 zip，Gitee 正文用 by-id PATCH 补）。
+已把可执行做法写进 `.agents/skills/release-workflow/SKILL.md` §2「累计条目必须按性质归位」，
+三个工作树同步。
+
+**Seen 1× (2026-11-27)**
+
+### L113 轮询类断言偶发空，先查「轮询对象对不对」，别先加长超时
+
+**规则**：断言「等某状态成立」的轮询偶发失败时，**先确认每次轮询读的是不是本次该读的那个对象**。
+轮询对象拿错了（拿到上一例残留、已清空、已 dispose 的旧实例），状态永远是空——加长超时只是
+把同一个错误轮询得更久，绝不会变绿。
+
+**判据**：在断言消息里打出**对象身份 + 该对象的可变状态**（例：`panel=true inputLen=63 warning=''`）。
+三样齐了就能一眼分开三种情形：①对象对、状态慢（该加超时）；②对象对、状态永远不来（真 bug）；
+③**对象不对**（测试隔离缺口）。只有①才该动超时。
+
+**证据**：`SqlStandalonePreviewPanelDialogTest` 的 `warning.isNotBlank()`（`kt:133`）在
+2026-11-27 两次不同 CI 轮次各红一次（推送测试 run `45927472872`、发行轮 `45922059780` attempt 1），
+历次都按「L90 加长超时」处理。本轮先按同一反射把 5s 提到 20s——**加了诊断消息后本地实测仍红**，
+打出 `panel=true inputLen=63 warning=''`：面板在、输入真的进了编辑器、20 秒轮询仍空，超时假设当场
+证伪。真因是 `SqlPreviewService.activePreviewDialogs` 从不删项——`tearDown` 的 `closeDialog()`
+只 dispose + clear 面板，槽位仍留着那条已清空的旧弹窗；下一例的 `awaitDialog` 若在异步解析建出
+新弹窗之前轮询，就命中这个残留，之后一直轮询它。
+**两个错误修法（都留档）**：①只加超时 5s→20s，无效；②改生产代码在 `dispose()` 里摘登记项，
+**导致 6 例红 5 例**——headless 下弹窗 `show()` 返回后可能立刻 dispose，摘掉登记会让 `awaitDialog`
+永远查不到（这恰是该用例注释里 2026-11-18 已记过的坑）。正确修法在测试侧：`setUp` 记下
+`baselineDialog`，`awaitDialog` 只认「非 baseline」的新对象。连跑 3 次全绿。
+
+**正例**：看到「等不到」先问「我在等谁」，把对象身份与状态打进断言消息，用读数区分三种情形。
+**反例**：凭「CI 机器慢」把超时一路加长；或在没定位到「轮询对象错了」之前就改生产代码的
+生命周期/清理逻辑。
+
+**Seen 1× (2026-11-27)**
+
+### L114 描述区表格的 `align`/`valign` 会被平台白名单剥掉——垂直对齐只能靠内容等高
+
+**证据**：2026-11-27 报障「两张二维码没对齐，上次修复一版没生效」。截图像素实测：左码
+`x=[576,753]` w=178、y 起点 440；右码 w=179、y 起点 447 —— **宽度本就相等，偏差是右码整体下移 7px**。
+根因是 `<td valign="top">` 被 jsoup `Safelist.relaxed` 剥掉（td 只留 `abbr/axis/colspan/rowspan/width`，
+align 与 valign 都不在），默认 `vertical-align: middle` 下，两列说明文字行数不同（3 行 vs 2 行）
+让内容各自垂直居中，图片起点自然错开。上一版（20261103）补的是 `td width`——那是**水平轴**的修法，
+垂直轴从头到尾没被触及，所以「修了没生效」是修错轴，不是修复失效。
+附带实测：`td width` 在 IDE 插件页的 Swing 渲染器里**跨 JDK 行为分裂**——JBR 25 正常、JDK 8 会把
+右码整体挤出可视区，因此这个属性也不该再作为对齐手段。
+
+**正例**：改成「单元格只放图片 + 说明文字移到表格外的独立段落」，两列内容同高，水平与垂直都自然对齐，
+不依赖任何会被白名单剥掉的属性。改完用 IDE 自带 JBR 25 的 `JEditorPane + HTMLEditorKit` 渲染量尺寸收口。
+**反例**：继续在 `<td>` 上叠 `align`/`valign`/`style` 试图对齐；或把「上次修过没效果」当成偶发、
+照原样再试一遍同一修法。
+
+**Seen 1× (2026-11-27)**
+
+### L115 依赖校验清单只覆盖 CLI 解析过的构件——IDE 侧会多解析三类，必须同批放行
+
+**规则**：`gradle/verification-metadata.xml` 由 `--write-verification-metadata` 生成，**只记录那次构建真正解析过的构件**。IDE 的 Gradle 导入/脚本模型会额外解析三类清单外的东西：①**辅助构件**（`-sources.jar` / `-javadoc.jar`，挂源码导航）；②**平台 distro 的 POM**（`com.jetbrains.intellij.idea:ideaIU:<本机 IDE 版本>`）；③**Gradle 发行版自身的附属物**（`gradle:gradle:<ver>` 的 `-src.zip`、`org.apache.groovy` 的 `.module`——来自 Gradle custom / Gradle distributions / Gradle Libs 仓库）。三类都不在生成时的解析图里 → IDE 一同步就 `Dependency verification failed`，而 `./gradlew` 全绿。故开严格校验时必须同批写 `trusted-artifacts`：按文件模式信任 `.*-sources\.jar` / `.*-javadoc.jar`；按 group 信任 `com.jetbrains.intellij.idea` 的 `.*\.pom`（**不能**逐版本写死——平台版本随每个开发者本机 IDE 变化）；整组放行 `gradle` / `org.apache.groovy` / `org.codehaus.groovy`（Gradle 发行版已由 `distributionSha256Sum` 钉死，Maven 侧 checksum 无可信来源）。（对齐轮注：本支原编 L80，与 master 侧 L80 撞号，并入时改编 L97；2026-11-27 master 二次合流再撞号（L97 已被主线占用），改编 L115）
 
 **证据**：T-SAF-14（`b51f664a`，2026-11-06）引入严格校验后，2026-11-09 用户在 IDE 里连续撞三次：①`jsqlparser-5.3-sources.jar`；②`ideaIU-243.28141.41.pom` / `ideaIU-2024.3.7.1.pom` / `ideaIU-263.7307.245-EAP-CANDIDATE.pom`（第三个版本＝该开发者本机 IDE 版本，来自 IntelliJ Repository (Snapshots)）；③`gradle-9.7.0-src.zip`（Gradle custom / Gradle distributions）与 `groovy-4.0.32.module`（Gradle Libs）。修复前清单里 `-sources.jar` / `-javadoc.jar` / `com.jetbrains.intellij.idea` / `gradle` / `org.apache.groovy` 条目数**全为 0**。探针复现与验证：解析 `jsqlparser:5.3@sources`、`ideaIU:243.28141.41@pom`，修复前都红、修复后都绿（`PROBE_RESOLVED` / `POM_PROBE_RESOLVED`）；同一轮探针里 `commons-math3` / `jmh-core` / `jopt-simple` 等**二进制**构件仍照旧失败——严格性只对上述三类开口。**证据边界**：③（`-src.zip` / `.module`）只在 IDE 脚本模型路径上出现，CLI 侧无可复现入口，故该条以用户同步读数为准，未取本地探针读数。（原入册为本支并 security 支时的 L31，T-BranchAlignMerge master↔分支合流时让号改 L80——L31 已被主线 T-McpSettingsJump 占用）
 
@@ -1177,9 +1528,9 @@ ISE）与 fork 启动失败不重试，直接红。
 
 **Seen 1× (2026-11-09)**
 
-### L98 方言对账护栏的方言表必须跟着方言注册数走，自检下限是硬闸
+### L116 方言对账护栏的方言表必须跟着方言注册数走，自检下限是硬闸
 
-**规则**：任何按方言逐个对账的守卫（`DialectCaptureCoverageTest.DIALECT_DRIVER_FAMILIES` 是实例），表里少一行就等于该方言完全掉出护栏；同表里的 `size() >= N` 自检**必须与表同步抬**，否则「加了方言但没加断言」会以全绿形态长期潜伏。加方言时按「注册表增一项 → 对账表增一行 → 自检下限 +1」三件套同批改。（对齐轮注：本支原编 L81，撞号改编 L98）
+**规则**：任何按方言逐个对账的守卫（`DialectCaptureCoverageTest.DIALECT_DRIVER_FAMILIES` 是实例），表里少一行就等于该方言完全掉出护栏；同表里的 `size() >= N` 自检**必须与表同步抬**，否则「加了方言但没加断言」会以全绿形态长期潜伏。加方言时按「注册表增一项 → 对账表增一行 → 自检下限 +1」三件套同批改。（对齐轮注：本支原编 L81，撞号改编 L98；2026-11-27 master 二次合流再撞号（L98 已被主线占用），改编 L116）
 
 **证据**：方言 15→25（`8735a6a69`）后，`DialectCaptureCoverageTest` 的表仍停在 14 项、自检仍是 `>= 14`，10 个新方言与更早补入的 **GoldenDB** 全部在护栏外——这正是该守卫自己防的「方言可选、角标可见、捕获一条不出」。T-CaptureCoverage25（`19b88f8e2`）把表补到 25、下限抬到 25，并补上虚谷/崖山两族接线后，护栏才能对新增面生效。
 
@@ -1188,9 +1539,9 @@ ISE）与 fork 启动失败不重试，直接红。
 
 **Seen 1× (2026-11-18)**
 
-### L99 反向探针要按守卫的判定粒度造，别改类名应付
+### L117 反向探针要按守卫的判定粒度造，别改类名应付
 
-**规则**：反向验证前先看守卫**按什么粒度判定**。按「族前缀」判的守卫（`covered(prefixes…)`），把类名改成假名但保留原前缀仍然绿——那不是守卫失效，是探针没命中判定面。造探针要让被判定量真的消失（整族摘掉/整表删行），并贴出「改前绿、改后红、还原绿」三次读数。（对齐轮注：本支原编 L82，撞号改编 L99）
+**规则**：反向验证前先看守卫**按什么粒度判定**。按「族前缀」判的守卫（`covered(prefixes…)`），把类名改成假名但保留原前缀仍然绿——那不是守卫失效，是探针没命中判定面。造探针要让被判定量真的消失（整族摘掉/整表删行），并贴出「改前绿、改后红、还原绿」三次读数。（对齐轮注：本支原编 L82，撞号改编 L99；2026-11-27 master 二次合流再撞号（L99 已被主线占用），改编 L117）
 
 **证据**：T-CaptureCoverage25 第一轮把 `com.xugu.cloudjdbc.Statement` 改成 `com.xugu.cloudjdbc.StatementX_REVERSE_PROBE`（同前缀），护栏照绿；改成 `com.xuguprobe.cloudjdbc.*`（整族消失）后 `全方言三面对账` 立即红，还原即绿。
 
@@ -1199,9 +1550,9 @@ ISE）与 fork 启动失败不重试，直接红。
 
 **Seen 1× (2026-11-18)**
 
-### L100 捕获类 E2E 的「零事件」先排除进程退出竞态，再看链路
+### L118 捕获类 E2E 的「零事件」先排除进程退出竞态，再看链路
 
-**规则**：agent 事件由发送循环异步 flush，目标应用**跑完立即退出**会把事件一起带走。判「捕获不工作」之前，先让载荷在收尾处停留数秒（本轮取 6s）复跑一次；同时读**帧统计行**（`CLOSED frames={'EVENT': n…}`）而不是 `grep -c EVENT`——后者会把统计行本身算成一条，读成「有事件」。（对齐轮注：本支原编 L83，撞号改编 L100）
+**规则**：agent 事件由发送循环异步 flush，目标应用**跑完立即退出**会把事件一起带走。判「捕获不工作」之前，先让载荷在收尾处停留数秒（本轮取 6s）复跑一次；同时读**帧统计行**（`CLOSED frames={'EVENT': n…}`）而不是 `grep -c EVENT`——后者会把统计行本身算成一条，读成「有事件」。（对齐轮注：本支原编 L83，撞号改编 L100；2026-11-27 master 二次合流再撞号（L100 已被主线占用），改编 L118）
 
 **证据**：TiDB 首轮载荷（4 条 DML）读到 `EVENT: 0`，加 6s 收尾后同一链路读到 **7** 条；同期 `grep -c "EVENT"` 返回 1，实际命中的是摘要行 `'EVENT': 0` 里的字样。
 
@@ -1210,9 +1561,9 @@ ISE）与 fork 启动失败不重试，直接红。
 
 **Seen 1× (2026-11-18)**
 
-### L101 容器化国产库「重启后连不上」先查配置里钉的安装期 IP，别一路 restart
+### L119 容器化国产库「重启后连不上」先查配置里钉的安装期 IP，别一路 restart
 
-**规则**：OceanBase 这类「安装期把服务器 IP 写进集群元数据」的引擎，宿主机重启后容器 IP 一漂，`obd` 的 `config.yaml` / `inner_config.yaml` 仍指旧 IP，表现为容器 Up、端口在听、集群永远 `Server is initializing`。处置顺序：①核对 `docker inspect` 的当前 IP 与 obd 配置里的 IP；②**别用 `kill -9` 解 obd 锁**（会把集群状态打断，锁只是被挂住的命令持有）；③配置可 sed 对齐，但经验证对不齐（数据按旧 IP bootstrap）时，走重建（清数据目录 + 按原 cap/ulimit/bind mount 重跑）；④`MODE=mini` 只建 `root@test`，业务用户要手动补建；⑤客户端登录名必须是 `user@tenant`，裸用户名从外部一律 `Access denied`，而从容器内 localhost 连却正常——这条不对称极易误判成密码错。（对齐轮注：本支原编 L84，撞号改编 L101）
+**规则**：OceanBase 这类「安装期把服务器 IP 写进集群元数据」的引擎，宿主机重启后容器 IP 一漂，`obd` 的 `config.yaml` / `inner_config.yaml` 仍指旧 IP，表现为容器 Up、端口在听、集群永远 `Server is initializing`。处置顺序：①核对 `docker inspect` 的当前 IP 与 obd 配置里的 IP；②**别用 `kill -9` 解 obd 锁**（会把集群状态打断，锁只是被挂住的命令持有）；③配置可 sed 对齐，但经验证对不齐（数据按旧 IP bootstrap）时，走重建（清数据目录 + 按原 cap/ulimit/bind mount 重跑）；④`MODE=mini` 只建 `root@test`，业务用户要手动补建；⑤客户端登录名必须是 `user@tenant`，裸用户名从外部一律 `Access denied`，而从容器内 localhost 连却正常——这条不对称极易误判成密码错。（对齐轮注：本支原编 L84，撞号改编 L101；2026-11-27 master 二次合流再撞号（L101 已被主线占用），改编 L119）
 
 **证据**：2026-11-18 靶机整机重启后 OceanBase 三种报错依次出现：`Connection refused`（observer 未自启）→ `Server is initializing`（IP 漂移 + obd 钉旧 IP）→ `Access denied`（业务用户缺失/登录名缺 tenant）。重建并补建 `xc3` 后，方言矩阵该腿 PASS（262 词 / 44s）。
 
@@ -1220,6 +1571,7 @@ ISE）与 fork 启动失败不重试，直接红。
 **反例**：反复 `docker restart` 等它自己好；或用 `kill -9` 抢 obd 锁。
 
 **Seen 1× (2026-11-18)**
+
 
 ## 升级记录
 

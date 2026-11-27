@@ -1,6 +1,9 @@
 .gradle
 .intellijPlatform
 
+# Playwright MCP 会话产物（console 日志、页面快照）
+.playwright-mcp/
+
 target/
 logs/
 !.mvn/wrapper/maven-wrapper.jar
@@ -108,6 +111,11 @@ gitee-token.*
 # 竞品逆向分析等不宜公开的内容；本地可读，父仓不跟踪。
 # 注意：git clean -x 会连此目录一并删除，清理时勿带 -x。
 docs/内部/
+
+# OpenIDEA / 编译器输出（本仓被 OpenIDEA 打开或在 IDE 里编译后产生）
+.openidea/
+bin/
+sub-projects/*/bin/
 record/*.run.log
 record/_elev_ac.log
 

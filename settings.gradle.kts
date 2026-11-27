@@ -12,6 +12,12 @@ rootProject.name = "mybatis-plus-sql-visualizer"
 include(":sql-visualizer-agent")
 project(":sql-visualizer-agent").projectDir = file("sub-projects/sql-visualizer-agent")
 
+// T-OpenIDEAPort T0-0（2026-11-25）：纯逻辑引擎导出模块——把 P0 纯逻辑（model / sql / xml / reverse /
+// generator / psource / util / log / execute 中零平台渗透的部分）打成**不含 IntelliJ 类型**的
+// mpsv-engine jar，供下一代非 IntelliJ 宿主（OpenIDEA / Rust 侧）经 JSON 门面消费。
+include(":engine-jar")
+project(":engine-jar").projectDir = file("sub-projects/engine-jar")
+
 // T-TestPerf2（2026-09-15）：build cache 关闭改落 settings 层。gradle.properties 的
 // org.gradle.caching=false 会被用户级 ~/.gradle/gradle.properties 的 caching=true 按 Gradle
 // 属性优先级（GRADLE_USER_HOME > 项目根）覆盖而空转——实证：冷启动分片构建出现

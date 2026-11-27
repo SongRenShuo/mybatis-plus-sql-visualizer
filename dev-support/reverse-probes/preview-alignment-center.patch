@@ -1,0 +1,11 @@
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/MapperMethodPreviewLineMarkerProvider.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/MapperMethodPreviewLineMarkerProvider.kt
+@@ -124,7 +124,7 @@
+         // 跳转箭头保持 CENTER ⇒ 预览（LEFT）在几何上恒在跳转左侧，与 marker 收集顺序、
+         // daemon 增量复用、provider 注册顺序全部无关。此前的「锚点 offset 小一档」只是让排序
+         // 恰好偏向自己，在真机多轮 daemon 复用下仍会翻。
+-        com.intellij.openapi.editor.markup.GutterIconRenderer.Alignment.LEFT,
++        com.intellij.openapi.editor.markup.GutterIconRenderer.Alignment.CENTER,
+         { MpSqlVisualizerBundle.message("gutter.mapperMethodPreview.accessible.name") },
+     )
+ 

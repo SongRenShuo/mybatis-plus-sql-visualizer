@@ -242,9 +242,10 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // T-Ibatis2Support 券 A：iBatis 2.x sqlMap 语句预览开关（ibatisXmlCheck，界面节）+1 后为 49。
             // T-NotifyTune：方言死路提示开关（dialectTipCheck，界面节）+1 后为 50；
             // 首次捕获引导开关（firstCaptureGuideCheck，界面节）+1 后为 51。
+            // T-AutoShowYield：自动展开让位子开关（logAutoOpenYieldCheck，SQL 日志节）+1 后为 52。
             // 同步先例 ccd0f74（R2 设置页六组 gutter 复选框曾 31→37 同步）
             assertTrue(texts.any { it.contains("Retain raw EXPLAIN plans") })
-            assertEquals("复选框总数应为 51", 51, texts.size)
+            assertEquals("复选框总数应为 52", 52, texts.size)
         } finally {
             settings.state.language = old
         }

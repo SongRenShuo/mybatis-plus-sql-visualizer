@@ -45,6 +45,9 @@ class QueryWrapperParser(
     /** 动态条件 toggle id 序号（M12，pre-order 递增，同一 parse 树内稳定）。 */
     private var toggleSeq = 0
 
+    /** setEntity 展开序号（D255）：同一条链多次 setEntity 时用于区分参数键前缀。 */
+    private var setEntitySeq = 0
+
     /**
      * 解析调用链为 SELECT 语句模型。
      *
@@ -53,6 +56,7 @@ class QueryWrapperParser(
      */
     fun parse(chain: WrapperChain): SelectStatement {
         toggleSeq = 0
+        setEntitySeq = 0
         return parseInternal(chain)
     }
 
@@ -135,7 +139,7 @@ class QueryWrapperParser(
                 "allEq" -> orPending = addConditionFlagged(conditions, parseAllEq(call).flagged(analysis), orPending)
                 // T-M21-05：setEntity(entity)（MP 官方 API）——实体全部列 `col = ?`（静态近似）
                 "setEntity" -> {
-                    parseSetEntity().forEach { cond ->
+                    parseSetEntity(call).forEach { cond ->
                         orPending = addConditionFlagged(conditions, cond.flagged(analysis), orPending)
                     }
                 }
@@ -418,11 +422,22 @@ class QueryWrapperParser(
      *
      * 静态近似：运行时实体字段值不可知（实参变量忽略具体值），实体全部列展开为 `col = ?`
      * （列带主表别名前缀，与条件渲染一致；注释标注近似，运行时仅非 null 字段生效）。
+     *
+     * D255：每列的占位符必须带**唯一参数键**（`query.id`、`query.password`…），不能共用匿名 `"?"`。
+     * 预览参数面板按 source 建输入框、按 source 取值回填——共用 `"?"` 会让 15 个输入框读写同一个
+     * `paramValues` 键：改一个框全列跟着变，清除只写回第一个框。前缀取实参表达式（`setEntity(query)`
+     * → `query`），不可命名时回退 `entity`；同一条链多次 setEntity 用序号区分。
      */
-    private fun parseSetEntity(): List<Condition> = table.columns.map { col ->
-        val column = ColumnRef(columnName = col.columnName)
-        val qualified = columnPrefix?.let { column.withTableAlias(it) } ?: column
-        Condition.Simple(qualified, "=", SqlValue.Placeholder("?"))
+    private fun parseSetEntity(call: WrapperCall): List<Condition> {
+        val prefix = ParamSourceNaming.uniquePrefix(
+            ParamSourceNaming.prefixOf(call.args),
+            ++setEntitySeq,
+        )
+        return table.columns.map { col ->
+            val column = ColumnRef(columnName = col.columnName)
+            val qualified = columnPrefix?.let { column.withTableAlias(it) } ?: column
+            Condition.Simple(qualified, "=", SqlValue.Placeholder(ParamSourceNaming.source(prefix, col.columnName)))
+        }
     }
 
     /**

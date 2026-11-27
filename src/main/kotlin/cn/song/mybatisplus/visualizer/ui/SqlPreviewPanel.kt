@@ -494,7 +494,12 @@ class SqlPreviewPanel(
         // 受子组件 preferredSize 影响导致 editor 不 fill（实际高度≈preferred ~375，15 行 SQL
         // 被截断）；GridLayout 按可用空间均分强制填满，editor 高度自适应窗口大小，无需固定
         // minimumSize 兜底。首次塌缩兜底由 editorComponentRaw 的 minimumSize 承担。
-        isOpaque = false
+        // D253 T-NoDataSourceGreenResultPanel：headless 探针实证——无数据源执行失败收口后本容器
+        // componentCount=0、editor=null，原 isOpaque=false 会透出父 split 用 UIUtil.getPanelBackground()
+        // 涂的底色（真机该键被主题解析成亮绿时暴露整块纯绿空白）。改自带不透明主题底色：不硬编码
+        // 颜色、跟随主题、且不影响有控制台时 embedConsole 的 removeAll+add 覆盖。
+        isOpaque = true
+        background = com.intellij.util.ui.UIUtil.getPanelBackground()
     }
 
     // M36.5：SQL 执行状态面板（主面板 SOUTH——仅在有状态/错误内容时可见，避免空白占位）

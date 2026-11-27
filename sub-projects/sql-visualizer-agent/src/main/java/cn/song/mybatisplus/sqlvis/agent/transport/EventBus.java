@@ -86,7 +86,14 @@ public final class EventBus {
         port = serverPort;
         channelToken = token;
         started = true;
-        final Thread sender = new Thread(new SenderLoop(serverPort, token), "sqlvis-agent-sender");
+        // T4-1：传输旁路（默认 TCP，零语义变化）。ws 时 agent 在 loopback 监听 WebSocket
+        // 供 OpenIDEA 插件（只支持 WebSocket::connect）连入；事件帧/入站 CONFIG 语义不变。
+        // T-SAF-02：TCP 路径带通道令牌启动（HELLO 帧回带，IDE 侧验令牌通过才提交会话）；
+        // WS 路径的令牌回带尚未接线（IDE 主动连 loopback 端口，监听端只绑 127.0.0.1）。
+        final Runnable loop = CaptureTransportMode.isWebSocket()
+                ? new WsSenderLoop(serverPort)
+                : new SenderLoop(serverPort, token);
+        final Thread sender = new Thread(loop, "sqlvis-agent-sender");
         sender.setDaemon(true);
         sender.start();
     }

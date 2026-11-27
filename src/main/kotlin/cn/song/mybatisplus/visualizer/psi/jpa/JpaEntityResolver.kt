@@ -7,6 +7,8 @@ import cn.song.mybatisplus.visualizer.model.ColumnInfo
 import cn.song.mybatisplus.visualizer.model.ColumnRole
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.psi.ColumnNameCalibrator
+import cn.song.mybatisplus.visualizer.psi.EntityFieldCollector
+import cn.song.mybatisplus.visualizer.psi.inheritanceChainStamp
 import cn.song.mybatisplus.visualizer.util.NamingStrategy
 import cn.song.mybatisplus.visualizer.util.TableConfigSignature
 import com.intellij.openapi.diagnostic.Logger
@@ -57,6 +59,7 @@ class JpaEntityResolver {
      * 缓存键：PsiFile + classQualifiedName + configSignature（三维）。
      * 失效机制：
      *  - 文件修改（modificationStamp 变化）→ 缓存自然失效
+     *  - 父类链文件修改（[inheritanceChainStamp] 变化，D254）→ 缓存失效（继承实体的列来自父类字段）
      *  - 配置签名变化（tableNameInference 等设置变更）→ 缓存失效
      *
      * O-58（列名数据源校正）：缓存**继续只存未校正的 PSI 产物**，校正在返回前作为一步廉价后处理
@@ -81,14 +84,18 @@ class JpaEntityResolver {
         // T-Perf-18：缓存键不持 PsiFile 强引用（VirtualFile.url 字符串标识）
         val key = JpaCacheKey(file.virtualFile?.url, System.identityHashCode(file), qName, configSig, hostAnchorUrl)
         val stamp = file.modificationStamp
+        // D254（M5）：父类链修改戳一并参与命中判定（与 EntityResolver 同口径）
+        val inheritanceStamp = inheritanceChainStamp(entityClass)
         cache[key]?.let { entry ->
-            if (entry.stamp == stamp) return ColumnNameCalibrator.calibrate(project, entry.value)
+            if (entry.stamp == stamp && entry.inheritanceStamp == inheritanceStamp) {
+                return ColumnNameCalibrator.calibrate(project, entry.value)
+            }
         }
 
         val value = resolveInternal(entityClass, hostAnchorFile(hostAnchor))
         // 券02（T-PerfSweep27-02）：写入前容量守卫——超限整体清空再写（上限语义见 maxCacheEntries）。
         if (cache.size >= maxCacheEntries) cache.clear()
-        cache[key] = JpaEntry(stamp, value)
+        cache[key] = JpaEntry(stamp, inheritanceStamp, value)
         return ColumnNameCalibrator.calibrate(project, value)
     }
 
@@ -118,6 +125,7 @@ class JpaEntityResolver {
         val columns = fields.flatMap { field -> resolveColumns(field, ignoredFields, classOverrides, hostAnchor) }
             .sortedWith(compareBy { it.role })
             // 去重：同一列名只保留第一个（简单字段优先于 @ManyToOne 关联字段）
+            // D254：同名字段已在收集层合并（子类优先），这里只挡「不同字段撞同一列名」的用户代码形态
             // 示例：departmentId(@Column) 和 department(@ManyToOne+@JoinColumn) 同映射 department_id
             .distinctBy { it.columnName }
         // 表注释（类级注解 > javadoc > 行注释；schema 预留最高优先级，当前返回 null）
@@ -167,20 +175,13 @@ class JpaEntityResolver {
     }
 
     /**
-     * 递归收集类及其所有父类的字段（支持 @MappedSuperclass 继承）：
-     *  - 父类字段在前、子类字段在后；
-     *  - 仅沿 superClass 类继承链——接口字段不纳入；
-     *  - seen 集合防循环继承（异常 PSI 场景防御）；
-     *  - 父类本身标注 @MappedSuperclass 或 @Entity 时字段均纳入。
+     * 继承链字段收集（支持 @MappedSuperclass 继承；D254 起委托 [EntityFieldCollector.collectColumns]）：
+     *  - 父类字段在前、子类字段在后；同名冲突时输出子类字段对象、占父类槽位（子类优先，对齐 MP/Hibernate）；
+     *  - 排除 `static` / `transient`（JPA 不持久化静态字段；Hibernate 亦忽略 Java `transient`）；
+     *  - 仅沿 superClass 类继承链——接口字段不纳入；循环继承由收集器 seen 集防御。
      */
-    private fun collectFieldsIncludingSuper(
-        clazz: PsiClass,
-        seen: MutableSet<PsiClass> = mutableSetOf(),
-    ): List<PsiField> {
-        if (!seen.add(clazz)) return emptyList()
-        val superFields = clazz.superClass?.let { collectFieldsIncludingSuper(it, seen) } ?: emptyList()
-        return superFields + clazz.fields.toList()
-    }
+    private fun collectFieldsIncludingSuper(clazz: PsiClass): List<PsiField> =
+        EntityFieldCollector.collectColumns(clazz)
 
     /**
      * 解析单个字段为列信息（可能展开为多列——嵌入对象展平，T-J18）；
@@ -708,8 +709,8 @@ class JpaEntityResolver {
             val hostAnchorPath: String? = null,
         )
 
-        /** 缓存条目：文件修改戳 + 解析结果。 */
-        private data class JpaEntry(val stamp: Long, val value: TableInfo)
+        /** 缓存条目：文件修改戳 + 父类链修改戳 + 解析结果。 */
+        private data class JpaEntry(val stamp: Long, val inheritanceStamp: Long, val value: TableInfo)
 
         /** 缓存键 → 条目（项目级，跟随 JpaEntityResolver 生命周期）。 */
         private val cache = ConcurrentHashMap<JpaCacheKey, JpaEntry>()

@@ -665,6 +665,16 @@ class GuardSelfTestCoverageMetaGuardTest {
             "T-HiddenBugPerfScan 券 E：runBatchLookupGuarded 批量查找守卫语义直测——同上无判定内核，decisionFns 留空",
         ),
             GuardEntry(
+                "ui/gutter/MapperPreviewProviderOrderGuardTest.kt",
+                emptyList(),
+                "T-MapperPreviewOrder 守卫（2026-11-26）：同一方法行的两枚图标左右序由 provider 收集顺序决定" +
+                    "（LineMarkersPass.queryProviders 慢趟外层遍历 providers），预览 provider 必须在 " +
+                    "plugin.xml 与平台 getMarkerProviders(Java) 里都排在跳转之前。判定面是「平台解析出的" +
+                    "provider 列表顺序」与「plugin.xml 注册段顺序」两处有序性断言，没有「返回违规点/站点集合」" +
+                    "的判定内核，故 decisionFns 留空；自证=两个注册元素对调后两条用例各红一次" +
+                    "（反向读数见计划 §九）。",
+            ),
+            GuardEntry(
                 "convention/EdtBoundedWaitGuardTest.kt",
                 listOf(DecisionFn("unboundedWaitOffenders", FnKind.VIOLATIONS)),
                 "T-UserFreezeTriage 守卫（2026-11-19 用户线程转储）：后台线程等 EDT 一律有界——src/main 除 " +
@@ -784,6 +794,15 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "CommonDataKeys.EDITOR（原生 ▶/Ctrl+Enter 依赖二者在内嵌面板解析控制台），且三路径注释已记录封堵决策；" +
                     "插件按钮全门禁链不受影响。无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
                     "灵敏度=恢复 CLIENT_KEY 或 EDITOR 注入任一即红（用例内合成样本自证）。",
+            ),
+            GuardEntry(
+                "psi/BatchOperationJoinGuardTest.kt",
+                emptyList(),
+                "D256-M3 守卫（MPJ join 消费族错误 SQL）：判定内核在**生产代码** " +
+                    "BatchOperationConverter.isJoinFamilyRejected（测试侧不可注入合成样本），用例只断言 " +
+                    "convert() 的产出为 null / 非 null——无「返回违规点集合」的测试侧判定函数，故 decisionFns 留空；" +
+                    "灵敏度=摘掉守卫分支并临时把 join 族登记进 BATCH_OPERATIONS（本守卫要防的将来形态）后 " +
+                    "三条拒绝用例转红，还原复绿（实施轮实测，读数见提交信息）。",
             ),
             GuardEntry(
                 "convention/EnhancedCaptureDefaultOnGuardTest.kt",
@@ -1482,6 +1501,18 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "无「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
                     "灵敏度=删掉 plugin.xml 的 registryKey 或改键名、把消费点改成无参重载、" +
                     "删 en 或 zh 任一侧 standalone 键，对应用例必红。",
+            ),
+            GuardEntry(
+                "config/GutterYieldRefreshScopeGuardTest.kt",
+                emptyList(),
+                "T-PerfSweep34 券02 守卫（2026-11-26）：切换「同类插件共存让位」后触发的 gutter 重算" +
+                    "不得退回**无参** `DaemonCodeAnalyzer.restart()`——那是全项目全量重分析（inspection / " +
+                    "annotator / 高亮全部重跑），而触发它的只是一个图标显示开关，成本与意图明显错配。" +
+                    "判据是把 `refreshGutterLineMarkers` 的**方法体**切出来（不是全文扫，避免误伤平台/别处的" +
+                    "合法无参 restart），断方法体内无参 restart 命中为 0、且必须有带实参的 restart 调用。" +
+                    "无「返回违规点集合」的具名判定函数（`bareRestartCount` 返回 Int、`refreshBody` 返回 String），" +
+                    "故 decisionFns 留空；灵敏度=把实现退回无参 restart() → 本类恰 1 红（实施轮实测），" +
+                    "另有合成样本自证用例双向钉住判据（旧形态被识别、修复形态放行）。",
             ),
         )
     }

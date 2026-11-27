@@ -91,7 +91,13 @@ class MissingFragmentDialog(
                     if (isDisposed) return@invokeLater
                     area.text = MissingSqlFragmentSupport.extractFragment(text, refid) ?: text
                 },
-                ModalityState.nonModal(),
+                // T-PerfSweep34 券05：本框是**模态**框（DialogWrapper(project, true)），
+                // ModalityState.nonModal() 的语义是「没有模态对话框时才执行」——runnable 会一直
+                // 排队到本框关闭、模态退栈才被泵到，届时 isDisposed 已为 true，被上面的守卫丢弃，
+                // 回填永远不发生（用户点「从文件选择」选完没反应）。改 any()：模态存续期即执行。
+                // 目标是 JBTextArea.text（纯 Swing，不改 Document/PSI），无 write-safe 需求，
+                // 与同场景先例 CommunityDialog.startLoading 的 ModalityState.any() 对齐。
+                ModalityState.any(),
             )
         }
     }

@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.psi.EntityFieldCollector
 import cn.song.mybatisplus.visualizer.sql.ParamQuote
 import cn.song.mybatisplus.visualizer.xml.ParamKind
 import cn.song.mybatisplus.visualizer.xml.ParamTypeInfo
@@ -178,10 +179,20 @@ object XmlParamTypeResolver {
     fun resolveQuotes(project: Project?, namespace: String?, statementId: String): Map<String, Boolean> =
         resolveTypes(project, namespace, statementId).mapValues { (_, info) -> info.kind.quoteRequired }
 
-    /** DTO/实体字段递归收集：`p.字段名` → 类型类别；嵌套 DTO 继续递归（`p.dto.x`）。 */
+    /**
+     * DTO/实体字段递归收集：`p.字段名` → 类型类别；嵌套 DTO 继续递归（`p.dto.x`）。
+     *
+     * D254：**不使用 `allFields`**——平台实现不按名去重（本类字段先、父类后），
+     * `sink[key] =` 的后写覆盖会让父类同名字段**盖掉子类**，与真机 `Reflector`
+     * （本类字段先注册、父类同名不覆盖）方向相反。改用 [EntityFieldCollector.collectProperties]：
+     *  - 同名合并取子类；
+     *  - `static` 常量**保留**（`Reflector.addFields` 仍注册其 getter，真机 `#{p.CONST}` 可取值）；
+     *  - `serialVersionUID` / `class` / `$` 前缀不产出键（`Reflector.isValidPropertyName` 同口径）。
+     */
     private fun collectFieldTypes(prefix: String, psiClass: PsiClass, sink: MutableMap<String, ParamTypeInfo>) {
-        for (field in psiClass.allFields) {
-            val key = "$prefix.${field.name}"
+        for (field in EntityFieldCollector.collectProperties(psiClass)) {
+            val fieldName = field.name ?: continue
+            val key = "$prefix.$fieldName"
             val fieldClass = (field.type as? PsiClassType)?.resolve()
             if (fieldClass != null && isDtoLike(fieldClass)) {
                 collectFieldTypes(key, fieldClass, sink)

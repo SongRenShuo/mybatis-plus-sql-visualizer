@@ -31,15 +31,16 @@ import javax.swing.Icon
 class AnnotationSqlGutterLineMarkerProvider : LineMarkerProvider {
 
     override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? {
-        // F36（T-PerfSweep16）：组显隐门前置——组关时 isSqlAnnotation 重活零触达（原门在重活
-        // 判定之后，组关省不掉重活）；单次取 state，总闸与组显隐共用（原双路径每到达元素
-        // 3 次 app 级查找收敛为 1 次）
+        // LineMarker 必须注册在 leaf 元素：注解的 `@` token。
+        // T-PerfSweep34 券04：最便宜的 O(1) 类型早退提到**设置读取之前**——Java 文件里绝大多数
+        // leaf 不是 `@` token，原顺序让它们每个都先付一次 `PluginSettings` 应用级服务查找 +
+        // runCatching。组显隐门仍前置于重活（isSqlAnnotation）之前，F36 语义不变。
+        val token = element as? PsiJavaToken ?: return null
+        if (token.tokenType != JavaTokenType.AT) return null
+        // F36（T-PerfSweep16）：单次取 state，总闸与组显隐共用（每到达元素 3 次 app 级查找收敛为 1 次）
         val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
         if (gutterState != null && !gutterState.showGutterIcon) return null
         if (!GutterGroups.enabledFor(javaClass, gutterState)) return null // R2 分组显隐
-        // LineMarker 必须注册在 leaf 元素：注解的 `@` token
-        val token = element as? PsiJavaToken ?: return null
-        if (token.tokenType != JavaTokenType.AT) return null
         val annotation = PsiTreeUtil.getParentOfType(token, PsiAnnotation::class.java, false) ?: return null
         if (!AnnotationSqlPreviewService.isSqlAnnotation(annotation)) return null
         // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用

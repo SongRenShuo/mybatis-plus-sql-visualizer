@@ -1,0 +1,12 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.SongRenShuo/mybatis-plus-sql-visualizer",
+  "title": "MyBatis SQL Visualizer",
+  "description": "MyBatis SQL preview, runtime capture, EXPLAIN — 11 tools on IntelliJ IDEA's MCP Server.",
+  "repository": {
+    "url": "https://github.com/SongRenShuo/mybatis-plus-sql-visualizer",
+    "source": "github"
+  },
+  "version": "2026.11.27-beta.1",
+  "websiteUrl": "https://sql-visualizer.jvtools.cn/features/mcp"
+}

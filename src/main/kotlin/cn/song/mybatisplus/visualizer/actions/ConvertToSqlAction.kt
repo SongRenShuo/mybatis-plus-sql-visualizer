@@ -27,6 +27,7 @@ import cn.song.mybatisplus.visualizer.ui.gutter.PagesXmlGutterLineMarkerProvider
 import cn.song.mybatisplus.visualizer.ui.gutter.StringSqlMethodGutterLineMarkerProvider
 import cn.song.mybatisplus.visualizer.ui.gutter.XmlInlineSqlGutterLineMarkerProvider
 import cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProvider
+import cn.song.mybatisplus.visualizer.ui.nav.MapperNavigationTargets
 import cn.song.mybatisplus.visualizer.xml.XmlInlineSqlDetector
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
@@ -162,35 +163,57 @@ class ConvertToSqlAction : AnAction() {
         // T-M25-03：光标在 MyBatis SQL 注解内 → 注解预览（@Select/@Update/Provider 族）
         val annotation = PsiTreeUtil.getParentOfType(element, PsiAnnotation::class.java, false)
         if (annotation != null && AnnotationSqlPreviewService.isSqlAnnotation(annotation)) {
-            val contextRef = java.util.concurrent.atomic.AtomicReference<cn.song.mybatisplus.visualizer.context.PreviewSourceContext?>()
-            SqlPreviewService.previewAsync(project, {
-                val context = AnnotationSqlPreviewService.resolveSourceContext(annotation, project)
-                contextRef.set(context)
-                AnnotationSqlPreviewService.preview(annotation, project, context)
-            }) { result ->
-                SqlPreviewService.showResult(project, result, sourceLocation, contextRef.get())
-            }
+            previewSqlAnnotation(project, annotation, sourceLocation)
             return
         }
 
         // PSI 转换在后台线程执行（EDT 上慢操作会被 2025.3+ 禁止），回调在 EDT 渲染
         val wrapperContext = java.util.concurrent.atomic.AtomicReference<cn.song.mybatisplus.visualizer.context.PreviewSourceContext?>()
         val kotlinWrapperUnavailable = java.util.concurrent.atomic.AtomicBoolean(false)
+        // T-PreviewFallbackEdtSlowOps（2026-11-26 真机 SEVERE「Slow operations are prohibited on EDT」，
+        // 平台点名本动作）：Mapper XML 兜底的锚点解析走自定义 fileBasedIndex
+        // （`MapperNamespaceIndex` → `FileBasedIndex.getContainingFiles`），必须在 compute 块（BGT +
+        // ReadAction）里做；放到下面的 onResult 回调里就是在 EDT 上查索引。回调只消费这里的预解析结果。
+        val mapperXmlTags = java.util.concurrent.atomic.AtomicReference<List<XmlTag>>(emptyList())
+        // T-PerfSweep34 券01（2026-11-26 第十一期性能调研 §4.1）：L110 只修了九条兜底里的第一条
+        // （Mapper XML），第 8 条 tryJpaFallback 的第 5 步仍在 EDT 上同步跑
+        // `previewRepositoryDeclaration` → JpaEntityResolver.resolve → HibernateNamingConfigProbe
+        // （FilenameIndex 索引查询 + readText 读盘），与 L110 是同一回调、同一类操作。此处前置到
+        // compute 块：回调只消费结果。该预计算不记历史（computeRepositoryDeclaration 无副作用），
+        // 历史由回调在确认展示时补记。
+        val repositoryDeclaration =
+            java.util.concurrent.atomic.AtomicReference<SqlPreviewService.RepositoryDeclarationProbe?>(null)
         SqlPreviewService.previewAsync(project, {
             kotlinWrapperUnavailable.set(kotlinWrapperUnavailableAt(file, offset))
             val context = service.resolveWrapperSourceContext(element)
             wrapperContext.set(context)
-            service.preview(element, context)
+            val result = try {
+                service.preview(element, context)
+            } catch (t: Throwable) {
+                // compute 抛错时回调仍会走兜底链（既有语义）——异常分支同样要备料，
+                // 否则 XML 档/Repository 档会在"预览计算失败"这条路径上静默失效。
+                mapperXmlTags.set(mapperXmlTagsFor(element))
+                repositoryDeclaration.set(probeRepositoryDeclaration(service, element))
+                throw t
+            }
+            // 只有 Wrapper 链未命中才需要兜底锚点：命中路径零额外索引查询。
+            if (result == null) {
+                mapperXmlTags.set(mapperXmlTagsFor(element))
+                repositoryDeclaration.set(probeRepositoryDeclaration(service, element))
+            }
+            result
         }) { result ->
             if (result != null) {
                 // 统一展示入口（M10-03）：按显示方式（F-16）弹窗 / 工具窗口 / 两者
                 SqlPreviewService.showResult(project, result, sourceLocation, wrapperContext.get())
-            } else if (!tryIbatisCallFallback(project, element, sourceLocation)
+            } else if (!tryMapperXmlMethodFallback(project, mapperXmlTags.get(), sourceLocation)
+                && !tryMapperAnnotationMethodFallback(project, element, sourceLocation)
+                && !tryIbatisCallFallback(project, element, sourceLocation)
                 && !tryIbatisMethodFallback(project, element, sourceLocation)
                 && !tryHqlFallback(service, project, element, sourceLocation)
                 && !tryNamedQueryFallback(service, project, element, sourceLocation)
                 && !tryJdbcTemplateFallback(project, element, sourceLocation)
-                && !tryJpaFallback(service, project, element, sourceLocation)
+                && !tryJpaFallback(service, project, element, repositoryDeclaration.get(), sourceLocation)
                 && !tryMethodBodyStringSqlFallback(project, element, sourceLocation)) {
                 // 均未命中 → 回落文件级 SQL 注解候选（M26-A，Mapper 接口场景）
                 showAnnotationCandidates(
@@ -199,6 +222,113 @@ class ConvertToSqlAction : AnAction() {
                 )
             }
             // 任一 tryXxxFallback 返回 true 时已在内部触发预览 + showResult，无需额外操作
+        }
+    }
+
+    /**
+     * Mapper XML 兜底的锚点：光标处接口方法 → 同 namespace XML 里的同名语句（含 `databaseId` 变体）。
+     *
+     * **只许在后台线程的 ReadAction 内调用**：解析走自定义 fileBasedIndex
+     * （`MapperNamespaceIndex.getMapperXmlFiles` → `FileBasedIndex.getContainingFiles`），EDT 上调它
+     * 就是 `SlowOperations` 断言源（2026-11-26 真机 SEVERE，见
+     * `20261126-1514-T-PreviewFallbackEdtSlowOps` 计划）。非 fatal 异常吞成空表——尤其
+     * `IndexNotReadyException` 不得冒泡到 `previewAsync`（它会把「预览无命中」变成 runWhenSmart
+     * 重试，改变语义）。
+     *
+     * `internal` 供测试直调（无 UI 副作用）。
+     */
+    internal fun mapperXmlTagsFor(element: PsiElement): List<XmlTag> = try {
+        MapperNavigationTargets.nearestMapperMethod(element)
+            ?.let { MapperNavigationTargets.statementTagsFor(it) }
+            ?: emptyList()
+    } catch (t: Throwable) {
+        if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) throw t
+        emptyList()
+    }
+
+    /**
+     * Mapper XML 绑定兜底（T-MapperMethodSqlPreview，2026-11-26）：光标在 Mapper **接口方法**上
+     * （方法名、参数、返回类型任意位置）→ 该方法在同 namespace XML 中的语句预览。
+     *
+     * 与方法行预览图标同源：定位走 [MapperNavigationTargets.statementTagsFor]（接口判定 + 同名语句，
+     * 含 `databaseId` 变体），渲染走 [XmlSqlGutterLineMarkerProvider.previewStatementTag]（与 XML
+     * 语句行点击、gutter 图标点击逐字节一致）。单条直接预览；多方言变体弹选择器；无 XML 语句
+     * 返回 false 继续回落（注解候选 / 通用未找到），不出错源提示。
+     *
+     * 排在 fallback 链首位：iBatis / JDBC / HQL 等家族的判据都看方法体或调用形态，对无 body 的
+     * Mapper 接口方法本来就不命中，顺序不改变它们的行为；MyBatis XML 绑定语义最直接。
+     *
+     * `tags` 是 [mapperXmlTagsFor] 在 `previewAsync` 的 compute 块里预解析的结果——本函数只做分发
+     * （单条直预览 / 多变体弹选择器），不查索引（T-PreviewFallbackEdtSlowOps）。
+     */
+    private fun tryMapperXmlMethodFallback(project: Project, tags: List<XmlTag>, sourceLocation: String?): Boolean {
+        if (tags.isEmpty()) return false
+        if (tags.size == 1) {
+            previewXmlStatementTag(project, tags[0], sourceLocation)
+            return true
+        }
+        val rows = tags.map { tag ->
+            val databaseId = tag.getAttributeValue("databaseId")
+            val line = tag.containingFile.viewProvider.document
+                ?.getLineNumber(tag.textRange.startOffset)?.plus(1) ?: 0
+            SqlSelectionDialog.Row.of(
+                buildString {
+                    append(tag.name)
+                    if (!databaseId.isNullOrBlank()) append(" [").append(databaseId).append(']')
+                    append("（XML 第 ").append(line).append(" 行）")
+                },
+                tag.text,
+            )
+        }
+        SqlSelectionDialog(project, tags, rows) { selected ->
+            previewXmlStatementTag(project, selected, sourceLocation)
+        }.show()
+        return true
+    }
+
+    /** 渲染一条 Mapper XML 语句（复用 XML 语句行 / 方法行预览图标同一条预览链）。 */
+    private fun previewXmlStatementTag(project: Project, tag: XmlTag, sourceLocation: String?) {
+        XmlSqlGutterLineMarkerProvider.previewStatementTag(project, sourceLocation) {
+            (tag.containingFile as? XmlFile)?.let { file -> file to tag }
+        }
+    }
+
+    /**
+     * Mapper 注解绑定兜底（T-MapperPreviewDedupAndAnnotationShortcut，2026-11-26 用户报障）：
+     * 光标停在带 SQL 注解的方法声明处（方法名 / 参数 / 返回类型 / 方法 JavaDoc）→ 直接预览
+     * **该方法自己的**注解 SQL。
+     *
+     * 此前只有「光标落在 `PsiAnnotation` 内」才直预览；停在方法行（注解在上一行）会一路回落到
+     * 文件级候选列表 [showAnnotationCandidates]，用户被迫从全文件注解里挑一条。判据纯 PSI：
+     * `PsiMethod.modifierList.annotations` 里首个 `isSqlAnnotation` 命中的注解；光标在方法外
+     * （类体空白 / import / 字段）仍返回 false，保留列表兜底语义。
+     */
+    private fun tryMapperAnnotationMethodFallback(project: Project, element: PsiElement, sourceLocation: String?): Boolean {
+        val annotation = sqlAnnotationForMethod(element) ?: return false
+        previewSqlAnnotation(project, annotation, sourceLocation)
+        return true
+    }
+
+    /**
+     * 光标所在方法上的首个 SQL 注解（无方法 / 无注解返回 null）。
+     * `internal` 供测试直调（不含任何 UI 副作用）；判定与快捷键回落共用同一份。
+     */
+    internal fun sqlAnnotationForMethod(element: PsiElement): PsiAnnotation? {
+        val method = PsiTreeUtil.getParentOfType(element, PsiMethod::class.java, false) ?: return null
+        return method.modifierList.annotations.firstOrNull {
+            AnnotationSqlPreviewService.isSqlAnnotation(it)
+        }
+    }
+
+    /** SQL 注解预览（注解内光标与方法声明处两处共用，渲染链一份）。 */
+    private fun previewSqlAnnotation(project: Project, annotation: PsiAnnotation, sourceLocation: String?) {
+        val contextRef = java.util.concurrent.atomic.AtomicReference<cn.song.mybatisplus.visualizer.context.PreviewSourceContext?>()
+        SqlPreviewService.previewAsync(project, {
+            val context = AnnotationSqlPreviewService.resolveSourceContext(annotation, project)
+            contextRef.set(context)
+            AnnotationSqlPreviewService.preview(annotation, project, context)
+        }) { result ->
+            SqlPreviewService.showResult(project, result, sourceLocation, contextRef.get())
         }
     }
 
@@ -350,7 +480,13 @@ class ConvertToSqlAction : AnAction() {
      * JPA 三态回落（波次一）：派生查询 / @Query / CriteriaQuery —— 命中任一即触发预览并返回 true。
      * 调用方在返回 true 后立即 return，不再走 MyBatis 注解候选回落。
      */
-    private fun tryJpaFallback(service: SqlPreviewService, project: Project, element: PsiElement, sourceLocation: String?): Boolean {
+    private fun tryJpaFallback(
+        service: SqlPreviewService,
+        project: Project,
+        element: PsiElement,
+        repositoryDeclaration: SqlPreviewService.RepositoryDeclarationProbe?,
+        sourceLocation: String?,
+    ): Boolean {
         val method = PsiTreeUtil.getParentOfType(element, PsiMethod::class.java, false)
         // 1. JPA 回落：@Query（优先检查——@Query 方法即使方法名匹配派生查询模式，也走 JPQL 路径）
         if (method != null && JpqlQueryLocator.hasQueryAnnotation(method)) {
@@ -378,8 +514,37 @@ class ConvertToSqlAction : AnAction() {
         // 5. JPA 回落（F-1 修复）：Repository **接口方法声明行**——`deleteAllInBatch()` 这类 bulk 形态
         //    既不在派生查询线（无 `By`、`*All` 词干白名单不放行 `InBatch`）也无调用表达式，
         //    声明行光标下零可达；此处按接口泛型解析实体后走同一条 CRUD 模板线。
-        if (tryRepositoryDeclarationFallback(service, project, method, sourceLocation)) return true
+        //    T-PerfSweep34 券01：实体解析（FilenameIndex 索引查询 + 读配置）已在 compute 块预计算，
+        //    此处只消费 probe；位置与优先级保持原链序不变。
+        if (tryRepositoryDeclarationFallback(service, project, repositoryDeclaration, sourceLocation)) return true
         return false
+    }
+
+    /**
+     * T-PerfSweep34 券01：[tryRepositoryDeclarationFallback] 的 compute 块备料——
+     * 前置门 + 纯计算都在 BGT 完成，返回 null 表示「这条兜底不适用」。
+     *
+     * **只许在后台线程的 ReadAction 内调用**：链内 `JpaEntityResolver.resolve` →
+     * `HibernateNamingConfigProbe.projectUsesComponentPath` 会查 `FilenameIndex` 并 `readText`
+     * 读配置文件，EDT 上调它就是 `SlowOperations` 断言源（与 L110 同型）。
+     *
+     * 门序与 [JpaCrudOperationConverter.convertRepositoryDeclaration] 内部一致（接口判定 →
+     * 方法名名单），把「不适用」的判定提前，省掉不必要的那次索引查询。
+     */
+    private fun probeRepositoryDeclaration(
+        service: SqlPreviewService,
+        element: PsiElement,
+    ): SqlPreviewService.RepositoryDeclarationProbe? {
+        val method = PsiTreeUtil.getParentOfType(element, PsiMethod::class.java, false) ?: return null
+        // 与 tryJpaFallback 的前四步同一口径：@Query / 派生查询 / CriteriaQuery 优先，
+        // 它们命中时第 5 步本就不会走到——此处提前排除，省掉白算。
+        if (JpqlQueryLocator.hasQueryAnnotation(method)) return null
+        if (DerivedMethodLocator.isDerivedQuery(method)) return null
+        if (CriteriaQueryLocator.locate(element) != null) return null
+        val iface = method.containingClass ?: return null
+        if (!iface.isInterface) return null
+        val result = service.computeRepositoryDeclaration(method) ?: return null
+        return SqlPreviewService.RepositoryDeclarationProbe(method, result)
     }
 
     /**
@@ -387,17 +552,20 @@ class ConvertToSqlAction : AnAction() {
      *
      * 只认接口声明（实现类方法由既有路径覆盖），实体解析走 `resolveRepositoryEntityFromClass` 的
      * 严格基类判定——非 Repository 接口返回 null，不会误亮普通接口方法。
+     *
+     * T-PerfSweep34 券01：重活（实体解析 → 索引查询 + 读盘）已由 [probeRepositoryDeclaration]
+     * 在 compute 块预计算，本函数**只消费结果**；历史记录在此补记（预计算刻意不记，避免前序
+     * 兜底命中时的白算污染历史）。
      */
     private fun tryRepositoryDeclarationFallback(
         service: SqlPreviewService,
         project: Project,
-        method: PsiMethod?,
+        probe: SqlPreviewService.RepositoryDeclarationProbe?,
         sourceLocation: String?,
     ): Boolean {
-        val iface = method?.containingClass ?: return false
-        if (!iface.isInterface) return false
-        val preview = service.previewRepositoryDeclaration(method) ?: return false
-        SqlPreviewService.showResult(project, preview, sourceLocation)
+        if (probe == null) return false
+        service.recordPreviewHistory(probe.result, probe.anchor)
+        SqlPreviewService.showResult(project, probe.result, sourceLocation)
         return true
     }
 
