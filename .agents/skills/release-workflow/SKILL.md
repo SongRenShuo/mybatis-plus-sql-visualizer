@@ -55,7 +55,9 @@ description: 插件双通道发行作业法——把 master 上的发行提交�
 写文案的硬规矩：
 
 - 新块置顶时同批删上一块那行评分引导句，句末 ≤60 字中性措辞；块内禁全角 `（ ） ：`；`@注解名` 用 `<code>` 包裹（LESSONS L27）。
-- 用户可见更新日志的条目顺序＝**新功能在前 → 修复其次 → 优化/提速收尾**（2026-11-19 用户口径，v2026.11.19-beta.1 首次执行）。适用四处：change-notes 本版块 / preview.changeNotes / 发行说明「这一版有什么」/ Gitee 正文；混装条目按主要性质归类。已发 zip 内嵌描述是打包瞬间文本——发行后才发现顺序问题，只改仓内 `change-notes.html` / `preview.update.json` + PATCH Gitee 正文并在落账说明「zip 内嵌随下版」，不为排序 tag 前移（详版：发行检查清单 §1.2）。
+- 用户可见更新日志的条目顺序＝**新功能在前 → 修复其次 → 优化/提速收尾**（2026-11-19 用户口径，v2026.11.19-beta.1 首次执行）。适用四处：change-notes 本版块 / preview.changeNotes / 发行说明「这一版有什么」/ Gitee 正文；混装条目按主要性质归类。
+  - **累计条目必须按性质归位，不许整块追加**（2026-11-27 用户报障，v2026.11.27-beta.1 踩到）：内测系列要求「内容累计」（上一发的能力并入本发块），但**并入 ≠ 追加在末尾**。整块贴到 `<ul>` 尾部会让上一发的新功能/修复落到本发的优化段之后，读者看到的顺序就成了「优化 → 新功能 → 修复」。正确做法：先把本发与上一发的全部条目合成一张表，逐条标性质（新功能/修复/优化），再按「新功能 → 修复 → 优化」整体重排；`CHANGELOG.md` 的 `### Added` / `### Fixed` / `### Changed` 分节天然有序，重排后**逐条对照三处清单（html `<li>` / preview.changeNotes / 内测说明编号）条数与顺序一致**，`check-change-notes.py` 的 C7 只比对本版 `<li>` 与 preview 逐条相等，**看不出跨分区错位**，所以这条只能靠人工对三处。
+  - 已发 zip 内嵌描述是打包瞬间文本——发行后才发现顺序问题，只改仓内 `change-notes.html` / `preview.update.json` + PATCH Gitee 正文并在落账说明「zip 内嵌随下版」，不为排序 tag 前移（详版：发行检查清单 §1.2）。PATCH 只改正文时**别用 `gitee-release-update.py`**（它会删附件重传），直接 by-id `PATCH /releases/{id}` 传 `tag_name` / `name` / `body` / `prerelease` 四字段，漏 `prerelease` 会把内测版静默改成正式版。
 - 源码级机器判据必须跑在 `git tag` 之前（LESSONS L25；`release-beta.ps1` 的 gates 就是下面两条、本地零 Gradle）：
   ```
   python -I dev-support/check-change-notes.py --version {版本}
