@@ -1583,6 +1583,30 @@ align 与 valign 都不在），默认 `vertical-align: middle` 下，两列说�
 
 **Seen 1× (2026-11-27)**
 
+### L121 CI 抖动先降暴露面、再分级愈合；删大缓存（重解包）只能当第二级
+
+**规则**：处置 CI 偶发失败时按「暴露面 → 愈合成本 → 掩盖风险」三步走，别一上来就清最大的那个缓存。
+① **先降暴露面**：找到抖动所依赖的那份"一次性扫描结果"（本仓是 IPGP 的 IDE 布局索引），把它搬进
+CI 本来就跨 job 复用的缓存位置——暴露面从「每个 job 一次」降到「索引失效的 job」。
+② **再分级愈合**：一级只做便宜的（停 daemon + 清项目侧派生缓存 + `--max-workers=1`），
+删 `transforms/*/transformed/idea*` 这类要重解包数 GB 的动作放二级，干净工作树放三级；每级都打耗时。
+③ **别把红当抖动重试**：先看本次日志是不是同一错误签名，重试轮同样红就是确定性错配（见 L120）。
+
+**证据**：CI zip-FS 竞态（`ClosedFileSystemException` →「Could not find bundled plugin with ID:
+com.intellij.database」）2026-11-27 收口（`977b20d71`）。旧版愈合无条件删 `transformed/idea*`（每片重解包
+~4.7GB）；run 45966781755 的 test(3) 证明一级（不动 transforms）就够（1m43s 红 → 8m50s 绿）。
+降暴露面走 IPGP 官方属性 `org.jetbrains.intellij.platform.intellijPlatformCache`：把 `caching.path`
+（官方文档：装 "serialized IDE layout indices used for bundled plugin and module dependency resolution"）
+指到 `GRADLE_USER_HOME/caches/ipgp-platform-cache`，本仓 `gradle-home-cache-includes: caches` 会带着走。
+写进 `build.gradle.kts` 的 `intellijPlatform { caching { } }` 被 IPGP finalize 拦住，走 `-P` 才成。
+
+**正例**：先读官方扩展文档弄清那份缓存到底是什么、由谁读；只让 CI 生效（本机与多工作树保持项目内默认，
+否则多工作树共用一份 IPGP 缓存就是新的踩踏面）；判定与分级都进 `-SelfTest`。
+**反例**：把「删掉所有缓存再来一次」当通用解法（成本付在关键路径上）；或把 CI-only 的路径写死在
+`build.gradle.kts` 里、把开发者环境一起改道。
+
+**Seen 1× (2026-11-27)**
+
 
 ## 升级记录
 

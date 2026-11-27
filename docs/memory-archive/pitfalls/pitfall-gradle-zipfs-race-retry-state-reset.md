@@ -4,7 +4,7 @@ description: CI 偶发 ClosedFileSystemException（配置期解析 :compileClass
 metadata:
   node_type: memory
   type: project
-  updated: 2026-11-06
+  updated: 2026-11-27
   originSessionId: sess_1caa1cd6-ecff-4769-98f4-48bfeeca1eb0
 ---
 
@@ -50,5 +50,28 @@ java.nio.file.ClosedFileSystemException
 
 若四级仍红：别再加级别。下一步是让 IDE 不再是 zip FS——IPGP 支持 `intellijPlatform.localPath`
 指向**解包好的普通目录**，CI 预先把发行版解成目录即可从根上绕开（代价：改 workflow 与缓存键）。
+
+## 2026-11-27 进展：降暴露面落地 + 三级愈合（原「localPath」前提被推翻）
+
+- **原文最后那条前提不成立**：失败读的路径是
+  `.../caches/9.7.0/transforms/<hash>/transformed/ideaIU-2024.3.7.1-win/plugins/DatabaseTools/lib/database-plugin.jar`
+  ——外层已经是**解包后的普通目录**，炸的是 plugin-structure 缓存里的**内层 jar 的 ZipFS**（Gradle 的
+  `NioFileInterceptors.intercept_exists` 转进已关闭的 zip FS）。所以 `intellijPlatform.localPath` 改不动这里。
+- **能缩暴露面的门是 `caching.path`**（IPGP 官方扩展文档）：它默认在 `[rootProject]/.intellijPlatform`，
+  装的是「serialized IDE layout indices used for bundled plugin and module dependency resolution」——
+  每次 job 配置期扫 `plugin.xml` 描述符，就是从这份索引缺位开始的。CI 把它指到
+  `GRADLE_USER_HOME/caches/ipgp-platform-cache`（本仓 CI `gradle-home-cache-includes: caches`，会随
+  Gradle 缓存跨 job/跨轮带走；实测 `GRADLE_USER_HOME=D:\.gradle` 跨 job 稳定），下游 job 恢复索引后
+  不再逐 job 扫描 → 暴露面从「13 job/轮」降到「索引失效的那些 job」。
+  注入点放 `dev-support/ci/run-gradle-retry.ps1`（CI 且 `GRADLE_USER_HOME` 在场才生效），**本机/多工作树
+  保持项目内默认**（共用一份 IPGP 缓存是新的踩踏面）。
+- **写进 `build.gradle.kts` 的 `intellijPlatform { caching { … } }` 走不通**：IPGP 已 finalize，
+  报 `The value for extension 'caching' property 'path' is final and cannot be changed any further`。
+  必须走官方 Gradle property `org.jetbrains.intellij.platform.intellijPlatformCache`（`-P` 或
+  `ORG_GRADLE_PROJECT_*`）。
+- **愈合改三级**：L1 停 daemon + 清项目侧 IPGP 缓存 + `--max-workers=1`（**不动** transforms）→
+  L2 仍命中才删 `transformed/idea*`（重解包 ~4.7GB）→ L3 仍命中才退干净工作树（仅 CI）。
+  上一版无条件付 L2 的钱；run 45966781755 的 test(3) 证明 L1 就够。
+- **未验**：概率是否真的下降（原 ~4/25 片）需要攒多轮读数；单轮绿不算证据。
 
 相关：[[pitfall-ci-powershell-in-workflow-needs-local-dryrun]]、[[pitfall-ipgp-product-releases-cache-stale]]
