@@ -3,7 +3,7 @@
 > 拆稿说明：CSDN 走教程向——开头明说「适合谁」，结尾给可执行检查清单。表格 4 列。
 > 发布设置：原创、公开、分类「后端」、标签 `MyBatis` / `IntelliJ IDEA` / `SQL` / `插件`，封面用 `封面-csdn-16x9.png`（1800×1012）。
 > 摘要（见下「摘要」段）：不写方案对比，写「区间怎么读 + 装不上怎么退」。
-> 图用 `../img-20261127/upload/` 的 1200px 版。
+> 图用 `https://gitee.com/SongRenShuo/mybatis-plus-sql-visualizer/raw/master/docs/%E5%86%85%E5%AE%B9%E8%90%A5%E9%94%80/img-20261127/upload/` 的 1200px 版。
 
 **摘要**：IDEA 2026.3 于 11 月 24 日转正式版，MyBatis 系插件当天就有两家装不上。本文讲清插件兼容区间怎么读（build 号与 IDE 版本的对应）、怎么自己查（插件页 / Versions 标签 / 公开接口三条路）、八家实查结果，以及装不上时的四条路——其中「退到旧版插件」是最被低估的一条，配了完整的版本阶梯。
 
@@ -33,7 +33,7 @@
 - `since-build`：最低能装的 IDE 版本。写 251，2025.1 以下装不上。
 - `until-build`：最高能装。**留空 = 无上限**，页面渲染成 `2024.3+` 这种加号形态：
 
-![连续五个版本的 Compatibility Range 都是 2024.3+](../img-20261127/upload/fig5-ours-2024.3plus.png)
+![连续五个版本的 Compatibility Range 都是 2024.3+](https://gitee.com/SongRenShuo/mybatis-plus-sql-visualizer/raw/master/docs/%E5%86%85%E5%AE%B9%E8%90%A5%E9%94%80/img-20261127/upload/fig5-ours-2024.3plus.png)
 
 另外，区间按产品线分开声明：Ultimate、Community、Android Studio 各一份。MyBatis Log Ultra 现在 Ultimate 面到 2026.3，Community 面只到 2025.3。
 
@@ -41,7 +41,7 @@
 
 作者逐个大版本适配，不是自动跟随。MybatisLogFormat 的更新说明就是证据：
 
-![更新说明逐条记录 adapt the 20xx.x version，从 2.3.3 到 2.4.8](../img-20261127/upload/fig1-whats-new.png)
+![更新说明逐条记录 adapt the 20xx.x version，从 2.3.3 到 2.4.8](https://gitee.com/SongRenShuo/mybatis-plus-sql-visualizer/raw/master/docs/%E5%86%85%E5%AE%B9%E8%90%A5%E9%94%80/img-20261127/upload/fig1-whats-new.png)
 
 写死是「验证到这一版为止」的诚实声明；留空是愿意让未验证版本先装着试。两种都合理，但对常年不升级 IDE 的团队，后果完全不同。
 
@@ -55,7 +55,7 @@
 
 这里能看到每个历史版本自己的区间，也是「退版」的入口。
 
-![MyBatis Log Free：1.3.1 是 2026.2+，1.3.0 是 2018.3+](../img-20261127/upload/fig2-logfree-versions.png)
+![MyBatis Log Free：1.3.1 是 2026.2+，1.3.0 是 2018.3+](https://gitee.com/SongRenShuo/mybatis-plus-sql-visualizer/raw/master/docs/%E5%86%85%E5%AE%B9%E8%90%A5%E9%94%80/img-20261127/upload/fig2-logfree-versions.png)
 
 注意这张图的两端：最新版只给 2026.2 及以上，而 2022 年 3 月的 1.3.0 是 `2018.3+`。IDE 停在 2024.x 的话，新版装不上，旧版反而能装。
 
@@ -79,7 +79,7 @@ curl -s "https://plugins.jetbrains.com/api/plugins/14292/updates?size=5" \
 | Mybatis-Flex-Helper | 2026.1 — 2026.2 | **不能** | 不能 |
 | Jtools-Mybatis-Log | 2017.1 — 2026.3.1 | 能 | 能 |
 | MybatisLogFree（fork） | 2025.1+ | 能 | 2025.1 起能 |
-| MyBatis SQL Visualizer | 2024.3+ | 能 | 能 |
+| **MyBatis SQL Visualizer** | 2024.3+ | 能 | 能 |
 
 各家最新版本与发布日期：MyBatisX 1.7.9（11-18）、MyBatis Log Free 1.3.1（07-27）、MybatisLogFormat 2.4.8（07-19）、MyBatis Log Ultra 4.0.20（05-25）、Mybatis-Flex-Helper 1.8（04-11）、Jtools-Mybatis-Log 1.1.3（09-24）、MybatisLogFree 2.0.6（09-17）、本插件 2026.11.27。累计下载从 566 万到 390 不等。
 
@@ -90,7 +90,7 @@ curl -s "https://plugins.jetbrains.com/api/plugins/14292/updates?size=5" \
 
 ## 四、区间写着支持，也可能崩
 
-![五星评论里贴着 NoClassDefFoundError 与 IU-262.10315.125](../img-20261127/upload/fig3-review-noclassdeffound.png)
+![五星评论里贴着 NoClassDefFoundError 与 IU-262.10315.125](https://gitee.com/SongRenShuo/mybatis-plus-sql-visualizer/raw/master/docs/%E5%86%85%E5%AE%B9%E8%90%A5%E9%94%80/img-20261127/upload/fig3-review-noclassdeffound.png)
 
 2026-09-09 有用户在 MybatisLogFormat 打 5 星却写着报错：`IU-262.10315.125` 上抛
 
@@ -115,7 +115,7 @@ java.lang.NoClassDefFoundError: org/apache/commons/collections/CollectionUtils
 
 最被低估。同一个插件的历史版本往往是一条连续阶梯：
 
-![MybatisLogFormat 的版本阶梯：2.4.8→2026.2、2.4.7→2026.1、2.4.6→2025.3、2.4.3→2024.3](../img-20261127/upload/fig4-retreat-ladder.png)
+![MybatisLogFormat 的版本阶梯：2.4.8→2026.2、2.4.7→2026.1、2.4.6→2025.3、2.4.3→2024.3](https://gitee.com/SongRenShuo/mybatis-plus-sql-visualizer/raw/master/docs/%E5%86%85%E5%AE%B9%E8%90%A5%E9%94%80/img-20261127/upload/fig4-retreat-ladder.png)
 
 这样基本总能找到覆盖你手上 IDE 的版本。代价是功能冻结，后续修复拿不到——作为过渡可以，长期停在这里要接受它不再维护。
 
@@ -137,7 +137,7 @@ java.lang.NoClassDefFoundError: org/apache/commons/collections/CollectionUtils
 
 ## 七、关于本文作者维护的插件
 
-表格最后一行是本文作者的插件（MyBatis SQL Visualizer）：`since-build 243` + `until-build` 留空，页面显示 `2024.3+`，2024.3~2026.3 全线可装；每次发行在 243/253/262 三个目标跑兼容校验；免费开源；MCP 工具面需要 IDEA 2025.2+，SQL 执行是 Ultimate 专属，Community 版优雅降级。门槛如实写，不夸大。
+表格最后一行是本文作者的插件（**MyBatis SQL Visualizer**）：`since-build 243` + `until-build` 留空，页面显示 `2024.3+`，2024.3~2026.3 全线可装；每次发行在 243/253/262 三个目标跑兼容校验；免费开源；MCP 工具面需要 IDEA 2025.2+，SQL 执行是 Ultimate 专属，Community 版优雅降级。门槛如实写，不夸大。
 
 ## 数据说明
 

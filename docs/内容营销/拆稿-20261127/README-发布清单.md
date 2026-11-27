@@ -1,7 +1,14 @@
 # 拆稿与发布清单（2026-11-27）
 
+**状态：三平台已发布。**
+- CSDN：https://blog.csdn.net/weixin_66219471/article/details/171493618 （审核中；用户手动补封面与插件名加粗）
+- 知乎：https://zhuanlan.zhihu.com/p/2109663091604694014 （发布即公开，已进专栏，8 图 / 5290 字符）
+- 掘金：https://juejin.cn/post/7712657463330603059 （已进专栏，5 图走 Gitee 外链直出）
+
 底稿：[`../老版本承接-2024x-2025x-还能装谁.md`](../老版本承接-2024x-2025x-还能装谁.md)（2115 字，6 节，5 图）
-配图：[`../img-20261127/upload/`](../img-20261127/upload/)（1200px 上传版）
+配图：[`../img-20261127/upload/`](../img-20261127/upload/)（1200px 上传版）；线上地址走 Gitee raw：
+`https://gitee.com/SongRenShuo/mybatis-plus-sql-visualizer/raw/master/docs/<percent-encoded 路径>`
+（jsDelivr 不可用——该仓超过 jsDelivr 每包 50MB 限制，只有早前被缓存过的图能取）
 
 ## 一、三版差异
 
@@ -44,6 +51,30 @@
 
 ## 五、发布后回填
 
-- `../已发布内容清单.md`：知乎专栏条目 6 篇 → 7 篇；掘金 3 → 4；CSDN 3 → 4；概览表篇数同步。
+- `../已发布内容清单.md`：知乎专栏 6 → 7 篇；掘金 3 → 4；CSDN 3 → 4；概览表篇数同步。
 - 回填字段：链接、发布日期、摘要、字数、图数、标签、是否进专栏。
 - 若知乎进了审核队列（阅读数 0、列表搜不到），按既往口径记为「审核中」，**不要删了重发**。
+
+## 六、本次跑通的机器发布路径（下次可复用）
+
+本次三平台全部由 Edge CDP 驱动完成，脚本留在 `.local/cdp/`（gitignored）。要点：
+
+**共通前提**：图片必须先有公网地址。仓库超 jsDelivr 50MB 上限，用 Gitee raw：
+`https://gitee.com/SongRenShuo/mybatis-plus-sql-visualizer/raw/master/docs/<URL 编码后的中文路径>`。
+CSDN 与知乎会自己抓取并转存到各自 CDN；**掘金不会转存**，只保留外链。
+
+**CSDN（CKEditor 4）**
+- 编辑器在 iframe 里（`.cke_wysiwyg_frame`），正文用 `CKEDITOR.instances.editor.setData(html)` 灌 HTML 最稳；md 需先转 HTML（表格/代码块/图片各按语义标签）。
+- 标题是 `#txtTitle`，用原生 setter + `input` 事件。
+- 标签是受控组件，必须**先把「添加文章标签」用真实鼠标点开**（元素在视口外，要先 `scrollIntoView`），再用 CDP 发 Enter；JS 合成事件不生效。
+- 点「发布博客」后跳 `/mp_blog/creation/success/<id>` 即成功。
+
+**知乎（Draft.js）**
+- **不要用剪贴板粘贴**：Ctrl+V 会被图片分支吃掉，只落进一张图。用工具栏「导入 → 导入文档 MD/Doc」，喂 `.md` 文件，一次成型。
+- 「导入」菜单项文字带 `\u200b`，匹配前要剥零宽字符；`.md` 的 file input 有两个，取最后一个（前一个是「直答知识库」上传器，会永久卡在「上传中」）。
+- 发布设置：封面 file input 的 accept 含 `.jpeg`；话题按正文自动识别；创作声明在 `y≈450` 的下拉里选「包含 AI 辅助创作」。
+
+**掘金（CodeMirror 5 + byte-select）**
+- 正文 `document.querySelector('.CodeMirror').CodeMirror.setValue(md)`。
+- 标签是 `byte-select`，`input[type=text]` 选不中；先点 `.byte-select__input` 并**确认 `document.activeElement` 就是它**，再输入 `MyBatis`，然后点 `.byte-select__dropdown` 里的 `MyBatis` 选项。焦点没落对时 Ctrl+A 会全选 CodeMirror 正文。
+- 封面 `input.file-input`；「确定并发布」按钮要点可见实例（隐藏模板按钮 `getBoundingClientRect()` 为 0）。

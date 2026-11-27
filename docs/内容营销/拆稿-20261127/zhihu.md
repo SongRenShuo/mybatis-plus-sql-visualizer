@@ -1,6 +1,6 @@
 # 知乎专栏版
 
-> 拆稿说明：正文按知乎专栏习惯用 H3 分层，表格压到 4 列（版本号与下载量改写成正文一句）。图用 `../img-20261127/upload/` 的 1200px 版。
+> 拆稿说明：正文按知乎专栏习惯用 H3 分层，表格压到 4 列（版本号与下载量改写成正文一句）。图用 `https://gitee.com/SongRenShuo/mybatis-plus-sql-visualizer/raw/master/docs/%E5%86%85%E5%AE%B9%E8%90%A5%E9%94%80/img-20261127/upload/` 的 1200px 版。
 > 发布设置：封面 16:9、话题 MyBatis、创作声明「包含 AI 辅助创作」、收录进专栏「MyBatis 与 SQL 调试」。
 > 注意：知乎粘贴 Markdown 时会弹「是否转成 Markdown 格式」，必须点确认，图片与表格才会正确渲染。
 
@@ -31,7 +31,7 @@
 
 留空在页面上长这样——这是我们自己插件的版本页，每个版本都写 `2024.3+`，加号就是「没有上限」：
 
-![五个连续版本的 Compatibility Range 全部显示为 2024.3+](../img-20261127/upload/fig5-ours-2024.3plus.png)
+![五个连续版本的 Compatibility Range 全部显示为 2024.3+](https://gitee.com/SongRenShuo/mybatis-plus-sql-visualizer/raw/master/docs/%E5%86%85%E5%AE%B9%E8%90%A5%E9%94%80/img-20261127/upload/fig5-ours-2024.3plus.png)
 
 还有一个容易忽略的点：**区间不是全局一个数，而是按产品线分开声明**。Ultimate、Community、Android Studio 各有各的上限。比如 MyBatis Log Ultra 现在 Ultimate 面到 2026.3，Community 面只到 2025.3——同一份插件，两条产品线，两个上限。
 
@@ -39,7 +39,7 @@
 
 因为作者是**逐个 IDE 大版本去适配**的，不是随版本自动跟随。下面是 MybatisLogFormat 的更新说明，从 2023 一路 adapt 到 2026.2，几乎每个大版本一条：
 
-![更新说明从 2.3.3 到 2.4.8 逐条记录 adapt the 20xx.x version](../img-20261127/upload/fig1-whats-new.png)
+![更新说明从 2.3.3 到 2.4.8 逐条记录 adapt the 20xx.x version](https://gitee.com/SongRenShuo/mybatis-plus-sql-visualizer/raw/master/docs/%E5%86%85%E5%AE%B9%E8%90%A5%E9%94%80/img-20261127/upload/fig1-whats-new.png)
 
 看懂这段就明白了两件事：写死上限不是偷懒，是「我验证到这一版为止」的诚实声明；反过来，`until-build` 留空的插件也不是保证永远能用，是作者愿意让未验证的新版本先装着试。
 
@@ -51,7 +51,7 @@
 
 **第二，Versions 标签页。** 同一个插件页里的版本列表，每个历史版本都带自己的区间。这是「退版」这条路的入口，下文会用到。很多人不知道这个标签的存在，装不上就以为彻底没戏了。
 
-![MyBatis Log Free 的 Versions 页：1.3.1 是 2026.2+，而 2022 年的 1.3.0 是 2018.3+](../img-20261127/upload/fig2-logfree-versions.png)
+![MyBatis Log Free 的 Versions 页：1.3.1 是 2026.2+，而 2022 年的 1.3.0 是 2018.3+](https://gitee.com/SongRenShuo/mybatis-plus-sql-visualizer/raw/master/docs/%E5%86%85%E5%AE%B9%E8%90%A5%E9%94%80/img-20261127/upload/fig2-logfree-versions.png)
 
 这张图值得多看两眼。同一个插件，最新版只给 2026.2 及以上，但 2022 年 3 月的 1.3.0 写的是 `2018.3+`——如果你的 IDE 停在 2024.x，新版装不上，旧版反而能装。
 
@@ -76,7 +76,7 @@ https://plugins.jetbrains.com/api/plugins/<插件ID>/updates?size=5
 | Mybatis-Flex-Helper | 2026.1 — 2026.2 | **不能** | 不能 |
 | Jtools-Mybatis-Log | 2017.1 — 2026.3.1 | 能 | 能 |
 | MybatisLogFree（fork） | 2025.1+ | 能 | 2025.1 起能 |
-| MyBatis SQL Visualizer | 2024.3+ | 能 | 能 |
+| **MyBatis SQL Visualizer** | 2024.3+ | 能 | 能 |
 
 各家的最新版本与发布日期：MyBatisX 1.7.9（11-18）、MyBatis Log Free 1.3.1（07-27）、MybatisLogFormat 2.4.8（07-19）、MyBatis Log Ultra 4.0.20（05-25）、Mybatis-Flex-Helper 1.8（04-11）、Jtools-Mybatis-Log 1.1.3（09-24）、MybatisLogFree 2.0.6（09-17）、本插件 2026.11.27。累计下载量从 566 万到 390 不等。
 
@@ -92,7 +92,7 @@ https://plugins.jetbrains.com/api/plugins/<插件ID>/updates?size=5
 
 区间是必要条件，不是充分条件。两个真实样本。
 
-![一条五星评论里贴着 NoClassDefFoundError 与 IU-262.10315.125 的内部版本号](../img-20261127/upload/fig3-review-noclassdeffound.png)
+![一条五星评论里贴着 NoClassDefFoundError 与 IU-262.10315.125 的内部版本号](https://gitee.com/SongRenShuo/mybatis-plus-sql-visualizer/raw/master/docs/%E5%86%85%E5%AE%B9%E8%90%A5%E9%94%80/img-20261127/upload/fig3-review-noclassdeffound.png)
 
 2026 年 9 月 9 日，一位用户在 MybatisLogFormat 下打了 5 星，内容却是报错反馈：在 `IU-262.10315.125` 上抛 `java.lang.NoClassDefFoundError: org/apache/commons/collections/CollectionUtils`。这个插件当时标注支持 2026.2，实际跑起来仍有类加载失败。同页评论里还有一句更直接的：「新的idea 不能用呢，可否兼容下呢」。
 
@@ -110,7 +110,7 @@ https://plugins.jetbrains.com/api/plugins/<插件ID>/updates?size=5
 
 **二、退到旧版插件。** 被严重低估的一条路。同一个插件的历史版本往往覆盖不同区间，而且是一条连续的阶梯：
 
-![MybatisLogFormat 的版本阶梯：2.4.8 到 2026.2、2.4.7 到 2026.1、2.4.6 到 2025.3、2.4.3 到 2024.3](../img-20261127/upload/fig4-retreat-ladder.png)
+![MybatisLogFormat 的版本阶梯：2.4.8 到 2026.2、2.4.7 到 2026.1、2.4.6 到 2025.3、2.4.3 到 2024.3](https://gitee.com/SongRenShuo/mybatis-plus-sql-visualizer/raw/master/docs/%E5%86%85%E5%AE%B9%E8%90%A5%E9%94%80/img-20261127/upload/fig4-retreat-ladder.png)
 
 从这张表往下退，基本能找到覆盖你手上 IDE 的版本：2.4.8 盖到 2026.2，2.4.7 到 2026.1，2.4.6 到 2025.3，2.4.3 甚至还能盖 2024.3。代价是功能冻结在这个版本，后续修复和新特性都拿不到。作为过渡可以，长期停在这里要接受它不再维护。
 
@@ -120,7 +120,7 @@ https://plugins.jetbrains.com/api/plugins/<插件ID>/updates?size=5
 
 ### 六、我们在这张表里的位置
 
-上面那张表最后一行是本文作者维护的插件，MyBatis SQL Visualizer，说明白：
+上面那张表最后一行是本文作者维护的插件，**MyBatis SQL Visualizer**，说明白：
 
 - 区间是 `since-build 243`、`until-build` 留空，页面上显示 `2024.3+`，2024.3 到 2026.3 都能装。每次发行会在 243 / 253 / 262 三个目标上跑一遍兼容校验，读数落在仓库的验收文档里。
 - 免费开源，没有付费版和功能锁。
