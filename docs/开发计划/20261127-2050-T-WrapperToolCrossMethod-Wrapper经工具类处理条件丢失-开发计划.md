@@ -320,6 +320,12 @@ R7 实测 `[eq, and]`——块内 `ne` 丢了、`and` 只剩空壳。当前实�
 
 ## 七、实施顺序建议（风险从低到高）
 
+> **交付纪律（用户 2026-11-27 明确要求）**：本轮所有实施成果**不得合并到 master**。
+> 三条车道分支 `t-d264-a` / `t-d264-b` / `t-d264-c` 各自独立提交，收口验证在
+> 集成分支 `t-d264-integrate` 上进行（仅验合并可行性，不落地 master）。
+> 分支文件归属：A 独占 `WrapperLocator.kt`；B 独占 `BatchOperationConverter` +
+> `QueryWrapperParser` + `model/` + `SqlPreviewService`；C 独占 `ArgResolver.kt`。
+
 1. **修 0 先行**（批量兜底拦截）：消除「无 WHERE 错误 SQL」这个最坏面。R10 已实测证明该产物存在。
 2. **修 4**（伪条件守卫）：独立、风险低，消除「工具方法名被当条件」。
 3. **修 5**（解析层可见性）：只加 `unknownMethods` 与红字提示，不改条件条数，`QueryWrapperParserTest.未知方法_安全忽略` 应保持绿。用户能立刻看到「少了什么」，也给我们取证线索。
