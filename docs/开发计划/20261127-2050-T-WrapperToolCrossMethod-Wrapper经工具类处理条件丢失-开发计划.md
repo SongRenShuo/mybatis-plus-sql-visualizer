@@ -419,6 +419,20 @@ SqlPreviewServicePreviewTest > testD264ConditionlessChainWithUnknownMethodRefuse
 
 正好是「可见性」这一面的四条，其余 46 条不受影响；还原后全绿。
 
+**反向验证复现（第 2 轮实测，独立确认上面两次读数）**
+
+修 0 的 RED PROBE 重跑一次，`29 tests completed, 3 failed`：
+
+```
+BatchOperationJoinGuardTest > testSelectListWithKnownWrapperIsRejectedByBatchTemplate FAILED (…:148)
+SqlPreviewServicePreviewTest > testD264WrapperArgButChainUnresolvedRefusesBatchTemplate FAILED (…:604)
+    ComparisonFailure: SQL 必须为空（拒绝产出）
+      expected:<[]> but was:<[SELECT id, status, device_name
+    FROM device_info_entity]>
+```
+
+第二行即 R10 原始产物逐字复现；探针已移除（`grep "RED PROBE"` 为 0 处），工作树干净。
+
 **复查修正（第 2 轮，`9f98d7d9e`）：静默白名单漏了 MPJ 逻辑删除控制与 `on`**
 
 修 5 首版的 `SILENT_METHOD_NAMES` 只枚举了「类型互转 / 列结构 / 联表 / 写族 set」，漏掉两类
