@@ -16,8 +16,12 @@
 # 并把一次已知 flaky 用例的红**掩盖成绿**。现在每次尝试写独立日志，只判本次正文。
 #
 # 现在的分流：
-#   ① 竞态（本次日志里有 ClosedFileSystemException）→ 停 daemon + 清项目侧 IPGP 缓存与 IDE 解包
-#      + --max-workers=1 重跑；仍命中 → CI 上退到干净工作树（git clean -xdf，保留 .local）再跑一次。
+#   ① 竞态（本次日志里有 ClosedFileSystemException）→ 三级愈合，成本从低到高：
+#      L1 停 daemon + 清**项目侧** IPGP 缓存（`.intellijPlatform/layoutIndex` 与 `extracted-plugins`）
+#         + `--max-workers=1`——**不动** GRADLE_USER_HOME 的 transforms（删它等于重解包 ~4.7GB）；
+#      L2 L1 仍命中 → 再删 `transforms/*/transformed/idea*`（重解包后跑）；
+#      L3 L2 仍命中 → CI 上退到干净工作树（git clean -xdf，保留 .local）再跑一次。
+#      读数依据（2026-11-27 run 45966781755 的 test(3)）：L1 即愈合（1m43s 红 → 8m50s 绿），L2 未触发。
 #   ② 测试失败（本次日志里有 "tests completed, N failed" / "There were failing tests"）→ 只重跑
 #      **失败类**一次（同一 job，编译已 UP-TO-DATE，约 1 分钟）；重跑通过则记 warning 放行，
 #      仍红则照常失败——失败类名进注解与日志，不静默。
@@ -70,6 +74,25 @@ function Get-FailedTestClasses {
     return @($classes | Sort-Object -Unique)
 }
 
+# IPGP 平台缓存参数（纯函数，-SelfTest 覆盖）：只在「CI 且 runner 设了 GRADLE_USER_HOME」时返回 -P 参数，
+# 其余情况返回 null——本机/多工作树必须保持项目内 `.intellijPlatform` 默认位置（共用一份缓存是新踩踏面）。
+function Get-IpgpCacheArg {
+    param([string]$GradleUserHome, [bool]$IsCi)
+    if (-not $IsCi) { return $null }
+    if ([string]::IsNullOrWhiteSpace($GradleUserHome)) { return $null }
+    return "-Porg.jetbrains.intellij.platform.intellijPlatformCache=" + (Join-Path $GradleUserHome 'caches/ipgp-platform-cache')
+}
+
+# 竞态愈合分级（成本从低到高，纯声明，-SelfTest 按序断言）；L1 不动 transforms 是硬约束：
+# 删 transforms 等于让每个 job 重解包 ~4.7GB，只有在 L1 无效（同一错误第二次出现）时才该付这笔钱。
+function Get-RaceLadder {
+    return @(
+        'L1 停 daemon + 清项目侧 IPGP 缓存',
+        'L2 追加删 transformed/idea* 重解包',
+        'L3 干净工作树（仅 CI）'
+    )
+}
+
 # ---- 自检：不跑 gradle，只验判定逻辑 ----
 
 function Invoke-SelfTest {
@@ -95,6 +118,21 @@ function Invoke-SelfTest {
     Assert-True (-not (Test-TestFailureInLog $compileFailLog)) '编译失败不得判为测试失败'
     Assert-True (-not (Test-TestFailureInLog $raceLog)) '竞态不得判为测试失败'
 
+    # 愈合分级：三级、顺序固定、L1 不碰 transforms（删 transforms=重解包 4.7GB，只在 L1 无效时付）
+    $ladder = @(Get-RaceLadder)
+    Assert-True ($ladder.Count -eq 3) "愈合分级为三级（实得 $($ladder.Count)）"
+    Assert-True ($ladder[0] -like 'L1 *') '第一级是 L1'
+    Assert-True ($ladder[1] -like 'L2 *') '第二级是 L2'
+    Assert-True ($ladder[2] -like 'L3 *') '第三级是 L3'
+    Assert-True ($ladder[0] -notmatch 'transformed') 'L1 不得删 transforms（成本硬约束）'
+    Assert-True ($ladder[1] -match 'transformed') 'L2 才是删 transforms 的那一级'
+
+    # IPGP 缓存参数：只在 CI + 有 GRADLE_USER_HOME 时生效（本机不得被改道）
+    Assert-True ($null -eq (Get-IpgpCacheArg -GradleUserHome 'D:\.gradle' -IsCi $false)) '非 CI 不注入 IPGP 缓存参数'
+    Assert-True ($null -eq (Get-IpgpCacheArg -GradleUserHome '' -IsCi $true)) '无 GRADLE_USER_HOME 不注入'
+    $ipgpProbe = Get-IpgpCacheArg -GradleUserHome 'D:\.gradle' -IsCi $true
+    Assert-True ($ipgpProbe -like '-Porg.jetbrains.intellij.platform.intellijPlatformCache=*caches*ipgp-platform-cache') 'CI 注入的 IPGP 缓存参数指向 GRADLE_USER_HOME/caches
+'
     $resultsRoot = Join-Path $tmp 'build/test-results'
     $shardDir = Join-Path $resultsRoot 'testShard4'
     New-Item -ItemType Directory -Force -Path $shardDir | Out-Null
@@ -123,6 +161,20 @@ if (-not $GradleArgs) {
 }
 
 $argList = @($GradleArgs -split '\s+' | Where-Object { $_ -ne '' })
+
+# T-CiZipFsFlake（2026-11-27 根治方向）：CI 上把 IPGP 项目缓存（默认 `[rootProject]/.intellijPlatform`）
+# 指到 GRADLE_USER_HOME/caches 下——本仓 `gradle-home-cache-includes: caches`，即 gradle/actions 会把它
+# 跨 job 带走。下游 job 恢复官方文档所说的 “serialized IDE layout indices used for bundled plugin and
+# module dependency resolution” 后，不再逐 job 扫描 database-plugin.jar 里的 plugin.xml 描述符，
+# 从源头缩掉 Gradle zip-FS 竞态（ClosedFileSystemException →「Could not find bundled plugin with ID:
+# com.intellij.database」）的暴露面。下面三级愈合仍保留作兵底。
+# 只在 CI 且 runner 确实设了 GRADLE_USER_HOME 时生效（实测 D:\a\.gradle，跨 job 稳定）；
+# 本机保持项目内 `.intellijPlatform` 默认位置——多工作树共用一份 IPGP 缓存反而是新的踩踏面。
+$ipgpArg = Get-IpgpCacheArg -GradleUserHome $env:GRADLE_USER_HOME -IsCi ([bool]$env:GITHUB_ACTIONS)
+if ($ipgpArg) {
+    $argList += $ipgpArg
+    Write-Host "IPGP 平台缓存 → $($env:GRADLE_USER_HOME)\caches/ipgp-platform-cache（随 Gradle 缓存跨 job 复用，跳过 bundled plugin 描述符扫描）"
+}
 $logDir = Get-LogDir
 $repoRoot = (Get-Location).Path
 $script:attemptNo = 0
@@ -135,13 +187,17 @@ function Invoke-Attempt {
     if (Test-Path -LiteralPath $log) { Remove-Item -LiteralPath $log -Force }
     $display = (($argList + $ExtraArgs) -join ' ')
     Write-Host ("==> 第 {0} 次尝试（{1}）：./gradlew.bat {2}" -f $script:attemptNo, $Label, $display)
+    # 计时进日志：愈合成本的唯一可审计读数（哪一级、花了多久）
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
     # 必须收尾 Out-Host：Tee-Object 的输出否则会进入函数输出流，把返回对象变成「字符串数组 + 对象」，
     # 调用方读 $r.Code 就是 null，分流全部走错。
     & ./gradlew.bat @argList @ExtraArgs 2>&1 | Tee-Object -FilePath $log | Out-Host
+    $sw.Stop()
+    Write-Host ("<== 第 {0} 次尝试（{1}）退出码 {2}，耗时 {3:n1}s" -f $script:attemptNo, $Label, $LASTEXITCODE, $sw.Elapsed.TotalSeconds)
     return [pscustomobject]@{ Code = $LASTEXITCODE; Log = $log; Label = $Label }
 }
 
-function Clear-IdeCaches {
+function Clear-ProjectIdeCache {
     foreach ($rel in @('.intellijPlatform\layoutIndex', '.intellijPlatform\extracted-plugins')) {
         $p = Join-Path $repoRoot $rel
         if (Test-Path -LiteralPath $p) {
@@ -149,6 +205,9 @@ function Clear-IdeCaches {
             Write-Host "已清理项目侧缓存：$p"
         }
     }
+}
+
+function Clear-TransformedIdeCaches {
     # GRADLE_USER_HOME 在 runner 上有；本机 harness/试跑可能没有——回落 ~/.gradle，免得 Join-Path 抛错
     # 让「清缓存」这一步整段失效（错误只报不中断，重试于是带着坏状态白跑）。
     $gradleHome = if ($env:GRADLE_USER_HOME) { $env:GRADLE_USER_HOME } else { Join-Path $HOME '.gradle' }
@@ -174,23 +233,34 @@ if ($first.Code -eq 0) { exit 0 }
 
 $last = $first
 if (Test-RaceInLog $first.Log) {
-    Write-Host '::warning::命中 Gradle zip 文件系统竞态（ClosedFileSystemException，非代码缺陷）：停 daemon + 清项目侧 IPGP 缓存与 IDE 解包后重跑'
+    # ---- 竞态愈合 L1：停 daemon + 清项目侧 IPGP 缓存（不动 transforms）----
+    Write-Host '::warning::命中 Gradle zip 文件系统竞态（ClosedFileSystemException，非代码缺陷）：L1 停 daemon + 清项目侧 IPGP 缓存后重跑'
     & ./gradlew.bat --stop 2>&1 | Out-Null
-    Clear-IdeCaches
-    $second = Invoke-Attempt -ExtraArgs @('--max-workers=1') -Label '竞态恢复一级'
+    Clear-ProjectIdeCache
+    $second = Invoke-Attempt -ExtraArgs @('--max-workers=1') -Label '竞态恢复 L1'
     if ($second.Code -eq 0) { exit 0 }
     $last = $second
 
     if (Test-RaceInLog $second.Log) {
-        if (-not $env:GITHUB_ACTIONS) {
-            Write-Host '本机执行：跳过干净工作树重试（git clean -xdf 会抹掉工作树，仅 CI 上允许）'
-        } else {
-            Write-Host '::warning::竞态一级未恢复：退到干净工作树（git clean -xdf，保留 .local）重跑'
-            & ./gradlew.bat --stop 2>&1 | Out-Null
-            git clean -xdf -e .local 2>&1 | Select-Object -Last 5
-            $third = Invoke-Attempt -ExtraArgs @('--max-workers=1') -Label '干净工作树'
-            if ($third.Code -eq 0) { exit 0 }
-            $last = $third
+        # ---- L2：还命中才付重解包的代价 ----
+        Write-Host '::warning::竞态 L1 未恢复：L2 追加删 transformed/idea*（重解包 ~4.7GB）后重跑'
+        & ./gradlew.bat --stop 2>&1 | Out-Null
+        Clear-TransformedIdeCaches
+        $third = Invoke-Attempt -ExtraArgs @('--max-workers=1') -Label '竞态恢复 L2'
+        if ($third.Code -eq 0) { exit 0 }
+        $last = $third
+
+        if (Test-RaceInLog $third.Log) {
+            if (-not $env:GITHUB_ACTIONS) {
+                Write-Host '本机执行：跳过干净工作树重试（git clean -xdf 会抹掉工作树，仅 CI 上允许）'
+            } else {
+                Write-Host '::warning::竞态 L2 未恢复：L3 退到干净工作树（git clean -xdf，保留 .local）重跑'
+                & ./gradlew.bat --stop 2>&1 | Out-Null
+                git clean -xdf -e .local 2>&1 | Select-Object -Last 5
+                $fourth = Invoke-Attempt -ExtraArgs @('--max-workers=1') -Label '竞态恢复 L3 干净工作树'
+                if ($fourth.Code -eq 0) { exit 0 }
+                $last = $fourth
+            }
         }
     }
 }
