@@ -536,6 +536,129 @@ resolve 计数插桩对比，但本轮未做（无现成装置，见 §六之二
 - 入口识别四处对齐（`isChainHeadCall` / `isSqlCandidate` / `initializerHeadIsWrapper` / `hasWrapperArgument`）——按 §七 的提醒，本轮未做修 2 的入口侧扩展即不动这四处
 - L15 多 return「按锚点/调用点可达性选」只做到「文本不一致即放弃」，分支标注未做
 
+#### 车道 B（修 0 + 修 5，分支 `t-d264-b`，基线 `d857d066a`）
+
+只改四个文件范围内：`psi/BatchOperationConverter.kt`、`converter/QueryWrapperParser.kt`、
+`model/SelectStatement.kt`（`WrapperChain` **未动**）、`ui/SqlPreviewService.kt`。
+
+**修 0（批量兜底拦截 + wrapper 路径零条件守卫）**
+
+| 项 | 落点 | 判据 | 成本 |
+|---|---|---|---|
+| 批量模板拒绝 | `BatchOperationConverter.isWrapperArgumentUnsupportedBatch`（`convert` 注册表命中后即 return null） | 方法名在 `BATCH_OPERATIONS` ∧ 非 join 族 ∧ 实参有 `WrapperLocator.detectWrapperTypeDeep(expr.type) != null` | 类型级；`detectWrapperTypeDeep` 的名字前门 + 父链类级缓存；**无 `ReferencesSearch`** |
+| 预览提示 | `SqlPreviewService.preview` 批量分支前 | 同一判据（单一来源） | 同上，每次预览只对一个调用做（≤实参数个）类型文本判定 |
+| wrapper 路径零条件 | `SqlPreviewService.preview` 的 `else -> ConverterRegistry.convert(...)` 之后 | `SelectStatement.conditions.isEmpty() && unknownMethods.isNotEmpty()` | 纯字段读取 |
+
+产物对照（R10 形态，`SELECT id, status, device_name FROM device_info_entity`）：
+
+- 修复前：批量模板接手 → `SELECT id, status, device_name FROM device_info_entity`（**无 WHERE、无提示**）。
+- 修复后：`sql = ""` + warning
+  「⚠ 检测到 Wrapper 实参，但无法解析其条件链：selectList(...) 的过滤条件（含工具类/跨方法追加的条件）静态不可得。为避免输出**缺少 WHERE 的错误 SQL**，此处不提供批量模板预览。」
+
+**修 5（解析层未知方法可见化）**
+
+- `QueryWrapperParser.parseInternal` 的 `when` 补 `else` 分支：`unknownMethodNames += call.methodName`
+  （`LinkedHashSet` 去重；`SILENT_METHOD_NAMES` 白名单排除 MPJ 类型互转/结构方法与写族 set 方法，
+  避免噪音）。**每个未识别调用一次集合 add，不额外遍历调用列表。**
+- 透出通道：`SelectStatement.unknownMethods: List<String> = emptyList()`（**末尾参数 + 默认值**，
+  既有 main 17 / test 93 个构造点零改动；`WrapperChain` 的 data class 契约完全未动）。
+- 渲染：`SqlPreviewService.buildWarning` 增加与 `unparsedSets` 同款的红字：
+  「⚠ [预览] 有 N 个链方法无法静态解析，其条件未出现在 SQL 中：`statusEq`」
+- 条件条数**未改**：`QueryWrapperParserTest.未知方法_安全忽略` 保持绿（仅补一条 `unknownMethods` 断言）。
+
+**契约翻转（1 处，已登记）**
+
+`BatchOperationJoinGuardTest.testSelectListWithKnownWrapperStillProducesSql`（原断言「selectList
+不受守卫影响 → 产全列查询」）改为 `testSelectListWithKnownWrapperIsRejectedByBatchTemplate`
+（断言 null）。理由：那条断言固化的正是本次要消除的最坏面——批量模板产出无 WHERE 全列 SQL。
+另补两条：内联 `new` 形态同样拒绝、非 Wrapper 实参（`Object`）仍走批量模板（正向回归）。
+
+**未做（按范围划归其他车道）**
+
+- 跨方法展开（修 1/2/3/7）：`WrapperLocator.kt` / `ArgResolver.kt` 属车道 A/C，本轮未改。
+  因此 R1/R2/R3/R4/R5/R6/R7/R8/R11 九条 REPRO 仍红（它们断言的是「条件被收集到链上」，
+  属收集层）；本轮只保证它们**不再产出静默错误 SQL**。
+- `WrapperChain` 未加字段（192 个构造点 + 车道 A 在 `WrapperLocator:517` 同点构造，撞车面过大）。
+
+**反向验证（两次，均贴读数）**
+
+修 0：在 `isWrapperArgumentUnsupportedBatch` 首行插 `if (true) return false`（RED PROBE）：
+
+```
+BatchOperationJoinGuardTest > testSelectListWithKnownWrapperIsRejectedByBatchTemplate FAILED
+BatchOperationJoinGuardTest > testSelectListWithInlineNewWrapperIsRejectedByBatchTemplate FAILED
+SqlPreviewServicePreviewTest > testD264WrapperArgButChainUnresolvedRefusesBatchTemplate FAILED
+    ComparisonFailure: SQL 必须为空（拒绝产出） expected:<[]> but was:<[SELECT id, status, device_name
+    FROM device_info_entity]>
+```
+
+第三条即 **R10 的原始产物被原样复现**（`SELECT id, status, device_name FROM device_info_entity`，
+无 WHERE），证明该断言真的钉住了这个最坏面；还原后三例复绿。
+
+修 5：把 `else` 分支改成 `if (false && …) unknownMethodNames += …`（RED PROBE）：
+
+```
+QueryWrapperParserTest > 未知方法_安全忽略 FAILED
+QueryWrapperParserTest > 修5_未知方法名去重收集且不改条件条数 FAILED
+SqlPreviewServicePreviewTest > testD264UnknownChainMethodSurfacesInWarning FAILED
+SqlPreviewServicePreviewTest > testD264ConditionlessChainWithUnknownMethodRefusesPreview FAILED
+50 tests completed, 4 failed
+```
+
+正好是「可见性」这一面的四条，其余 46 条不受影响；还原后全绿。
+
+**反向验证复现（第 2 轮实测，独立确认上面两次读数）**
+
+修 0 的 RED PROBE 重跑一次，`29 tests completed, 3 failed`：
+
+```
+BatchOperationJoinGuardTest > testSelectListWithKnownWrapperIsRejectedByBatchTemplate FAILED (…:148)
+SqlPreviewServicePreviewTest > testD264WrapperArgButChainUnresolvedRefusesBatchTemplate FAILED (…:604)
+    ComparisonFailure: SQL 必须为空（拒绝产出）
+      expected:<[]> but was:<[SELECT id, status, device_name
+    FROM device_info_entity]>
+```
+
+第二行即 R10 原始产物逐字复现；探针已移除（`grep "RED PROBE"` 为 0 处），工作树干净。
+
+**收尾复跑未取得读数（如实登记，不当作绿）**
+
+还原探针后的最后一轮同命令复跑，`77 tests completed, 38 failed`，但失败全部由
+`com.intellij.util.indexing.StorageException` / `java.io.EOFException` 触发，随后
+`NoSuchFileException: build/test-results/test/binary/in-progress-results-generic.bin`——
+是另一路会话在同一 build 目录并发跑测试把索引/结果文件踩坏，不是断言失败。
+同机无并发压力的那一轮（四类 77 例 / 0 失败 / `BUILD SUCCESSFUL`）是权威读数；
+**本车道结论以那一轮为准，最后一轮交回收口阶段在无并发条件下复跑**。
+
+**复查修正（第 2 轮，`9f98d7d9e`）：静默白名单漏了 MPJ 逻辑删除控制与 `on`**
+
+修 5 首版的 `SILENT_METHOD_NAMES` 只枚举了「类型互转 / 列结构 / 联表 / 写族 set」，漏掉两类
+**语义已知但不在解析器分派表里**的方法，会把正常预览挂在红字下：
+
+| 遗漏 | 为什么会进 else | 误报后果 |
+|---|---|---|
+| `disableLogicDel` / `enableLogicDel` / `disableSubLogicDel` / `enableSubLogicDel` / `logicDelToOn` / `logicDelToWhere` | MPJ 官方逻辑删除六方法，语义由 `SqlPreviewService.evaluateLogicDeleteState` 消费（决定 deleted 注入），不是条件方法 | 用户看到「无法静态解析 disableLogicDel」——一条完全正常的 SQL 被标成可能丢条件 |
+| `on` | MPJ join 的 ON 构造器，实参在 `MpjLambdaConverter.parseJoin` 按 `OnConditionArg` 解析 | 同上 |
+
+已把七个名字并入白名单，并新增 `testD264LogicDeleteControlMethodsProduceNoUnknownMethodWarning`
+钉住（同时断言 `id = 1001` 条件仍正常产出）。同类候选已排查：`selectByMap` / `removeByMap` 等
+Map 条件族实参是 `Map` 不是 Wrapper，不进 `hasWrapperTypedArgument`，修 0 不误伤。
+
+**定向读数（同机两遍，取第二遍；白名单补全后的最终一轮，`BUILD SUCCESSFUL`）**
+
+| 测试类 | 例数 | 失败 | 耗时 |
+|---|---|---|---|
+| `QueryWrapperParserTest` | 30 | 0 | 0.125s |
+| `BatchOperationJoinGuardTest` | 8 | 0 | 11.353s |
+| `SqlPreviewServicePreviewTest` | 21 | 0 | 3.827s |
+| `SqlPreviewServiceLogicDeleteAndChainTest`（白名单反向守卫） | 18 | 0 | 3.949s |
+
+合计 77 例 / 0 失败。
+
+> 首轮（修 5 白名单补全前）曾出现 3 例失败 + `EOFException` / `ServiceNotReadyException`：
+> 当时另有 D264-A 会话在同一份 build 目录跑测试，属并发串扰；单独复跑全绿。
+> 另有两轮因并发争用失败在构建阶段（`engine-jar/compileKotlin` 产物被删、`prepareTestSandbox`
+> 拷贝 `panweidb-jdbc-2.0.0.jar` 撞文件锁），均与代码无关，重试即过。如实登记，不当作绿。
 
 ### 教训预登记
 

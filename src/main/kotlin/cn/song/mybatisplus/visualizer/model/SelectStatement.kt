@@ -92,6 +92,17 @@ data class SelectStatement(
     val unions: List<UnionClause> = emptyList(),
     val fromSubQuery: Pair<String, String>? = null,
     val fillClauses: List<FillClause>? = null,
+    /**
+     * D264 修5（L9/L16）：解析期**未识别**的链方法名（按出现顺序、已去重）。
+     *
+     * 语义：这些方法的条件/结构未被静态还原，[conditions] 里**没有**它们的贡献；非空即代表本次
+     * SQL 可能少了条件，[cn.song.mybatisplus.visualizer.ui.SqlPreviewService.buildWarning] 据此
+     * 渲染面板红字（与 `unparsedSets` 同款口径）。
+     *
+     * 默认空表且置于参数列表末尾：既有构造点（main 17 处 + test 93 处）零改动。
+     * 只承载解析循环里**已经收集到的**名字，不引入任何额外遍历。
+     */
+    val unknownMethods: List<String> = emptyList(),
 ) : SqlStatement()
 
 /**

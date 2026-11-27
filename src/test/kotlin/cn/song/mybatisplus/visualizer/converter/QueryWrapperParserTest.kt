@@ -529,6 +529,62 @@ class QueryWrapperParserTest {
         val statement = parser.parse(chain)
         // 未知方法不抛异常且不影响后续条件
         assertEquals(1, statement.conditions.size)
+        // D264 修5：契约保持不变（不改条件条数），但未知方法名必须**可见**——面板据此渲染红字
+        assertEquals(listOf("someUnknownMethod"), statement.unknownMethods)
+    }
+
+    /**
+     * D264 修5：未知方法名按出现顺序去重收集，且**不影响**条件条数（只加可见性，不改语义）。
+     * 自研 wrapper 的语义化链方法（`statusEq`）就落在这里：收集层能过、解析层不认。
+     */
+    @Test
+    fun `修5_未知方法名去重收集且不改条件条数`() {
+        val chain = WrapperChain(
+            WrapperType.LAMBDA_QUERY,
+            "DeviceInfoEntity",
+            listOf(
+                WrapperCall("statusEq", listOf(WrapperArg.ValueArg(SqlValue.Literal("1")))),
+                eqCall("id", "1"),
+                WrapperCall("statusEq", listOf(WrapperArg.ValueArg(SqlValue.Literal("2")))),
+                WrapperCall("byKeyword", listOf(WrapperArg.ValueArg(SqlValue.Literal("abc")))),
+            ),
+        )
+        val statement = parser.parse(chain)
+        assertEquals("条件条数不得因可见性改造而变（只收 eq）", 1, statement.conditions.size)
+        assertEquals(
+            "未知方法名按源码顺序去重",
+            listOf("statusEq", "byKeyword"),
+            statement.unknownMethods,
+        )
+    }
+
+    /**
+     * D264 修5：MPJ 的 `lambda()` / `stringQuery()` 是类型互转中间节点（既有语义就是静默忽略），
+     * 不得进 unknownMethods——否则用户会看到「无法解析 lambda」这类噪音。
+     */
+    @Test
+    fun `修5_类型互转中间节点不进未知方法清单`() {
+        val chain = WrapperChain(
+            WrapperType.MPJ_LAMBDA_QUERY,
+            "DeviceInfoEntity",
+            listOf(
+                WrapperCall("select", listOf(WrapperArg.ColumnArg(ColumnRef(columnName = "id")))),
+                WrapperCall("lambda", emptyList()),
+                eqCall("id", "1"),
+                WrapperCall("stringQuery", emptyList()),
+            ),
+        )
+        val statement = parser.parse(chain)
+        assertEquals(emptyList<String>(), statement.unknownMethods)
+    }
+
+    /** D264 修5：全部方法都识别时清单为空（面板不挂红字）。 */
+    @Test
+    fun `修5_全部识别时未知方法清单为空`() {
+        val statement = parser.parse(
+            WrapperChain(WrapperType.LAMBDA_QUERY, "DeviceInfoEntity", listOf(eqCall("id", "1"))),
+        )
+        assertEquals(emptyList<String>(), statement.unknownMethods)
     }
 
     @Test

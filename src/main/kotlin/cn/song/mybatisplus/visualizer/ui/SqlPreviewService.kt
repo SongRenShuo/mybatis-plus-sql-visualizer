@@ -386,6 +386,8 @@ class SqlPreviewService(internal val project: Project) {
                         tableAlias = base.tableAlias,
                         joins = base.joins,
                         conditions = base.conditions,
+                        // D264 修5：未识别方法名随语句带出（本分支重建语句，不 copy 就会丢）
+                        unknownMethods = base.unknownMethods,
                     )
                 }
                 // exists 链式终结点消费：service.lambdaQuery()...exists() → SELECT EXISTS (子查询)（Q14-③，T-M15-01）
@@ -435,6 +437,33 @@ class SqlPreviewService(internal val project: Project) {
                 }
                 // T-FS-04：显式传本服务绑定的 project（converter 内类名兜底推断的项目级表配置口径）
                 else -> ConverterRegistry.convert(located.chain, table, project) ?: return null
+            }
+            // D264 修0（wrapper 路径的最坏面）：**零条件 + 存在未识别链方法** = 我们不知道这条链
+            // 到底带了什么过滤条件，产出 `SELECT 全列 FROM 表`（无 WHERE）就是静默错误 SQL——
+            // 用户会以为该查询本就没有过滤条件（R10 实测产物）。
+            // 拒绝对口径同批量守卫：宁可无预览（但给出明确原因），不可输出错误 SQL。
+            // 只在此形态触发：链上没有未识别方法（`new LambdaQueryWrapper<>()` 空链）或已有其它
+            // 条件时照常产出（后者由修5的 warning 提示「还有方法没解析」）。
+            val conditionlessUnknowns = (statement as? SelectStatement)
+                ?.takeIf { it.conditions.isEmpty() && it.unknownMethods.isNotEmpty() }
+            if (conditionlessUnknowns != null) {
+                val names = conditionlessUnknowns.unknownMethods.joinToString("、") { "`$it`" }
+                LOG.info("preview: REFUSE_CONDITIONLESS unknown=$names, anchor=${anchor.textRange}")
+                val refused = PreviewResult(
+                    sql = "",
+                    compactSql = "",
+                    unresolvedParams = emptyList(),
+                    paramTable = null,
+                    wrapperType = located.chain.wrapperType,
+                    tableName = table.tableName,
+                    warning = "⚠ 检测到 Wrapper，但无法解析其条件链：链上 $names 无法静态展开，" +
+                        "而其余调用不产生任何 WHERE 条件。为避免输出**缺少 WHERE 的全表 SQL**，" +
+                        "此处不提供预览（条件可能在工具类/被调方法里）。",
+                    renderedDialect = dialect,
+                    dialectDecision = decision,
+                )
+                recordHistory(refused, anchor)
+                return refused
             }
             // 缺陷②修复：参数历史键指纹取「注入前」语句文本——下面这一串注入（逻辑删除 / 乐观锁 /
             // 多租户 / 数据权限 / 分页 LIMIT）都会改写 SQL 文本，而历史键原先是 SHA-256(SQL 全文)，
@@ -600,6 +629,32 @@ class SqlPreviewService(internal val project: Project) {
         }
         // T-M23-01/02：批量路径接线——逻辑删除注入开关（settings.injectLogicDelete）与变量求值开关
         // （settings.replaceParams，实参可静态求值时内联）对齐 Wrapper 路径；参数来源/回填提示透传面板
+        //
+        // D264 修0：**实参是 Wrapper，却走到了批量模板**——说明上面的 Wrapper 链路径（四顺位）全失败，
+        // 批量模板只会产出 `SELECT 全列 FROM 表`（无 WHERE）这种**静默错误 SQL**（D264 R10 实测产物
+        // `SELECT id, status, device_name FROM device_info_entity`，用户会以为该查询本就没有过滤条件）。
+        // 判据是类型级（[BatchOperationConverter.hasWrapperTypedArgument]：`detectWrapperTypeDeep` 的
+        // 名字前门 + 父链识别，**不做 ReferencesSearch**），成本与一次类型文本判定同量级。
+        // 处置口径同 join 族：[BatchOperationConverter.isJoinFamilyRejected]「宁可无预览，不可输出错误 SQL」。
+        if (batchCall != null && BatchOperationConverter.isWrapperArgumentUnsupportedBatch(batchCall)) {
+            val methodName = batchCall.methodExpression.referenceName ?: "?"
+            LOG.info("preview: WRAPPER_CHAIN_UNRESOLVED method=$methodName, table 兜底已拒绝, anchor=${anchor.textRange}")
+            val unresolved = PreviewResult(
+                sql = "",
+                compactSql = "",
+                unresolvedParams = emptyList(),
+                paramTable = null,
+                wrapperType = null,
+                tableName = null,
+                warning = "⚠ 检测到 Wrapper 实参，但无法解析其条件链：$methodName(...) 的过滤条件" +
+                    "（含工具类/跨方法追加的条件）静态不可得。为避免输出**缺少 WHERE 的错误 SQL**，" +
+                    "此处不提供批量模板预览。",
+                renderedDialect = dialect,
+                dialectDecision = decision,
+            )
+            recordHistory(unresolved, anchor)
+            return unresolved
+        }
         val batch = batchCall?.let {
             BatchOperationConverter.convert(
                 it,
@@ -1785,8 +1840,20 @@ class SqlPreviewService(internal val project: Project) {
                 "⚠ [预览] 有 ${it.unparsedSets.size} 处 SET 片段无法静态解析，已省略：" +
                     it.unparsedSets.joinToString("；")
             }
+        // D264 修5（L9）：解析期未识别的链方法留痕——这些方法的条件没有进 WHERE，SQL 看起来「少了条件」。
+        // 与上面的 unparsedSets 同款口径：不猜语义、不静默，把方法名摊给用户（自研 wrapper 的语义化
+        // 链方法如 `statusEq` 就落在这里）。名字由 [QueryWrapperParser] 在分派时顺手收集，无额外遍历。
+        // 只对 SELECT 生效：unknownMethods 目前只由 QueryWrapperParser 填充（其产物恒为 SelectStatement）。
+        val unknownMethodWarning = (statement as? SelectStatement)
+            ?.unknownMethods
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { names ->
+                "⚠ [预览] 有 ${names.size} 个链方法无法静态解析，其条件未出现在 SQL 中：" +
+                    names.joinToString("、") { name -> "`$name`" }
+            }
         val dataPermissionWarning = DataPermissionPlaceholder.buildWarning(settings?.state?.dataPermissionHint ?: false)
-        return listOfNotNull(baseWarning, setWarning, dataPermissionWarning).joinToString("\n").ifBlank { null }
+        return listOfNotNull(baseWarning, setWarning, unknownMethodWarning, dataPermissionWarning)
+            .joinToString("\n").ifBlank { null }
     }
 
     /**

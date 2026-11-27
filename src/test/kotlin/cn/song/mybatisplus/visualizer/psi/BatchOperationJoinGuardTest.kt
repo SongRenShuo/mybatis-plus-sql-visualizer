@@ -21,7 +21,7 @@ import org.junit.Assert.assertTrue
  *  2. `selectJoinList(UserDTO.class, 已知 wrapper)` → 不产 SQL（首参 DTO 后缀，**独立于** wrapper 判定）；
  *  3. `selectJoinList(UserEntity.class, 未知 wrapper)` → 不产 SQL（实体首参也救不了不可识别的 wrapper）；
  *  4. `getById(1L)` 仍产 SQL（非 join 族不受影响）；
- *  5. `selectList(已知 wrapper)` 仍产 SQL（`selectList` 不吃新守卫）。
+ *  5. `selectList(已知 wrapper)` **不**产批量 SQL（D264 修0 翻转：原「不受影响」断言正是无 WHERE 错误 SQL 的入口）。
  *
  * 夹具内联伪造 `BaseMapper` / `IService` / `LambdaQueryWrapper`，仅提供类型与父链，
  * 不依赖真实 MP/MPJ jar（LightPlatform 无依赖索引）。`UserEntity` 以 `Entity` 后缀命中
@@ -29,6 +29,8 @@ import org.junit.Assert.assertTrue
  *
  * 反向验证（实施记录）：摘掉 `isJoinFamilyRejected` 分支并临时把 join 族登记进注册表
  * （即本守卫要防的「将来登记」形态）→ 用例 1/2/3 转红；还原后复绿。
+ * D264 修0 反向验证：摘掉 [BatchOperationConverter.isWrapperArgumentUnsupportedBatch] 的
+ * 类型门 → 用例 5/5b 转红（重新产 `SELECT 全列 FROM 表`，无 WHERE）；还原后复绿。
  */
 class BatchOperationJoinGuardTest : BasePlatformTestCase() {
 
@@ -119,8 +121,16 @@ class BatchOperationJoinGuardTest : BasePlatformTestCase() {
         assertTrue("主键等值条件应在 SQL 中：${preview!!.sql}", preview.sql.contains("WHERE"))
     }
 
-    /** 5. 回归：`selectList` 带已知 wrapper 仍产全列查询（守卫只认 join 族）。 */
-    fun testSelectListWithKnownWrapperStillProducesSql() {
+    /**
+     * 5. D264 修0（**契约翻转**）：`selectList(已知 wrapper)` 在批量模板里**不再产 SQL**。
+     *
+     * 原用例断言「selectList 不受 join 族守卫影响 → 产全列查询」。D264 R10 实测证明这正是最坏面：
+     * 批量模板产出 `SELECT id, status, device_name FROM device_info_entity`（**无 WHERE**），
+     * 而 wrapper 携带的条件全部丢失、且无任何提示——用户会以为该查询本来就没有过滤条件。
+     * 修0 的口径与 join 族一致：实参静态可见是 Wrapper 时，批量模板一律拒绝
+     * （SQL 只能由 Wrapper 链路径渲染；链路径失败时由 `SqlPreviewService` 给出明确提示）。
+     */
+    fun testSelectListWithKnownWrapperIsRejectedByBatchTemplate() {
         val preview = convert("selectList", """
             class Demo {
                 void run(UserService service, LambdaQueryWrapper<UserEntity> w) {
@@ -135,7 +145,47 @@ class BatchOperationJoinGuardTest : BasePlatformTestCase() {
             }
             class LambdaQueryWrapper<T> {}
         """)
-        assertNotNull("selectList 不受 join 族守卫影响", preview)
+        assertNull("Wrapper 实参不得由批量模板产出无 WHERE 的全列 SQL（D264 修0）", preview)
+    }
+
+    /** 5b. D264 修0：内联 `new LambdaQueryWrapper<>()` 实参同被拒绝（不是只有变量形态）。 */
+    fun testSelectListWithInlineNewWrapperIsRejectedByBatchTemplate() {
+        val preview = convert("selectList", """
+            class Demo {
+                void run(UserService service) {
+                    service.selectList(new LambdaQueryWrapper<UserEntity>());
+                }
+            }
+            interface IService<T> {}
+            interface UserService extends IService<UserEntity> {}
+            class UserEntity {
+                private Long id;
+                private String name;
+            }
+            class LambdaQueryWrapper<T> {}
+        """)
+        assertNull("内联 new Wrapper 实参同样不得退化到批量模板", preview)
+    }
+
+    /**
+     * 5c. D264 修0 反向守卫：实参**静态看不出是 Wrapper**（`Object` 声明）时批量模板照常工作——
+     * 守卫是类型级判据，不是「任何实参都拒绝」。
+     */
+    fun testSelectListWithNonWrapperArgumentStillProducesSql() {
+        val preview = convert("selectList", """
+            class Demo {
+                void run(UserService service, Object cond) {
+                    service.selectList(cond);
+                }
+            }
+            interface IService<T> {}
+            interface UserService extends IService<UserEntity> {}
+            class UserEntity {
+                private Long id;
+                private String name;
+            }
+        """)
+        assertNotNull("非 Wrapper 实参不触发修0 守卫（否则批量能力整体失效）", preview)
         assertTrue("全列查询应含 FROM：${preview!!.sql}", preview.sql.contains("FROM"))
     }
 
