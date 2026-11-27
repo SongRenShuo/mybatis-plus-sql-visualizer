@@ -97,6 +97,13 @@ class QueryWrapperParser(
         // 写族 set 方法（SET 子句来源，非 WHERE 条件）
         "set", "setSql", "setIncrBy", "setDecrBy", "setIfExists", "setApply",
         "setUpdateEntity", "setUpdateEntityAndNull",
+        // MPJ 逻辑删除控制（T-M20-05 官方六方法）：语义已知——决定 deleted 是否注入，
+        // 由 SqlPreviewService.evaluateLogicDeleteState 消费。它们照样会落到本 when 的 else；
+        // 若进 unknownMethods，用户会在一条完全正常的预览上看到「无法解析 disableLogicDel」。
+        "disableLogicDel", "enableLogicDel", "disableSubLogicDel", "enableSubLogicDel",
+        "logicDelToOn", "logicDelToWhere",
+        // MPJ `on(...)`：join 的 ON 条件构造器，实参按 OnConditionArg 在 MpjLambdaConverter 里解析
+        "on",
     )
 
     /**

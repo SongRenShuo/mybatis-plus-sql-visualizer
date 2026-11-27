@@ -567,12 +567,53 @@ class SqlPreviewServicePreviewTest: BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     /**
-     * D264 修0：`selectList(FilterUtil.buildQuery(1))`——实参静态可见是 Wrapper，但 Wrapper 链路径
-     * 定位不到链（工具方法返回裸变量，属修2 范畴）。**修复前**批量模板接手，产出
-     * `SELECT id, status, device_name FROM device_info_entity`（无 WHERE）的静默错误 SQL。
-     * 现在必须：不产 SQL、给出明确原因。
+     * D264 修0（批量兜底路径）：`mapper.selectList(FilterUtil.buildQuery(1))`——实参静态可见是
+     * Wrapper（`buildQuery` 返回 `LambdaQueryWrapper`），但 Wrapper 链路径四顺位全失败。
+     * **修复前**批量模板接手，产出 `SELECT id, status, device_name FROM device_info_entity`
+     * （无 WHERE，R10 实测）的静默错误 SQL。现在必须：不产 SQL、给出明确原因。
      */
     fun testD264WrapperArgButChainUnresolvedRefusesBatchTemplate() {
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    mapper.selectList(FilterUtil.buildQuery(1));
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                    private Integer status;
+                    private String deviceName;
+                }
+
+                static class FilterUtil {
+                    static LambdaQueryWrapper<DeviceInfoEntity> buildQuery(Integer status) {
+                        LambdaQueryWrapper<DeviceInfoEntity> q = new LambdaQueryWrapper<>();
+                        q.eq(DeviceInfoEntity::getStatus, status);
+                        return q;
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("必须给出结果（而不是静默 return null），否则用户不知道发生了什么", result)
+        assertEquals("SQL 必须为空（拒绝产出）", "", result!!.sql)
+        assertNotNull("必须带明确提示", result.warning)
+        val warning = result.warning!!
+        assertTrue("提示要点明「检测到 Wrapper 实参」：$warning", warning.contains("检测到 Wrapper 实参"))
+        assertTrue("提示要点明方法名：$warning", warning.contains("selectList"))
+    }
+
+    /**
+     * D264 修0（**wrapper 路径**最坏面）：链被定位到，但链上只收集到工具方法名（`[buildQuery]`）、
+     * 一个可识别条件都没有——这正是 R10 实测产出 `SELECT id, status, device_name FROM
+     * device_info_entity`（无 WHERE）的形态。修0 的零条件守卫必须拒绝产出并说明原因。
+     */
+    fun testD264ConditionlessChainWithUnknownMethodRefusesPreview() {
         myFixture.configureByText(
             "Demo.java",
             """
@@ -601,56 +642,17 @@ class SqlPreviewServicePreviewTest: BasePlatformTestCase() {
             """.trimIndent(),
         )
         val result = newService().preview(anchor())
-        assertNotNull("必须给出结果（而不是静默 return null），否则用户不知道发生了什么", result)
-        assertTrue("不得产出无 WHERE 的全表 SQL：\n${result!!.sql}", !result.sql.contains("FROM device_info_entity"))
-        assertEquals("SQL 必须为空（拒绝产出）", "", result.sql)
-        assertNotNull("必须带明确提示", result.warning)
-        val warning = result.warning!!
-        assertTrue("提示要点明「检测到 Wrapper 但无法解析条件链」：$warning", warning.contains("无法解析其条件链"))
-        assertTrue("提示要点明方法名：$warning", warning.contains("selectList"))
-    }
-
-    /**
-     * D264 修0（wrapper 路径最坏面）：`return q` 形态下链被定位到，但链上收集到的
-     * 只有工具方法名（`[buildQuery]`）、一个可识别条件都没有——同样必须拒绝产出，不能给无 WHERE SQL。
-     */
-    fun testD264ConditionlessChainWithUnknownMethodRefusesPreview() {
-        myFixture.configureByText(
-            "Demo.java",
-            """
-            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-
-            public class Demo {
-                public void query() {
-                    LambdaQueryWrapper<DeviceInfoEntity> w = FilterUtil.buildQuery(1);
-                    mapper.selectList(w);
-                }
-
-                static class DeviceInfoEntity {
-                    private Long id;
-                    private Integer status;
-                }
-
-                static class FilterUtil {
-                    static LambdaQueryWrapper<DeviceInfoEntity> buildQuery(Integer status) {
-                        LambdaQueryWrapper<DeviceInfoEntity> q = new LambdaQueryWrapper<>();
-                        q.eq(DeviceInfoEntity::getStatus, status);
-                        return q;
-                    }
-                }
-            }
-            """.trimIndent(),
-        )
-        val result = newService().preview(anchor())
-        assertNotNull(result)
-        val sql = result!!.sql
-        assertTrue("产物不得是无条件的全表 SELECT：\n$sql", !sql.startsWith("SELECT ") || sql.contains("WHERE") || sql.isEmpty())
-        assertTrue("拒绝时必须留下原因：$sql / ${result.warning}", sql.isEmpty() || result.warning != null)
+        assertNotNull("必须给出结果而不是静默 null（用户要知道发生了什么）", result)
+        assertEquals("零条件 + 未知链方法时必须拒绝产出空 WHERE 的全表 SQL", "", result!!.sql)
+        val warning = result.warning
+        assertNotNull("拒绝时必须给出原因", warning)
+        assertTrue("提示要说明「无法解析其条件链」：$warning", warning!!.contains("无法解析其条件链"))
+        assertTrue("提示要点名未识别的方法：$warning", warning.contains("buildQuery"))
     }
 
     /**
      * D264 修5：自研 wrapper 的语义化链方法（`statusEq`）——收集层能过、解析层不认。
-     * 修复后条件仍然缺（不猜语义是刻意的），但**必须出现在 warning 里**，用户能看到少了什么。
+     * 条件仍然缺（不猜语义是刻意的），但**必须出现在 warning 里**，用户能看到少了什么。
      */
     fun testD264UnknownChainMethodSurfacesInWarning() {
         myFixture.configureByText(
@@ -658,13 +660,9 @@ class SqlPreviewServicePreviewTest: BasePlatformTestCase() {
             """
             import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 
-            public class MyWrapper<T> extends LambdaQueryWrapper<T> {
-                public MyWrapper<T> statusEq(Integer status) { return this; }
-            }
-
             public class Demo {
                 public void query() {
-                    MyWrapper<DeviceInfoEntity> w = new MyWrapper<>();
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<>();
                     w.eq(DeviceInfoEntity::getId, 1L);
                     w.statusEq(1);
                     mapper.selectList(w);
@@ -673,6 +671,11 @@ class SqlPreviewServicePreviewTest: BasePlatformTestCase() {
                 static class DeviceInfoEntity {
                     private Long id;
                     private Integer status;
+                }
+
+                static class LambdaQueryWrapper<T> {
+                    public LambdaQueryWrapper<T> eq(java.util.function.Function<T, ?> col, Object val) { return this; }
+                    public LambdaQueryWrapper<T> statusEq(Integer status) { return this; }
                 }
             }
             """.trimIndent(),
@@ -683,7 +686,7 @@ class SqlPreviewServicePreviewTest: BasePlatformTestCase() {
         val warning = result.warning
         assertNotNull("未识别方法必须可见（不能静默丢条件）：${result.sql}", warning)
         assertTrue("warning 要点名 statusEq：$warning", warning!!.contains("statusEq"))
-        assertTrue("warning 要说明「条件未出现在 SQL 中」：$warning", warning.contains("无法静态解析"))
+        assertTrue("warning 要说明「无法静态解析」：$warning", warning.contains("无法静态解析"))
     }
 
     /** D264 修5 反向守卫：全部方法都识别时**不挂**任何警告（避免噪音式误报）。 */
@@ -709,6 +712,44 @@ class SqlPreviewServicePreviewTest: BasePlatformTestCase() {
         val result = newService().preview(anchor())
         assertNotNull(result)
         assertNull("全部方法已识别时不得有 warning（避免把正常预览变成告警）：${result!!.warning}", result.warning)
+    }
+
+    /**
+     * D264 修5 反向守卫（避免噪音）：MPJ 官方**逻辑删除控制方法**（`disableLogicDel` /
+     * `enableLogicDel` / `logicDelToWhere` 等六方法）语义已知——由 [SqlPreviewService] 的
+     * `evaluateLogicDeleteState` 消费、影响的是 deleted 注入而不是 WHERE 条件。它们会作为链调用
+     * 落到解析器的 else 分支，若进 unknownMethods，用户会在一条完全正常的预览上看到
+     * 「无法静态解析 disableLogicDel」这种误导性红字。
+     */
+    fun testD264LogicDeleteControlMethodsProduceNoUnknownMethodWarning() {
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<OrderEntity> w = new MPJLambdaWrapper<OrderEntity>()
+                        .selectAll(OrderEntity.class)
+                        .disableLogicDel()
+                        .logicDelToWhere()
+                        .eq(OrderEntity::getId, 1001L);
+                }
+
+                static class OrderEntity {
+                    private Long id;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull(result)
+        assertTrue("条件必须正常产出：${result!!.sql}", result.sql.contains("id = 1001"))
+        val warning = result.warning
+        assertTrue(
+            "逻辑删除控制方法语义已知，不得被报成「无法静态解析」：$warning",
+            warning == null || !warning.contains("无法静态解析"),
+        )
     }
 
     override fun setUp() {
