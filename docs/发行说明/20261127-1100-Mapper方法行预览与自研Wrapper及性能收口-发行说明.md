@@ -31,7 +31,7 @@
 
 8. **从日志面板点「设置」不再停在 SQL 日志页中间（T-SqlLogSettingsJumpAnchor，`52322da26`）**：设置页按页面缓存内容与滚动位置，齿轮入口只切页不做定位，于是 SQL 日志这种多分组长页会沿用上次停的位置。现在只切页时落点复位到页顶；搜索与引导链接的带目标定位（滚动 + 高亮）不受影响。
 
-9. **join 消费族加了守卫（D256，`84ae88a2d` + `0c15797e5`）**：wrapper 未识别时不再输出 `WHERE id IN (?, ...)` 这类凭空条件的错误 SQL。
+9. **join 消费族加了守卫（D256，`84ae88a2d` + `0c15797e5`，随 `736b6a272` 合流进入发行树）**：wrapper 未识别时不再输出 `WHERE id IN (?, ...)` 这类凭空条件的错误 SQL。两笔原始提交写在 11-23，但当时只在 D256 分支上，直到本版 D256 合流才进 master；上个正式版的产物不含它。
 
 ### 优化
 
@@ -57,4 +57,4 @@
 - 本期无新增已知问题
 - 本版为 `2026.11.27` 正式版，三轮内测段已按能力面合入本节，内测 changeNotes 块与 CHANGELOG 段同批删除，逐条细目留在 `docs/发行说明/` 三篇内测说明
 
-构建记录：https://github.com/SongRenShuo/mybatis-plus-sql-visualizer/actions/runs/{run_id}
+构建记录：https://github.com/SongRenShuo/mybatis-plus-sql-visualizer/actions/runs/45927546245
