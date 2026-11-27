@@ -1,6 +1,6 @@
 # SQL Visualizer
 
-[![SongRenShuo/mybatis-plus-sql-visualizer MCP server](https://glama.ai/mcp/servers/SongRenShuo/mybatis-plus-sql-visualizer/badges/score.svg)](https://glama.ai/mcp/servers/SongRenShuo/mybatis-plus-sql-visualizer) [![MyBatis SQL Visualizer MCP server](https://mcprush.com/badge/mybatis-sql-visualizer-mcp/card.svg)](https://mcprush.com/to/mybatis-sql-visualizer-mcp?ref=badge)
+[![SongRenShuo/mybatis-plus-sql-visualizer MCP server](https://glama.ai/mcp/servers/SongRenShuo/mybatis-plus-sql-visualizer/badges/score.svg)](https://glama.ai/mcp/servers/SongRenShuo/mybatis-plus-sql-visualizer) [![MyBatis SQL Visualizer MCP server](https://mcprush.com/badge/mybatis-sql-visualizer-mcp/compact.svg)](https://mcprush.com/to/mybatis-sql-visualizer-mcp?ref=badge)
 
 > 服务未启，SQL 先知。
 
