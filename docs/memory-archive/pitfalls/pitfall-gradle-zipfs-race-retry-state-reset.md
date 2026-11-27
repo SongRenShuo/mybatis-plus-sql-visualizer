@@ -74,4 +74,21 @@ java.nio.file.ClosedFileSystemException
   上一版无条件付 L2 的钱；run 45966781755 的 test(3) 证明 L1 就够。
 - **未验**：概率是否真的下降（原 ~4/25 片）需要攒多轮读数；单轮绿不算证据。
 
+## 2026-11-27 收口读数（两轮 run 对照）
+
+| 轮 | run | 索引缓存 | 结果 |
+|---|---|---|---|
+| A（索引冷） | 45976887970 | build `Cache saved with key: ipgp-…` | `test (fast)` 命中竞态（1/13，对得上原 4/25）→ 旧愈合签名太窄没接住 → gate 红 |
+| B（索引已恢复） | 45979872859 | 下游 `Cache hit` / `Cache restored from key: ipgp-…`（**8MB**） | 15 个 job 全绿、gate ✓，**同一条 fast 腿首跑即绿（494.9s），无竞态** |
+
+A 轮暴露的两个愈合缺口（已在 `827613cb4` 修）：
+1. **签名太窄**：L1 重跑的失败日志里**没有** `ClosedFileSystemException` 栈，只剩
+   `Could not find bundled plugin with ID: 'com.intellij.database'` → 被当成「非竞态失败」直接退出。
+   现按「两个限定词同现」判竞态（别家 bundled plugin 失败不算，防掩盖真实红）。
+2. **清错了地方**：缓存搬家后，L1 清项目侧 `.intellijPlatform` 等于没清；L2 现在项目侧 + 共享侧都清。
+3. 13 秒同错复现的元凶是**配置缓存**（失败后紧接 `Configuration cache entry stored`）：L1 现在先清项目
+   `.gradle/configuration-cache`，重解包（`transformed/idea*`）降到 L3。
+
+**仍不算证据的部分**：B 轮绿只说明「索引恢复这条路上没复发」，概率是否降到 ~0 需要攒多轮（原约 4/25 片）。
+
 相关：[[pitfall-ci-powershell-in-workflow-needs-local-dryrun]]、[[pitfall-ipgp-product-releases-cache-stale]]
