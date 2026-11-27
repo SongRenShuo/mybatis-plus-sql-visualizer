@@ -146,4 +146,34 @@ class XmlInlineSqlPreviewServiceTest : BasePlatformTestCase() {
         assertEquals("物理表名不可解析为实体 → 保持 SQL", SourceLanguage.SQL, result.sourceLanguage)
         assertEquals("同步预览不得触发别名反查全扫", 0, EntityAliasSweep.scanCountForTest())
     }
+
+    // ------------------------------------------------------------------
+    // T-XmlEntityDecode：用户报障形态端到端（<sql id> 片段 + 普通文本实体）
+    // ------------------------------------------------------------------
+
+    /**
+     * 用户真机形态：mapper `<sql id>` 片段不是 mapper 语句白名单项，走通用内嵌 SQL 链
+     * （PSI 原文）。`&gt;=` / `&lt;=` 必须还原成比较运算符——否则「复制 SQL / 执行 SQL」
+     * 得到的是 `&gt;=`，真机执行必然语法错误（报障截图形态）。
+     */
+    fun test普通文本实体_片段预览还原比较运算符() {
+        xmlFile(
+            "<mapper namespace=\"n\"><sql id=\"orderSideMaxUpdateTimeUnion\">" +
+                "select o.tenant_id from tb_order o where o.update_time &gt;= #{fromTime}" +
+                " and o.update_time &lt;= #{cutoffTime}" +
+                "</sql></mapper>",
+        )
+        val result = XmlInlineSqlPreviewService.preview(null, tagNamed("sql"))
+        assertTrue("SQL 中不得残留 XML 实体：${result.sql}", !result.sql.contains("&gt;"))
+        assertTrue("SQL 中不得残留 XML 实体：${result.sql}", !result.sql.contains("&lt;"))
+        assertTrue("比较运算符应还原：${result.sql}", result.sql.contains("o.update_time >= #{fromTime}"))
+        assertTrue("比较运算符应还原：${result.sql}", result.sql.contains("o.update_time <= #{cutoffTime}"))
+    }
+
+    /** CDATA 内的 `&gt;` 是真机字面量（MyBatis 同样不解码），修复不得越界改写。 */
+    fun testCDATA内实体_保持字面量() {
+        xmlFile("<root><statement><![CDATA[SELECT * FROM t WHERE a &gt;= 1]]></statement></root>")
+        val result = XmlInlineSqlPreviewService.preview(null, tagNamed("statement"))
+        assertEquals("SELECT * FROM t WHERE a &gt;= 1", result.sql)
+    }
 }

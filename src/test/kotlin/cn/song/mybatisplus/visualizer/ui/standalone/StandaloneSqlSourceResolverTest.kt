@@ -410,6 +410,32 @@ class StandaloneSqlSourceResolverTest {
         assertEquals(listOf("Cols"), resolved!!.result.missingFragmentIds)
     }
 
+    // T-XmlEntityDecode：解码实现统一到 xml.decodeXmlTextSegment（单趟、只解一次、补数字引用）
+
+    @Test
+    fun `转义整段里的数字字符引用一并还原`() {
+        // 网页转义后仍保留的数字引用（`&#62;` → `>`）必须与其他实体一并还原，
+        // 否则整段粘贴的 SQL 里会带 `&#62;=` 这种执行不了的形态
+        val text = "&lt;mapper&gt;&lt;select id=&quot;q6&quot;&gt;SELECT * FROM t WHERE a &#62;= 5&lt;/select&gt;&lt;/mapper&gt;"
+        val resolved = StandaloneSqlSourceResolver.resolve(text)
+        assertNotNull(resolved)
+        assertEquals(StandaloneSqlSourceResolver.Kind.XML_STATEMENT, resolved!!.kind)
+        assertTrue("数字引用应还原为比较符：${resolved.result.sql}", resolved.result.sql.contains("a >= 5"))
+    }
+
+    @Test
+    fun `转义整段里的CDATA内容只解一层`() {
+        // 网页对原 XML 做字符级转义：CDATA 里的字面 `&gt;` 会变成 `&amp;gt;`。
+        // 解码一次后还原成 `<![CDATA[... &gt; ...]]>`，DOM 再解析时 CDATA 保持字面量——
+        // 这正是 MyBatis 真机语义；实现不得把 CDATA 内容当普通文本再解一层。
+        val text = "&lt;mapper&gt;&lt;select id=&quot;q7&quot;&gt;" +
+            "&lt;![CDATA[SELECT * FROM t WHERE a &amp;gt;= 5]]&gt;" +
+            "&lt;/select&gt;&lt;/mapper&gt;"
+        val resolved = StandaloneSqlSourceResolver.resolve(text)
+        assertNotNull(resolved)
+        assertEquals("SELECT * FROM t WHERE a &gt;= 5", resolved!!.result.sql.trim())
+    }
+
     @Test
     fun `跨命名空间refid按末段名对定义`() {
         val text = """

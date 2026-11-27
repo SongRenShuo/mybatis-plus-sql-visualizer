@@ -343,18 +343,17 @@ object StandaloneSqlSourceResolver {
     )
 
     /**
-     * J-2：XML 实体解码——仅当文本出现 `&lt;`/`&gt;`（网页/文档复制的整段转义形态）才做，
-     * 且只解码五个标准实体。合法 XML 里的 `a &lt; b` 由 DOM 解析正确还原（先试原文、解码仅作
+     * J-2：XML 实体解码——仅当文本出现 `&lt;`/`&gt;`（网页/文档复制的整段转义形态）才做。
+     * 合法 XML 里的 `a &lt; b` 由 DOM 解析正确还原（先试原文、解码仅作
      * 重试候选，见 [resolveAsXml] 的 attempts 序），不重演 dbx #11699 的实体分号切分问题。
+     *
+     * T-XmlEntityDecode：实现统一到 [cn.song.mybatisplus.visualizer.xml.decodeXmlTextSegment]
+     * ——单趟扫描、只解一次（旧的顺序 replace 对 `&amp;gt;` 恰好正确，但对混排/`&amp;lt;`
+     * 形态是隐式顺序耦合），并补上数字字符引用（`&#60;` / `&#x3C;`）与「CDATA 内不解码」。
      */
     private fun decodeXmlEntitiesIfEscaped(text: String): String {
         if (!text.contains("&lt;") && !text.contains("&gt;")) return text
-        return text
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&quot;", "\"")
-            .replace("&apos;", "'")
-            .replace("&amp;", "&")
+        return cn.song.mybatisplus.visualizer.xml.decodeXmlTextSegment(text)
     }
 
     // ---------- 纯 SQL 路径（D-1） ----------
