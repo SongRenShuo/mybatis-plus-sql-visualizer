@@ -655,14 +655,21 @@ class GuardSelfTestCoverageMetaGuardTest {
         val GUARD_CLASSES = listOf(
             GuardEntry(
                 "convention/PsiConditionWhitelistCoverageGuardTest.kt",
-                listOf(DecisionFn("uncoveredSettMethods", FnKind.VIOLATIONS)),
+                listOf(
+                    DecisionFn("uncoveredSettMethods", FnKind.VIOLATIONS),
+                    DecisionFn("variantSuffixDrift", FnKind.VIOLATIONS),
+                ),
                 "D264 守卫（2026-11-28 CI 实证）：伪条件白名单 CONDITION_CHAIN_METHOD_NAMES 必须覆盖 " +
                     "converter 的赋值方法面。修 4 的 isPseudoConditionCall 会剔掉白名单外的方法名，而白名单与 " +
                     "converter 能力面会漂移——本轮两次实证：车道 A 漏 setSql/setIncrBy 等，CI 分片 1 实测 " +
                     "S58 期望 `SET status = 2, updated_at = now()` 只剩 `SET status = 2`；车道 B 漏逻辑删除" +
                     "六方法与 on(...)，产生假警告。判定内核 uncoveredSettMethods 返回「converter 支持但白名单" +
                     "缺失」的方法名集合（对照 LambdaUpdateConverter / UpdateJoinConverter 的 SET 常量）。" +
-                    "自证=缺 setSql 必被点名 / 齐备时放行 / 白名单整体缺失时不空转 三态。",
+                    "第二个判定内核 variantSuffixDrift 管另一半漂移：解析侧 QueryWrapperParser 用 " +
+                    "endsWith(IfExists/IfNotEmpty) 归一化变体名，收集侧 stripConditionVariantSuffix 必须同源，" +
+                    "否则 eqIfExists 这类方法会被当伪条件剔除（集成期实测 WHERE 少两条 AND）。" +
+                    "自证=缺 setSql 必被点名 / 齐备时放行 / 白名单整体缺失时不空转 / 仅解析侧有后缀必被点名 / " +
+                    "两侧同源时放行 / 收集侧函数缺失时不空转 六态。",
             ),
             GuardEntry(
                 "ui/gutter/MapperPreviewProviderOrderGuardTest.kt",

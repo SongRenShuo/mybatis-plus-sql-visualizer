@@ -35,6 +35,7 @@ class PsiConditionWhitelistCoverageGuardTest {
     private val wrapperLocatorPath = "src/main/kotlin/cn/song/mybatisplus/visualizer/psi/WrapperLocator.kt"
     private val lambdaUpdatePath = "src/main/kotlin/cn/song/mybatisplus/visualizer/converter/LambdaUpdateConverter.kt"
     private val updateJoinPath = "src/main/kotlin/cn/song/mybatisplus/visualizer/converter/UpdateJoinConverter.kt"
+    private val parserPath = "src/main/kotlin/cn/song/mybatisplus/visualizer/converter/QueryWrapperParser.kt"
 
     /** 判定内核：converter 支持但白名单缺失的方法名（空集 = 合规）。 */
     internal fun uncoveredSettMethods(
@@ -86,6 +87,40 @@ class PsiConditionWhitelistCoverageGuardTest {
             .map { it.groupValues[1] }
             .toList()
 
+    /**
+     * 判定内核之二：条件变体后缀必须两侧同源（空集 = 合规）。
+     *
+     * 解析侧 `QueryWrapperParser` 用 `endsWith("IfExists")` / `endsWith("IfNotEmpty")` 把变体名
+     * 归一化回基底条件方法；收集侧 `WrapperLocator.stripConditionVariantSuffix` 用同一组后缀判断
+     * 「这条调用算不算条件」。两侧一旦漂移，就会出现「解析器认识、收集器不认识」的方法名，
+     * 表现为条件被静默剔除——D264 集成期 `eqIfExists`/`likeRightIfExists` 就是这样丢的。
+     *
+     * 返回对称差（只在一侧出现的后缀），按两侧各自从源码字面量提取。
+     */
+    internal fun variantSuffixDrift(
+        parserSource: String,
+        locatorSource: String,
+    ): List<String> {
+        val parser = parserSuffixes(parserSource)
+        val locator = locatorSuffixes(locatorSource)
+        return (parser - locator).sorted().map { "仅解析侧:$it" } +
+            (locator - parser).sorted().map { "仅收集侧:$it" }
+    }
+
+    /** 解析侧后缀：`endsWith("X")` 的字面量。 */
+    internal fun parserSuffixes(source: String): Set<String> =
+        Regex("endsWith\\(\"([A-Za-z][A-Za-z0-9]*)\"\\)")
+            .findAll(source)
+            .map { it.groupValues[1] }
+            .toSet()
+
+    /** 收集侧后缀：`stripConditionVariantSuffix` 函数体内的 `endsWith("X")` 字面量。 */
+    internal fun locatorSuffixes(source: String): Set<String> {
+        val start = Regex("fun\\s+stripConditionVariantSuffix").find(source)?.range?.first ?: return emptySet()
+        val body = source.substring(start, minOf(source.length, start + 1200))
+        return parserSuffixes(body)
+    }
+
     @Test
     fun `伪条件白名单必须覆盖converter赋值方法面`() {
         val whitelist = readSource(wrapperLocatorPath)
@@ -100,9 +135,48 @@ class PsiConditionWhitelistCoverageGuardTest {
         )
     }
 
+    @Test
+    fun `条件变体后缀必须解析侧与收集侧同源`() {
+        val drift = variantSuffixDrift(readSource(parserPath), readSource(wrapperLocatorPath))
+        assertTrue(
+            "条件变体后缀两侧不一致：$drift\n" +
+                "解析侧（QueryWrapperParser）用 endsWith 归一化变体名回基底条件方法，" +
+                "收集侧（WrapperLocator.stripConditionVariantSuffix）必须用同一组后缀，\n" +
+                "否则「解析器认识、收集器不认识」的方法会被当伪条件静默剔除" +
+                "（D264 实测：eqIfExists/likeRightIfExists 被剔 → WHERE 少两条 AND）。",
+            drift.isEmpty(),
+        )
+    }
+
     // ------------------------------------------------------------------
     // 自证语料
     // ------------------------------------------------------------------
+
+    /** 自证：仅解析侧有后缀时必被点名（覆盖本轮真实形态）。 */
+    @Test
+    fun `自证_仅解析侧有后缀必被点名`() {
+        val parser = """rawCall.methodName.endsWith("IfExists") -> rawCall.copy(methodName = "")"""
+        val locator = """private fun stripConditionVariantSuffix(name: String): String = name"""
+        val drift = variantSuffixDrift(parser, locator)
+        assertTrue("仅解析侧有 IfExists 必须被点名，实际=$drift", drift == listOf("仅解析侧:IfExists"))
+    }
+
+    /** 自证：两侧同源时放行（防「永远报错」型假守卫）。 */
+    @Test
+    fun `自证_两侧同源时放行`() {
+        val parser = """call.methodName.endsWith("IfExists")"""
+        val locator = """private fun stripConditionVariantSuffix(name: String) = when { name.endsWith("IfExists") -> 1 else -> 2 }"""
+        assertTrue("同源时不得报错", variantSuffixDrift(parser, locator).isEmpty())
+    }
+
+    /** 自证：收集侧函数被删/改名时不得静默空转。 */
+    @Test
+    fun `自证_收集侧函数缺失时不静默空转`() {
+        val parser = """call.methodName.endsWith("IfExists")"""
+        val locator = """// stripConditionVariantSuffix 被删了"""
+        val drift = variantSuffixDrift(parser, locator)
+        assertTrue("收集侧函数缺失必须被点名，实际=$drift", drift.contains("仅解析侧:IfExists"))
+    }
 
     /** 自证：白名单缺 `setSql` 时，判定内核必须点名它（不得空转）。 */
     @Test
