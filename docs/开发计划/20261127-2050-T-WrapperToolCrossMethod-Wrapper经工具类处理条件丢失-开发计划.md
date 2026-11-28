@@ -747,3 +747,62 @@ Map 条件族实参是 `Map` 不是 Wrapper，不进 `hasWrapperTypedArgument`�
 比对 `run 46029337966`（sha `4823faadc`）的同一条用例，失败读数一字不差
 （期望 36/49/104，实际 `[36, 53, 65, 79, 94, 108, 120, 134, 147, 159, 172, 186, 200, 211, 227, 228, 241]`）。
 既有问题，不属本轮修复范围，已在计划里销号留痕。
+
+### 第三个 A×B 交互缺陷：修 2 的「工具方法」判定把链方法也认成工具方法
+
+**这是本轮最隐蔽的一个**——它让**本来绿了几百天的用例**变成无条件 SQL，而且只在集成分支上出现。
+
+**形态**（`ChainWrappers.lambdaQueryChain(m).eq(...).one()`，master 上一直绿）：
+
+```java
+ChainWrappers.lambdaQueryChain(deviceInfoMapper)
+        .eq(DeviceInfoEntity::getId, 1001L)
+        .one();
+```
+
+期望 `WHERE id = 1001`，实际 `SELECT ... FROM device_info_entity`（**WHERE 整条消失**）。
+
+**根因**：车道 A 为了让 `mapper.selectList(FilterUtil.buildQuery(1))` 可读，把
+`findWrapperFactoryCall`（找链起点的函数）的判定从「只认工厂方法」放宽成
+「工厂方法 **或** 返回 Wrapper 的方法」：
+
+```kotlin
+.firstOrNull { isWrapperFactoryCall(it) || isWrapperReturningToolCall(it) }
+```
+
+而 `isWrapperReturningToolCall` 当时的实现只有两条：不是工厂方法 + **返回类型是 Wrapper**。
+`eq` 返回 `LambdaQueryChainWrapper`（链式 API 的正常签名），`one` 也是 → 链上每个方法都满足。
+
+后果是两级的：
+
+1. **锚点在链尾**（`one`）时，`findWrapperFactoryCall` 自锚点向上走，先碰到 `eq` 就返回它；
+2. `buildChainFromFactory` 拿到 `eq`，判定 `toolCall = true` → 走 `expandWrapperToolCall(eq)`
+   去展开 **`eq` 方法体内**的链；`eq` 的方法体是 `return this`，体内没有链 → 收集结果为空。
+
+于是「找到链起点」这件事本身成功了（`wrapperType`、`table` 都对），但**链上一条调用都没收到**。
+这也是为什么最早的探针读数会长成那样：`atHead` 有 `[eq]`，`atOne`/`atEq` 是 `[]`
+——**读数的差异由锚点位置决定，而不是由代码语义决定**，这个特征本身就说明判定错位。
+
+**受影响用例**（master 全绿、集成分支红）：`testServiceLambdaUpdateChainUpdateEntityRendersEntitySet`、
+`testMpjLogicDeleteSubDisableThenEnableRestores`、`testChainWrappersLambdaQueryChainLocates`、
+`testOfficialApiFirstAndComment`、`testHelperMethodShortCircuitApplyToggles`、
+`testMpjLogicDelToWhereMovesSubConditionToWhereEnd`、`testMpjLogicDeleteDisableMainOnly`、
+`testMpjLogicDeleteDisableSubOnly`。
+
+**修法**（`isWrapperReturningToolCall` 收紧，三条并列）：
+
+1. **名字白名单**：`CONDITION_CHAIN_METHOD_NAMES` / `JOIN_CHAIN_METHOD_NAMES` /
+   `MPJ_STRUCTURE_METHOD_NAMES` / `chainTerminalMethodNames` 里的一律不是工具方法；
+2. **qualifier 类型兜底**：qualifier 的静态类型是 Wrapper → 这是链延续（自研链方法 `w.statusEq(...)`
+   用的正是这条路，名字白名单挡不住）；
+3. 剩下的才按返回类型判定。
+
+**教训（比前两条更普适）**：这次不是「白名单漏一项」，而是**判定放宽时没有收窄边界**。
+`isWrapperReturningToolCall` 这个名字里的「tool」是**语义**，实现却是「返回 Wrapper」这个**结构**特征；
+而链上每个方法在结构上都返回 Wrapper。**结构特征无法区分语义角色时，必须补上「它在链里的位置」这一维**
+——`findWrapperFactoryCall` 找的是「链的起点」，因此候选必须排除「链的中间/末端」。
+
+**为什么三轮定向测试全没抓到**：A 的定向用例覆盖的是「工具方法作实参」这一族，
+`ChainWrappers` 链式族在 A 的改动前就绿，A 不会重跑它；B/C 的车道根本不碰 `WrapperLocator`。
+**跨车道的破坏只能由跨车道的全量读到**——这正是「各自全绿 ≠ 合并后绿」的第三次实证，
+也是必须把全量交给 CI 而不是靠子代理定向报告的唯一理由。

@@ -1534,6 +1534,44 @@ align 与 valign 都不在），默认 `vertical-align: middle` 下，两列说�
 
 **Seen 1× (2026-11-27)**
 
+### L116 判定条件放宽时必须同步收窄「候选角色」，否则结构特征会把链上每个方法都认成起点
+
+**规则**：给「找 X」的函数放宽候选范围时，先写出**这个函数在做什么角色判定**，再问「新放进来的东西有没有
+可能是别的角色」。`findWrapperFactoryCall` 找的是**链的起点**，而「返回 Wrapper」这个结构特征对链上
+**每个**方法都成立（`eq` 返回 `LambdaQueryChainWrapper`）——只看结构特征，起点和中间节点就无法区分。
+
+**证据**：2026-11-28 D264 集成期，`findWrapperFactoryCall` 被放宽成
+`isWrapperFactoryCall(it) || isWrapperReturningToolCall(it)`，后者当时只有「不是工厂方法 + 返回类型是
+Wrapper」两条。`ChainWrappers.lambdaQueryChain(m).eq(...).one()` 在 master 上绿了几百天，
+集成后 `WHERE id = 1001` **整条消失**（`f058c285a` 引入；本日修复）。锚点位决定读数这点最迷惑人：
+锚点落链首得到 `[eq]`，落 `eq`/`one` 得到 `[]`——**读数差异由锚点位置而非代码语义决定**，看到这个特征
+就该怀疑角色判定错位，而不是去查条件解析。
+
+**正例**：修法三条并列——名字白名单（条件/联表/结构/终结点集合）、qualifier 静态类型是 Wrapper 即判
+链延续（自研链方法靠这条，名字挡不住）、剩下的才按返回类型判。
+**反例**：给「找起点」加候选而不排除「链中间/末端」；或指望名字启发区分——自研链方法名千变万化。
+
+**Seen 1× (2026-11-28)**
+
+### L117 同一语义的「名字族规则」必须在收集侧与解析侧同源，不能一侧用后缀规则一侧枚举全名
+
+**规则**：解析侧对方法名做**规则化归一化**（`endsWith("IfExists")` → 剥后缀）时，收集侧的准入判定
+必须用**同一条规则**，不能改成枚举基底名。两侧一旦一侧规则、一侧枚举，就永久存在「解析器认识、
+收集器不认识」的方法名，表现为条件被静默剔除。
+
+**证据**：2026-11-28 D264 集成，`QueryWrapperParser:141-143` 用
+`endsWith("IfExists")/endsWith("IfNotEmpty")` 归一化变体名，而收集侧
+`WrapperLocator.isPseudoConditionCall` 只枚举基底名（`eq`/`like`…）→ `eqIfExists(...)` /
+`likeRightIfExists(...)` 被当伪条件剔掉，WHERE 里两条 `AND` 消失
+（`SqlPreviewServiceOfficialApiTest.testOfficialApiApplyFuncAndIfExists`）。
+同批次 `selectSub` 是另一形态：`MpjLambdaConverter` 明确处理它（结构方法），收集侧结构集合漏登。
+
+**正例**：收集侧抽 `stripConditionVariantSuffix`，后缀集合与解析侧一致，并加
+`variantSuffixDrift` 判定（`PsiConditionWhitelistCoverageGuardTest`）双向对账，配三态自证。
+**反例**：在收集侧把变体名一个个枚举出来——每加一个变体就要两处改，必然再漏。
+
+**Seen 1× (2026-11-28)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
