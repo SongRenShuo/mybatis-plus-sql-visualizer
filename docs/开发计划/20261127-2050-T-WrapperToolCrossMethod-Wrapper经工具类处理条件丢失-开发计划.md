@@ -777,6 +777,30 @@ AB on  tests=16 fail=9 time=13.300   ← 稳态
 （期望 36/49/104，实际 `[36, 53, 65, 79, 94, 108, 120, 134, 147, 159, 172, 186, 200, 211, 227, 228, 241]`）。
 既有问题，不属本轮修复范围，已在计划里销号留痕。
 
+### 收口状态（2026-11-28 11:3x）
+
+集成分支 `t-d264-integrate` 四笔收口提交（均已推 Gitee + GitHub）：
+
+| 提交 | 内容 |
+|---|---|
+| `2b497b25d` | 修 2 收紧「工具方法」判定 + 补全白名单与条件变体后缀 |
+| `95102402c` | 守卫补第二个判定内核（variantSuffixDrift）+ 三态自证 |
+| `3930bf699` | 本册 §十 记录第三个 A×B 交互缺陷 + LESSONS L116/L117 |
+| `055db0e45` | 收编车道 B 未提交的修 5 四条残留缺口附录（并标注时效） |
+
+**定向读数**：
+
+| 阶段 | 结果 |
+|---|---|
+| 修 2 前 | `SqlPreviewServiceLogicDeleteAndChainTest` + `SqlPreviewServiceOfficialApiTest` 共 5 例红 |
+| 修 2 后 | 2 例红（剩 `applyFuncIfExists`、`unionAndSelectSub`） |
+| 修后缀同源 + selectSub 后 | 上述两类全绿；`WrapperLocatorTest` 同步绿 |
+| `WrapperToolClassReproTest` | 18 例全绿（用户原始需求的 18 个非 GUI 复现形态） |
+| 守卫反向验证 | 移除收集侧 `IfExists` 后缀归一化 → `条件变体后缀必须解析侧与收集侧同源` 恰红 1 例 + `testOfficialApiApplyFuncAndIfExists` 恰红；恢复后全绿 |
+
+**车道清理**：三棵树（`mpvs-d264-a/b/c`）已删。三条分支**保留**——内容只在集成分支、
+未进 master，按清理口径「删除门槛是内容在 master」不放行。`t-d264-final` 是另一会话的文档分支，未动。
+
 ### 第三个 A×B 交互缺陷：修 2 的「工具方法」判定把链方法也认成工具方法
 
 **这是本轮最隐蔽的一个**——它让**本来绿了几百天的用例**变成无条件 SQL，而且只在集成分支上出现。
