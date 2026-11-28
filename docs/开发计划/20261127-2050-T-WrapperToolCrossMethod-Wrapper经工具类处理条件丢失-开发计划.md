@@ -798,6 +798,22 @@ AB on  tests=16 fail=9 time=13.300   ← 稳态
 | `WrapperToolClassReproTest` | 18 例全绿（用户原始需求的 18 个非 GUI 复现形态） |
 | 守卫反向验证 | 移除收集侧 `IfExists` 后缀归一化 → `条件变体后缀必须解析侧与收集侧同源` 恰红 1 例 + `testOfficialApiApplyFuncAndIfExists` 恰红；恢复后全绿 |
 
+**CI 全量三轮对比（`mode=tests`，同分支同 job 结构）**：
+
+| 运行 | 分片 1 | 分片 2 | 分片 3 | 分片 4 | 分片 5 | testFast |
+|---|---|---|---|---|---|---|
+| `46041777439`（初始合并） | 失败 | 失败 | 失败 | 失败 | 成功 | 成功 |
+| `46100741765`（白名单补全后） | 失败 | 失败 | 失败 | 失败 | 成功 | 成功 |
+| `46102803693`（本轮修 2 + 后缀同源） | 失败¹ | **成功** | **成功** | **成功** | 见下 | 见下 |
+
+¹ 分片 1 剩下的唯一一例是 `DemoMpChainAnchorCensusTest > testRealUserServiceImpl_…`，
+失败读数 `[36, 53, 65, 79, 94, 108, 120, 134, 147, 159, 172, 186, 200, 211, 227, 228, 241]`
+与 master 逐项相同，属既有问题（本节开头已销号）。
+
+分片 2 上一轮的 3 例 xbatis 失败（`testXb1QueryChainOfSelectRendersSql` /
+`testXb1LikeModeFirstArgumentMapped` / `testXb1GteLteNormalizedToGeLe`）本轮全绿，
+由 `union`/`fill`/xbatis 结构族白名单补全 + 修 2 收紧共同作用。
+
 **车道清理**：三棵树（`mpvs-d264-a/b/c`）已删。三条分支**保留**——内容只在集成分支、
 未进 master，按清理口径「删除门槛是内容在 master」不放行。`t-d264-final` 是另一会话的文档分支，未动。
 
