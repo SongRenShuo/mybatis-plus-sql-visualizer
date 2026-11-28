@@ -804,15 +804,21 @@ AB on  tests=16 fail=9 time=13.300   ← 稳态
 |---|---|---|---|---|---|---|
 | `46041777439`（初始合并） | 失败 | 失败 | 失败 | 失败 | 成功 | 成功 |
 | `46100741765`（白名单补全后） | 失败 | 失败 | 失败 | 失败 | 成功 | 成功 |
-| `46102803693`（本轮修 2 + 后缀同源） | 失败¹ | **成功** | **成功** | **成功** | 见下 | 见下 |
+| `46102803693`（本轮修 2 + 后缀同源） | 失败¹ | **成功** | **成功** | **成功** | **成功** | **成功** |
 
 ¹ 分片 1 剩下的唯一一例是 `DemoMpChainAnchorCensusTest > testRealUserServiceImpl_…`，
 失败读数 `[36, 53, 65, 79, 94, 108, 120, 134, 147, 159, 172, 186, 200, 211, 227, 228, 241]`
 与 master 逐项相同，属既有问题（本节开头已销号）。
 
-分片 2 上一轮的 3 例 xbatis 失败（`testXb1QueryChainOfSelectRendersSql` /
-`testXb1LikeModeFirstArgumentMapped` / `testXb1GteLteNormalizedToGeLe`）本轮全绿，
-由 `union`/`fill`/xbatis 结构族白名单补全 + 修 2 收紧共同作用。
+**转绿明细**（上一轮 `46100741765` 的失败清单 → 本轮全绿）：
+
+| 分片 | 上一轮失败 |
+|---|---|
+| 2 | `testXb1QueryChainOfSelectRendersSql` / `testXb1LikeModeFirstArgumentMapped` / `testXb1GteLteNormalizedToGeLe` |
+| 3 | `testOfficialApiApplyFuncAndIfExists` / `testOfficialApiLogicDeleteDisable` / `testOfficialApiUnionAndSelectSub` |
+| 4 | `SqlFragmentConcatTest.testFragmentEntriesDoNotSilentlyDropRuntimeTemplate` + `LogicDeleteAndChainTest` 五例（`testServiceLambdaUpdateChainUpdateEntityRendersEntitySet` / `testMpjLogicDelToWhereMovesSubConditionToWhereEnd` / `testMpjLogicDeleteDisableMainOnly` / `testChainWrappersLambdaQueryChainLocates` / `testMpjLogicDeleteDisableSubOnly`） |
+
+分片 4 本轮日志 `BUILD SUCCESSFUL in 8m 3s`，零 FAILED 行。
 
 **车道清理**：三棵树（`mpvs-d264-a/b/c`）已删。三条分支**保留**——内容只在集成分支、
 未进 master，按清理口径「删除门槛是内容在 master」不放行。`t-d264-final` 是另一会话的文档分支，未动。
