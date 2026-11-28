@@ -835,3 +835,103 @@ ChainWrappers.lambdaQueryChain(deviceInfoMapper)
 `ChainWrappers` 链式族在 A 的改动前就绿，A 不会重跑它；B/C 的车道根本不碰 `WrapperLocator`。
 **跨车道的破坏只能由跨车道的全量读到**——这正是「各自全绿 ≠ 合并后绿」的第三次实证，
 也是必须把全量交给 CI 而不是靠子代理定向报告的唯一理由。
+
+---
+
+## 附录 A、主控交接：修5 的四条残留缺口（2026-11-28 00:5x，未提交，供本册收口参考）
+
+> 来源：主控在另一路（已销号的 D271 册）复核修5 实现时发现。**A 已被本车道 `9f98d7d9e` 修复，以下四条仍待处理。**
+> 每条都经主控独立复核（grep / 读源码），附证据。若判定不属于本册范围，请在本册登记去向（另立号 / 不做并说明理由）。
+>
+> **时效校核（2026-11-28 集成收口）**：本附录写于 B 车道并入之前。末尾「三支必须合到一起」的表格已过期——
+> `f058c285a`/`d0f904420`/`9f98d7d9e`/`d2955de19` 四笔均已进 `t-d264-integrate`，
+> `WrapperToolClassReproTest` 在集成分支实测 **BUILD SUCCESSFUL**。**四条缺口正文仍然有效**，尚未动工。
+
+### 缺口 B：子查询链的未知方法全丢
+
+`converter/QueryWrapperParser.kt:510`（master 行号）：
+
+```kotlin
+val subStatement = QueryWrapperParser(subTable, dialect = dialect).parse(nested.chain)
+```
+
+`new` 了一个独立解析器实例，其 `unknownMethodNames` 与主实例**互不相通**，返回值只有 `subStatement`。于是：
+
+```java
+wrapper.eq(X::getId, 1001L).in(X::getUserId, Sub.class, w -> w.eq(...).byKeyword(...))
+```
+
+子查询里未建模的 `byKeyword` **既不报也不留痕**。
+
+**对照**：`and` / `or` 走 `parseInternal(nested.chain)`，是同一实例的递归，会累积 → **只有子查询这一处丢失**。
+
+**建议**：收集器改为可传入/传出（或 `parse` 返回 `Pair<Statement, List<String>>`），子查询解析后把子实例列表并回父实例。
+
+### 缺口 C：UPDATE / DELETE 链完全没覆盖（危险性可能最高）
+
+四个转换器**全部零引用** `unknownMethods`（主控逐文件 grep 确认）：
+
+- `LambdaUpdateConverter.kt:41-43`
+- `UpdateJoinConverter.kt:72-74`
+- `LambdaDeleteConverter.kt:22`
+- `DeleteJoinConverter.kt:59-61`
+
+而 `buildWarning` 的守卫是 `(statement as? SelectStatement)?.unknownMethods` —— 修5 自身的注释也承认「只对 SELECT 生效」。
+
+**后果**：`new LambdaUpdateWrapper<X>().set(...).eq(...).someCustomFilter(...)` 少一条 WHERE 条件，**仍然静默**。**少条件更新命中的行数比查询更多，危险性不亚于甚至高于 SELECT。**
+
+**建议**：`unknownMethods` 上提到 `UpdateStatement` / `DeleteStatement`（或共享基类字段），四个转换器逐一带走子解析器的列表。注意 `cfbda5699` 记过 `WrapperChain` 192 构造点的撞车面，同批清点。
+
+### 缺口 D：白名单按方法名全局共享 → 假阴性
+
+| 来源 | 内容 |
+|---|---|
+| `MpjQueryConverter.kt:110` | `JOIN_METHODS = setOf("leftJoin", "innerJoin", "rightJoin")` —— **只有 3 个** |
+| 修5 白名单 `SILENT_METHOD_NAMES` | 含 `fullJoin` / `join` / `union` / `unionAll` / `fill` / `from` / `around` / `lambdaJoin` |
+
+→ `MPJQueryWrapper.fullJoin(...)` / `.union(...)` 这类调用：转换器没实现 → 落到 else → **命中白名单 → 不报警**，而 JOIN / UNION **真的从 SQL 里消失了**。
+
+**根因**：白名单是按方法名**全局**判定，无法区分「该方法由另一个 wrapper 家族的转换器处理」与「本家族根本没处理」。
+
+**建议**：白名单按 `WrapperType`（家族）分区，至少把「只在 MPJ 家族有意义的集合方法」限制到 MPJ 家族的链上。
+
+### 缺口 E：按「是否识别」而非「是否解析成功」判定
+
+`when` 里**已识别**的方法解析失败时仍无留痕。最典型 `QueryWrapperParser.kt:200`：
+
+```kotlin
+"last" -> limit = parseLimit(call)
+```
+
+`parseLimit` 对非 LIMIT 文本返回 null（`:623-628` / `:631-642` 只认 `limit N` 形态），于是 `last("AND flag = 1")` 在 SELECT 链上被直接丢弃，`limit` 保持 null，**既不改 SQL 也不进 `unknownMethods`**。
+
+**注意**：既有契约 `EdgeCaseTest.last非法片段_安全忽略` 正是按这个行为写的——**修这一条要动既有契约，需先决定「忽略」还是「留痕」**。建议另立条目，不塞进修5。
+
+---
+
+### 修复5 未覆盖的一个设计点（供参考，非缺口）
+
+修5 记 `unknownMethods: List<String>`（**只记方法名**、按序去重）。若同一未建模方法被调用两次：
+
+```java
+w.statusEq("1").statusEq("2")
+```
+
+只产出 `["statusEq"]`，面板显示「1 个链方法」，而实际少了两条条件——**计数与内容都不准**。预览是按单条链做的，严重度低于 UPDATE 的跨段场景，但记**带实参的调用原文**（如 `statusEq("1")`）会让警示可直接定位。
+
+---
+
+### 附：master 10 例红的归因（供收口参考）
+
+`WrapperToolClassReproTest.kt`（766 行）已由 `8b6712af5` / `3d5e241d5` 两笔**只提交了测试**进 master，而修复分散在三支：
+
+| 提交 | 内容 | master | t-d264-integrate | t-d264-b |
+|---|---|---|---|---|
+| `f058c285a` | 修 1/2/3/4/6 | ❌ | ✅ | ❌ |
+| `d0f904420` | 修0 + 修5 | ❌ | **❌** | ✅ |
+| `9f98d7d9e` | 修5 补白名单 | ❌ | **❌** | ✅ |
+| `d2955de19` | 修 7 | ❌ | ✅ | ❌ |
+
+→ **`t-d264-integrate` 缺 B 车道的两笔**，所以它自己标注「待验证 R7 转绿」时也绿不了。**三支必须合到一起才能过 `WrapperToolClassReproTest`。**
+
+另：master 分片 1 还有 1 例 `DemoMpChainAnchorCensusTest > testRealUserServiceImpl_???` 红，与修5 无关，归属待查。
