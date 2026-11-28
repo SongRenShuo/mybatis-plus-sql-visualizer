@@ -78,13 +78,19 @@ msedge.exe --remote-debugging-port=9222 \
 
 **正文用「导入文档」，不要用剪贴板粘贴。** Ctrl+V 会被图片分支吃掉，只落进一张图。
 
+**顺序红线（2026-11-28 实测）：先把四项设置配好，再点发布。** 编辑器页的「发布」按钮是即点即发的——导入 md 后直接点发布，文章就以默认设置上线（无声明/无话题/无封面/不进专栏），补救要花一倍交互（虽然可行：话题与封面在编辑页发布设置区补、声明走下拉、专栏去专栏页「收录内容」弹窗补点，最后「更新」提交）。正确顺序：导入 md → 标题 → 发布设置区（封面/声明/话题）→ 发布 → 专栏页补收录。
+
 1. 打开 `https://zhuanlan.zhihu.com/write`。
 2. 点工具栏「导入」→ 菜单项「导入文档 MD/Doc」。菜单项文字带零宽字符 `\u200b`，匹配前要剥掉。
-3. `input[type=file][accept*=".md"]` **有两个**，取最后一个（前一个是「直答知识库」上传器，会永久卡在「上传中」）。用 `DOM.setFileInputFiles` 喂 `.md`。
-4. 导入后核对：正文 >4000 字符、图片数对、表格在。知乎会丢一些小表（本次丢了 build 前缀表），正文里有等价文字就没事。
-5. 标题走 `textarea[placeholder*="请输入标题"]`；封面 file input 的 accept 含 `.jpeg`。
-6. 发布设置：话题按正文自动识别（通常已填）；创作声明在下拉里选「包含 AI 辅助创作 作者对内容负责」；勾「发布到专栏」再选专栏。
-7. 点「发布」→ 创作中心显示「发布于刚刚」即成功。**不要 reload 编辑器验证**，会把内容刷掉。
+3. `input[type=file][accept*=".md"]` 有多个，**取「导入文档」对话框子树里的那个**（判定：`closest('div')` 沿祖先找 `30MB` 文案；页面级「取最后一个」会命中「直答知识库」上传器，永久卡「上传中」）。用 `DOM.setFileInputFiles` 喂 `.md`。
+4. 导入后核对：正文 >1000 字符、图片数对、表格在。知乎会丢一些小表（本次丢了 build 前缀表），正文里有等价文字就没事。
+5. 标题走 `textarea[placeholder*="请输入标题"]`。
+6. 发布设置（编辑页底部，先于发布按钮完成）：
+   - **封面**：点「添加文章封面」盒，喂 `input[type=file][accept*=jpeg]`；
+   - **创作声明**：真身是 `button[role="combobox"]`——**点它的行包装层（div/span「无声明」）无效**，必须点按钮本体；下拉选项「包含 AI 辅助创作 作者对内容负责」在点击后 **~3.5s 才渲染**，DOM 探测要延时重试（2.5s/3s/3s 三连），截图可见但 `elementsFromPoint` 层级拿不到说明点偏了；
+   - **话题**：`input[placeholder*="搜索话题"]` 有两个（一个隐藏），取**可见的**；输入后下拉建议要点（输入值留着 ≠ 选中，选中后输入框变成 chip）。
+7. 点「发布」→ 创作中心显示「发布于刚刚」即成功。**不要 reload 编辑器验证**，会把内容刷掉。注意编辑页 CDP 会话可能在长交互后卡死（`Page.enable` 都超时）——另开新 tab 走 `/p/<id>/edit` 即可，内容随草稿保存。
+8. 专栏收录：专栏页 →「收录内容」→ 弹窗列表第一项即最新文章 → 点「收录」（按钮变灰「已收录」即成；列表页篇数计数有缓存延迟，以按钮态为准）。
 
 ### 3.3 掘金（bytemd + CodeMirror 实例）
 
@@ -92,12 +98,28 @@ msedge.exe --remote-debugging-port=9222 \
 2. 正文：`document.querySelector('.CodeMirror').CodeMirror.setValue(md)`；标题 `input.title-input`。
 3. 发布面板：分类点「后端」（选中态是 `item active`）。
 4. 标签是 `byte-select`，`input[type=text]` 选不中：点 `.byte-select__input` 并**确认 `document.activeElement` 就是它**，再 `Input.insertText` 输入 `MyBatis`，然后点 `.byte-select__dropdown` 里的同名选项。焦点没落对时 Ctrl+A 会把 CodeMirror 全文选中。
-5. 封面走 `input.file-input`。
-6. 「确定并发布」要点**可见实例**（隐藏模板按钮 `getBoundingClientRect()` 为 0，点它没反应）。
-7. **图片必须重新上传**：工具栏图片按钮在 CDP 下点不开（`Page.setInterceptFileChooserDialog` 收不到 `fileChooserOpened`，点击还会阻塞渲染线程），两个 file input 也都不吃文件。唯一跑通的是剪贴板粘贴：
-   - `Set-Clipboard -Path <本地图>` → 编辑器光标落到正文末尾 → CDP 发 Ctrl+V
-   - 掘金自己上传并插入 markdown，地址是 `p0-xtjj-private.juejin.cn`，线上渲染成 `p3-xtjj-sign.byteimg.com`
-   - 取到 URL 后把正文里的外链替换掉，再「更新 → 确定并更新」
+5. **面板输入框定位（2026-11-28 实测）**：面板所有 input **都没有 placeholder**（「请搜索添加标签」提示词已移除），选择器定位会落空。按 y 坐标定位：标签 y≈271 / 专栏 y≈530 / 创作话题 y≈594 / 摘要 textarea y≈657（面板重排后会漂移，喂文件前现取）。
+6. **封面上传（拦截式，2026-11-28 跑通，优先用这条）**：直接对 `input.file-input` 喂 `DOM.setFileInputFiles` **不生效**（value 改了 uploader 不触发）。正路：
+   - `Page.setInterceptFileChooserDialog({enabled: true})`
+   - 真实鼠标点击「上传封面」框（`Input.dispatchMouseEvent`）
+   - 等 `Page.fileChooserOpened` 事件（lib.js 存在 `cdp.evs` 数组里，轮询拿），带 `backendNodeId`
+   - `DOM.setFileInputFiles({files: [...], backendNodeId})` 直接喂 → 上传即触发
+   - `setInterceptFileChooserDialog({enabled: false})` 收尾
+7. 「确定并发布」要点**可见实例**（隐藏模板按钮 `getBoundingClientRect()` 为 0，点它没反应）。
+8. **正文图片上传两案**：
+   - **优先试拦截式**（§第 6 条同一招，点击工具栏图片按钮后喂 `backendNodeId`）；
+   - 拦截收不到事件再退回**剪贴板粘贴**：`Set-Clipboard -Path <本地图>` → 编辑器光标落到正文末尾 → CDP 发 Ctrl+V → 掘金上传并插入 `p0-xtjj-private.juejin.cn`（线上渲染 `p3-xtjj-sign.byteimg.com`）→ 取 URL 替换正文外链 →「更新 → 确定并更新」。工具栏图片按钮直接点在 CDP 下曾阻塞渲染线程，勿试。
+9. 专栏收录：面板「收录至专栏」框点击 → 输入 → 点下拉建议（`MyBatis 与 SQL 调试`）。
+
+## 4. 发布后核验
+
+| 平台 | 成功判据 | 别拿什么当判据 |
+|---|---|---|
+| CSDN | URL 变 `/mp_blog/creation/success/<id>`；创作中心列表可见 | 页面文案「正在审核中」 |
+| 知乎 | 创作中心「发布于刚刚」+ 阅读数 ≥1 | 编辑器是否跳转（可能停在 `/edit`） |
+| 掘金 | 跳 `/published` 且标题回显 | 发布面板是否关闭 |
+
+核验线上页要看三样：标题、正文长度、图片 `naturalWidth`（不是 `img` 个数，图标也算）。掘金正文区选择器是 `.markdown-body`（`.article-content` 已失效）。
 
 ## 4. 发布后核验
 
