@@ -601,6 +601,25 @@ object WrapperLocator {
      */
     private fun isWrapperReturningToolCall(call: PsiMethodCallExpression): Boolean {
         if (isWrapperFactoryCall(call)) return false
+        // 必须排除「链的延续」——链上条件/结构/联表/终结点方法返回的也是 Wrapper 本身，它们不是
+        // 待展开的工具方法。误认的后果不是少一个条件，而是整链归零：[buildChainFromFactory] 里
+        // toolCall=true → 改走 [expandWrapperToolCall] 展开该方法**体内**的链，而
+        // `ChainWrappers.lambdaQueryChain(m).eq(...).one()` 的 `eq` 体内没有链 → 条件全丢。
+        // D264 集成实证：锚点在 `one`/`eq` 时 [findWrapperFactoryCall] 先命中 `eq`
+        // （返回 LambdaQueryChainWrapper），整条 SELECT 变无条件（CI 分片 2/3/4 红）。
+        val name = call.methodExpression.referenceName ?: return false
+        if (name in CONDITION_CHAIN_METHOD_NAMES) return false
+        if (name in JOIN_CHAIN_METHOD_NAMES) return false
+        if (name in MPJ_STRUCTURE_METHOD_NAMES) return false
+        if (name in chainTerminalMethodNames) return false
+        // 自研链方法（`w.statusEq(1)`）名字白名单挡不住，靠 qualifier 静态类型兜：是 Wrapper 即链延续。
+        // 工具调用的 qualifier 是工具类/工具实例，不会命中。
+        val qualifier = call.methodExpression.qualifierExpression
+        if (qualifier != null &&
+            detectWrapperTypeDeep(runCatching { qualifier.type }.getOrNull()) != null
+        ) {
+            return false
+        }
         val returnType = runCatching { call.type }.getOrNull() ?: return false
         return detectWrapperTypeDeep(returnType) != null
     }
@@ -1682,6 +1701,12 @@ object WrapperLocator {
     private fun isPseudoConditionCall(call: PsiMethodCallExpression): Boolean {
         val name = call.methodExpression.referenceName ?: return true
         if (name in CONDITION_CHAIN_METHOD_NAMES) return false
+        // 条件族的**变体后缀**（MPJ 官方 API）：`eqIfExists` / `inIfNotEmpty` 等。
+        // 解析侧 [QueryWrapperParser] 用 `endsWith("IfExists")/endsWith("IfNotEmpty")` 剥后缀归一化到
+        // 基底条件方法，收集侧若只枚举基底名就会把整个变体族当伪条件剔除——
+        // D264 集成实证：`eqIfExists(...)`/`likeRightIfExists(...)` 被剔 → WHERE 里两条 `AND` 静默消失。
+        // 判定必须与解析侧同源（同一条后缀规则），不能靠再枚举一遍变体名。
+        if (stripConditionVariantSuffix(name) in CONDITION_CHAIN_METHOD_NAMES) return false
         if (name in JOIN_CHAIN_METHOD_NAMES) return false
         if (name in wrapperFactoryMethodNames) return false
         if (name in MPJ_STRUCTURE_METHOD_NAMES) return false
@@ -1692,11 +1717,24 @@ object WrapperLocator {
     }
 
     /**
+     * 剥离条件变体的运行时存在性后缀，返回基底条件方法名。
+     *
+     * 单一来源约束：后缀集合必须与 [QueryWrapperParser] 的归一化分支一致
+     * （`endsWith("IfExists")` / `endsWith("IfNotEmpty")`）。两侧漂移会让「解析器认识、收集器不认识」
+     * 的方法在链上被静默剔除——这正是 D264 集成期两例红的形态。
+     */
+    private fun stripConditionVariantSuffix(name: String): String = when {
+        name.endsWith("IfExists") -> name.removeSuffix("IfExists")
+        name.endsWith("IfNotEmpty") -> name.removeSuffix("IfNotEmpty")
+        else -> name
+    }
+
+    /**
      * MPJ / MP 结构方法（既非条件也非工厂，但属于链结构，必须允许入链——
      * 剔除它们会把 `selectAs` / `leftJoin` / `selectFilter` 这类真结构从链里挖掉）。
      */
     private val MPJ_STRUCTURE_METHOD_NAMES: Set<String> = setOf(
-        "selectAs", "selectAsClass", "selectCollection", "selectAssociation",
+        "selectAs", "selectAsClass", "selectSub", "selectCollection", "selectAssociation",
         "selectFilter", "selectFunc", "selectIgnore", "selectString", "selectMaps", "selectObjs",
         "selectLen", "allEq", "setEntity", "eqOrIsNull", "applyFunc",
         "groupByStr", "orderByStr", "first", "lambda",
@@ -2392,10 +2430,21 @@ object WrapperLocator {
         // 缺了它们，修 4 的 `isPseudoConditionCall` 会把它们当伪条件剔除——而 `LambdaUpdateConverter` /
         // `UpdateJoinConverter` 明明支持（前者 SET_METHODS 五个、后者含 setApply/setUpdateEntity*/setAlias
         // 共九个），产物退化成 `SET status = 2`（少了 `updated_at = now()`）或整段 SET 为空。
-        // 与 UpdateJoinConverter.SET_METHODS 保持同源；白名单漏项由
-        // `PsiConditionWhitelistCoverageGuardTest` 兜住。
         "setSql", "setIncrBy", "setDecrBy", "setIfExists",
         "setApply", "setUpdateEntity", "setUpdateEntityAndNull", "setAlias",
+        // D264 集成期补全（第二轮 CI 实测：分片 2/3/4 共 13 例红）：MPJ 逻辑删除控制族、UNION 族、
+        // xbatis 结构族、分页结构族。它们是**链上语义已知的方法**，`QueryWrapperParser` 的静默白名单
+        // （修 5）已收录，但修 4 的收集侧白名单没同步——链式写法下 qualifier 是方法调用、类型兜底失效，
+        // 于是被当伪条件剔除：
+        //   - `disableLogicDel` 族被剔 → 逻辑删除仍注入（`WHERE t.id = 1001 AND t.deleted = 0` 而期望无 deleted）
+        //   - `union`/`unionAll` 被剔 → UNION 片段丢
+        //   - xbatis `QueryChain.of(...)` 链断
+        // 修法口径：白名单必须与 `QueryWrapperParser` 的静默白名单同源，
+        // 由 `PsiConditionWhitelistCoverageGuardTest` 双向对账兜住。
+        "disableLogicDel", "enableLogicDel", "disableSubLogicDel", "enableSubLogicDel",
+        "logicDelToOn", "logicDelToWhere",
+        "union", "unionAll", "fill", "setTableName", "pageByMain",
+        "from", "around", "deleteAll",
     )
 
     /**
